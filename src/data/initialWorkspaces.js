@@ -1,3 +1,6 @@
+// Production Client Workspaces Configuration
+// Updated: 2026-08-26 for Live Vercel Deployment
+
 export const initialWorkspaces = [
   {
     id: 'ws_crewlixuk',
