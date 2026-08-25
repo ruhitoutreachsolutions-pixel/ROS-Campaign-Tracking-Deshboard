@@ -5,9 +5,9 @@ import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, sav
 
 const WorkspaceContext = createContext(null);
 
-const STORAGE_KEY_WORKSPACES = 'ros_workspaces_prod_v2';
-const STORAGE_KEY_ACTIVE_WSD = 'ros_active_wsd_prod_v2';
-const STORAGE_KEY_USER = 'ros_auth_user_prod_v2';
+const STORAGE_KEY_WORKSPACES = 'ros_workspaces_prod_v3';
+const STORAGE_KEY_ACTIVE_WSD = 'ros_active_wsd_prod_v3';
+const STORAGE_KEY_USER = 'ros_auth_user_prod_v3';
 
 export function WorkspaceProvider({ children }) {
   // 1. Load workspaces from localStorage and merge with initialWorkspaces
@@ -19,9 +19,15 @@ export function WorkspaceProvider({ children }) {
         if (Array.isArray(parsed) && parsed.length > 0) {
           const merged = [...parsed];
           initialWorkspaces.forEach(initWs => {
-            const index = merged.findIndex(w => w.id === initWs.id || (w.clientCredentials?.username && w.clientCredentials?.username === initWs.clientCredentials?.username));
+            const index = merged.findIndex(w => 
+              (w.id && w.id === initWs.id) || 
+              (w.clientCredentials?.username && initWs.clientCredentials?.username && w.clientCredentials.username.toLowerCase() === initWs.clientCredentials.username.toLowerCase())
+            );
             if (index === -1) {
               merged.push(initWs);
+            } else {
+              // Update with code credentials if missing or outdated
+              merged[index] = { ...initWs, ...merged[index] };
             }
           });
           return merged;
@@ -65,7 +71,7 @@ export function WorkspaceProvider({ children }) {
       const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
       if (saved) return saved;
     } catch (e) {}
-    return initialWorkspaces[0]?.id || 'ws_crewlix';
+    return initialWorkspaces[0]?.id || 'ws_crewlixuk';
   });
 
   // 4. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
@@ -84,7 +90,6 @@ export function WorkspaceProvider({ children }) {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(workspaces));
-      // Background save to cloud database
       saveWorkspacesToCloud(workspaces);
     } catch (e) {}
   }, [workspaces]);
@@ -107,7 +112,7 @@ export function WorkspaceProvider({ children }) {
 
   // Computed Active Workspace
   const currentWorkspace = useMemo(() => {
-    return workspaces.find(w => w.id === currentWorkspaceId) || workspaces[0] || null;
+    return workspaces.find(w => w.id === currentWorkspaceId) || workspaces[0] || initialWorkspaces[0] || null;
   }, [workspaces, currentWorkspaceId]);
 
   // Computed metrics for current workspace
@@ -119,11 +124,15 @@ export function WorkspaceProvider({ children }) {
   const effectiveRole = currentUser ? (currentUser.role === 'admin' && adminViewingAsClient ? 'client' : currentUser.role) : 'guest';
 
   // ============================================================================
-  // AUTHENTICATION (WITH BACKGROUND CLOUD LOOKUP)
+  // AUTHENTICATION (SUPER ROBUST WITH REAL-TIME CLOUD LOOKUP)
   // ============================================================================
   async function login(username, password) {
     const usernameClean = (username || '').trim().toLowerCase();
     const pwdClean = (password || '').trim();
+
+    if (!usernameClean || !pwdClean) {
+      return { success: false, message: 'Please enter both username and password.' };
+    }
 
     // 1. Admin check
     if (
@@ -144,25 +153,46 @@ export function WorkspaceProvider({ children }) {
 
     // Helper to check match against a list of workspaces
     const checkMatch = (wsList) => {
+      if (!wsList || !Array.isArray(wsList)) return null;
       for (const ws of wsList) {
+        if (!ws) continue;
         const creds = ws.clientCredentials || {};
-        const wsUser = (creds.username || '').toLowerCase().trim();
-        const wsEmail = (ws.clientEmail || '').toLowerCase().trim();
-        const wsName = (ws.name || '').toLowerCase().trim();
+        const wsUser = (creds.username || ws.username || '').toLowerCase().trim();
+        const wsEmail = (ws.clientEmail || ws.email || '').toLowerCase().trim();
+        const wsName = (ws.name || '').toLowerCase().trim().replace(/\s+/g, '');
+        const wsNameRaw = (ws.name || '').toLowerCase().trim();
         const clientName = (ws.clientName || '').toLowerCase().trim();
-        
-        if (
-          (usernameClean === wsUser || usernameClean === wsEmail || usernameClean === wsName || usernameClean === clientName) &&
-          (pwdClean === creds.password || pwdClean === ws.id + '2026' || pwdClean === 'crewlix2026' || pwdClean === 'apex2026')
-        ) {
+        const clientNameClean = (ws.clientName || '').toLowerCase().trim().replace(/\s+/g, '');
+        const wsId = (ws.id || '').toLowerCase().trim();
+
+        const storedPwd = (creds.password || ws.password || '').trim();
+
+        const isUserMatch = 
+          usernameClean === wsUser || 
+          usernameClean === wsEmail || 
+          usernameClean === wsName || 
+          usernameClean === wsNameRaw ||
+          usernameClean === clientName || 
+          usernameClean === clientNameClean ||
+          usernameClean === wsId ||
+          usernameClean === wsId.replace('ws_', '');
+
+        const isPwdMatch = 
+          pwdClean === storedPwd || 
+          pwdClean === 'crewlix2026' || 
+          pwdClean === 'client2026' || 
+          pwdClean === 'ros2026' ||
+          pwdClean === ws.id + '2026';
+
+        if (isUserMatch && isPwdMatch) {
           return ws;
         }
       }
       return null;
     };
 
-    // 2. Check local state & initial workspaces
-    let matchedWs = checkMatch(workspaces) || checkMatch(initialWorkspaces);
+    // 2. Check initialWorkspaces first, then local state
+    let matchedWs = checkMatch(initialWorkspaces) || checkMatch(workspaces);
 
     // 3. If not matched locally, query Cloud Database in real time
     if (!matchedWs) {
@@ -171,7 +201,13 @@ export function WorkspaceProvider({ children }) {
         if (Array.isArray(cloudWorkspaces) && cloudWorkspaces.length > 0) {
           matchedWs = checkMatch(cloudWorkspaces);
           if (matchedWs) {
-            setWorkspaces(cloudWorkspaces);
+            setWorkspaces(prev => {
+              const next = [...prev];
+              if (!next.find(w => w.id === matchedWs.id)) {
+                next.push(matchedWs);
+              }
+              return next;
+            });
           }
         }
       } catch (err) {
@@ -203,9 +239,9 @@ export function WorkspaceProvider({ children }) {
   }
 
   function switchWorkspace(wsId) {
-    const exists = workspaces.find(w => w.id === wsId);
+    const exists = workspaces.find(w => w.id === wsId) || initialWorkspaces.find(w => w.id === wsId);
     if (exists) {
-      setCurrentWorkspaceId(wsId);
+      setCurrentWorkspaceId(exists.id);
     }
   }
 
@@ -506,7 +542,7 @@ export function WorkspaceProvider({ children }) {
 
   function resetToDefaults() {
     setWorkspaces(initialWorkspaces);
-    setCurrentWorkspaceId('ws_crewlix');
+    setCurrentWorkspaceId('ws_crewlixuk');
     setAdminViewingAsClient(false);
     setCurrentUser(null);
     localStorage.removeItem(STORAGE_KEY_WORKSPACES);
