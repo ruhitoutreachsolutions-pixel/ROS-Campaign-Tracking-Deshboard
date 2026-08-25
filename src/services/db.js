@@ -3,6 +3,29 @@
 
 const CLOUD_DATABASE_URL = 'https://api.restful-api.dev/objects/ff8081819ff5b11001a03a8fda0b2031';
 
+const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v1';
+const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v1';
+
+export function getSupabaseClient() {
+  return null;
+}
+
+export function saveSupabaseConfig(url, key) {
+  if (url && key) {
+    localStorage.setItem(STORAGE_KEY_SUPABASE_URL, url.trim());
+    localStorage.setItem(STORAGE_KEY_SUPABASE_KEY, key.trim());
+    return true;
+  }
+  return false;
+}
+
+export function getSupabaseConfig() {
+  return {
+    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || '',
+    key: localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ''
+  };
+}
+
 // 1. Fetch workspaces in real-time from Cloud Database
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
   try {
