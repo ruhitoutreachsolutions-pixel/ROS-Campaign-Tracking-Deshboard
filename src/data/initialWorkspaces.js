@@ -4,11 +4,34 @@ export const initialWorkspaces = [
     name: 'Crewlix Global',
     clientName: 'Crewlix Global Recruitment',
     clientEmail: 'contact@crewlixglobal.com',
-    campaignName: 'B2B Outbound Campaign',
+    campaignName: 'Care Campaign',
     sendingAccounts: ['hello@crewlixglobal.com'],
     activeSendingAccount: 'hello@crewlixglobal.com',
     clientCredentials: {
       username: 'crewlix',
+      password: 'crewlix2026'
+    },
+    createdAt: new Date().toISOString().split('T')[0],
+    sequenceConfig: {
+      email1Name: 'Initial Outreach',
+      email2Name: 'Follow-up 1 (Value Add)',
+      email3Name: 'Follow-up 2 (Breakup / Case Study)',
+      daysBetween1and2: 3,
+      daysBetween2and3: 4
+    },
+    activityLog: [],
+    leads: []
+  },
+  {
+    id: 'ws_crewlixukltd',
+    name: 'Crewlix UK Ltd',
+    clientName: 'Crewlix UK Ltd',
+    clientEmail: 'contact@crewlixukltd.com',
+    campaignName: 'Care Campaign',
+    sendingAccounts: ['hello@crewlixukltd.com'],
+    activeSendingAccount: 'hello@crewlixukltd.com',
+    clientCredentials: {
+      username: 'crewlixukltd',
       password: 'crewlix2026'
     },
     createdAt: new Date().toISOString().split('T')[0],

@@ -9,13 +9,23 @@ const STORAGE_KEY_ACTIVE_WSD = 'ros_active_wsd_prod_v2';
 const STORAGE_KEY_USER = 'ros_auth_user_prod_v2';
 
 export function WorkspaceProvider({ children }) {
-  // 1. Load workspaces from localStorage or initial clean state
+  // 1. Load workspaces from localStorage and merge with initialWorkspaces
   const [workspaces, setWorkspaces] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_WORKSPACES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Smart merge: ensure all code-defined workspaces exist alongside user-created ones
+          const merged = [...parsed];
+          initialWorkspaces.forEach(initWs => {
+            const index = merged.findIndex(w => w.id === initWs.id || (w.clientCredentials?.username && w.clientCredentials?.username === initWs.clientCredentials?.username));
+            if (index === -1) {
+              merged.push(initWs);
+            }
+          });
+          return merged;
+        }
       }
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
@@ -29,7 +39,7 @@ export function WorkspaceProvider({ children }) {
       const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
       if (saved) return saved;
     } catch (e) {}
-    return 'ws_crewlix';
+    return initialWorkspaces[0]?.id || 'ws_crewlix';
   });
 
   // 3. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
@@ -107,11 +117,13 @@ export function WorkspaceProvider({ children }) {
     // Client Workspace check across all workspaces
     for (const ws of workspaces) {
       const creds = ws.clientCredentials || {};
-      const wsUser = (creds.username || '').toLowerCase();
-      const wsEmail = (ws.clientEmail || '').toLowerCase();
+      const wsUser = (creds.username || '').toLowerCase().trim();
+      const wsEmail = (ws.clientEmail || '').toLowerCase().trim();
+      const wsName = (ws.name || '').toLowerCase().trim();
+      const clientName = (ws.clientName || '').toLowerCase().trim();
       
       if (
-        (usernameClean === wsUser || usernameClean === wsEmail || usernameClean === ws.name.toLowerCase() || usernameClean === (ws.clientName || '').toLowerCase()) &&
+        (usernameClean === wsUser || usernameClean === wsEmail || usernameClean === wsName || usernameClean === clientName) &&
         (pwdClean === creds.password || pwdClean === ws.id + '2026' || pwdClean === 'crewlix2026' || pwdClean === 'apex2026')
       ) {
         const clientUser = {
@@ -347,7 +359,7 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
-  // 8. Workspace & Client Credentials Management (Synchronizes Workspace Names Immediately)
+  // 8. Workspace & Client Credentials Management
   function createWorkspace(wsData) {
     const newId = 'ws_' + Math.random().toString(36).substr(2, 8);
     const newWsTemplate = {
@@ -355,12 +367,12 @@ export function WorkspaceProvider({ children }) {
       name: wsData.name || 'New Client Workspace',
       clientName: wsData.clientName || wsData.name,
       clientEmail: wsData.clientEmail || '',
-      campaignName: wsData.campaignName || 'General Outbound',
+      campaignName: wsData.campaignName || 'Care Campaign',
       sendingAccounts: wsData.sendingAccounts || ['hello@clientdomain.com'],
       activeSendingAccount: (wsData.sendingAccounts && wsData.sendingAccounts[0]) || 'hello@clientdomain.com',
       clientCredentials: {
-        username: wsData.username || wsData.name.toLowerCase().replace(/\s+/g, ''),
-        password: wsData.password || 'client2026'
+        username: (wsData.username || wsData.name.toLowerCase().replace(/\s+/g, '')).trim(),
+        password: (wsData.password || 'crewlix2026').trim()
       },
       createdAt: new Date().toISOString().split('T')[0],
       sequenceConfig: {
