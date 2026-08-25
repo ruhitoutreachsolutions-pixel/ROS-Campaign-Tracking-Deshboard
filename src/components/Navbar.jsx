@@ -13,10 +13,11 @@ import {
   Check,
   Mail,
   KeyRound,
-  Settings
+  Settings,
+  Cloud
 } from 'lucide-react';
 
-export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings }) {
+export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync }) {
   const {
     workspaces,
     currentWorkspaceId,
@@ -132,6 +133,16 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings }) 
                       >
                         <KeyRound className="w-3.5 h-3.5 text-[#00E5A0]" />
                         Client Password & Credentials Settings
+                      </button>
+                      <button
+                        onClick={() => {
+                          setWsDropdownOpen(false);
+                          if (onOpenCloudSync) onOpenCloudSync();
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-gray-400 hover:text-[#00E5A0] hover:bg-[#1E3A5F]/30 text-xs transition-all cursor-pointer"
+                      >
+                        <Cloud className="w-3.5 h-3.5 text-[#00E5A0]" />
+                        Cloud Database Sync Settings
                       </button>
                     </div>
                   </div>

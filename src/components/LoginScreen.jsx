@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import RosLogo from './RosLogo';
-import { Lock, User, ArrowRight, KeyRound, AlertCircle } from 'lucide-react';
+import { Lock, User, ArrowRight, KeyRound, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function LoginScreen() {
   const { login } = useWorkspace();
@@ -10,7 +10,7 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
       setError('Please enter both username and password.');
@@ -18,13 +18,16 @@ export default function LoginScreen() {
     }
     setError('');
     setLoading(true);
-    setTimeout(() => {
-      const res = login(username, password);
+    try {
+      const res = await login(username, password);
       if (!res.success) {
         setError(res.message || 'Invalid username or password.');
       }
+    } catch (err) {
+      setError('Connection error. Please try again.');
+    } finally {
       setLoading(false);
-    }, 300);
+    }
   };
 
   return (
@@ -113,7 +116,10 @@ export default function LoginScreen() {
               className="w-full mt-3 py-3 px-4 rounded-xl bg-[#00C2FF] hover:bg-[#00C2FF]/90 text-[#0A0A0A] font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-[#00C2FF]/20 active:scale-[0.99] cursor-pointer disabled:opacity-50"
             >
               {loading ? (
-                <span>Authenticating...</span>
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verifying Credentials...</span>
+                </div>
               ) : (
                 <>
                   <span>Sign In to Dashboard</span>

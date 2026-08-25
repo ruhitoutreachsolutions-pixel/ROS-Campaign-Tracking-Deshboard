@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { initialWorkspaces, ADMIN_CREDENTIALS } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard } from '../utils/helpers';
+import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient } from '../services/db';
 
 const WorkspaceContext = createContext(null);
 
@@ -16,7 +17,6 @@ export function WorkspaceProvider({ children }) {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Smart merge: ensure all code-defined workspaces exist alongside user-created ones
           const merged = [...parsed];
           initialWorkspaces.forEach(initWs => {
             const index = merged.findIndex(w => w.id === initWs.id || (w.clientCredentials?.username && w.clientCredentials?.username === initWs.clientCredentials?.username));
@@ -33,7 +33,33 @@ export function WorkspaceProvider({ children }) {
     return initialWorkspaces;
   });
 
-  // 2. Load active workspace ID
+  // 2. Background Cloud Sync on Load
+  useEffect(() => {
+    async function syncFromCloud() {
+      try {
+        const cloudData = await fetchWorkspacesFromCloud(workspaces);
+        if (Array.isArray(cloudData) && cloudData.length > 0) {
+          setWorkspaces(prev => {
+            const merged = [...prev];
+            cloudData.forEach(cWs => {
+              const idx = merged.findIndex(w => w.id === cWs.id);
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], ...cWs };
+              } else {
+                merged.push(cWs);
+              }
+            });
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn('Background cloud sync notice:', err);
+      }
+    }
+    syncFromCloud();
+  }, []);
+
+  // 3. Load active workspace ID
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
@@ -42,7 +68,7 @@ export function WorkspaceProvider({ children }) {
     return initialWorkspaces[0]?.id || 'ws_crewlix';
   });
 
-  // 3. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
+  // 4. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_USER);
@@ -51,13 +77,15 @@ export function WorkspaceProvider({ children }) {
     return null;
   });
 
-  // 4. Admin viewing as client toggle
+  // 5. Admin viewing as client toggle
   const [adminViewingAsClient, setAdminViewingAsClient] = useState(false);
 
-  // Save to localStorage on changes
+  // Save to localStorage & Cloud Database on changes
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(workspaces));
+      // Background save to cloud database
+      saveWorkspacesToCloud(workspaces);
     } catch (e) {}
   }, [workspaces]);
 
@@ -91,13 +119,13 @@ export function WorkspaceProvider({ children }) {
   const effectiveRole = currentUser ? (currentUser.role === 'admin' && adminViewingAsClient ? 'client' : currentUser.role) : 'guest';
 
   // ============================================================================
-  // AUTHENTICATION
+  // AUTHENTICATION (WITH BACKGROUND CLOUD LOOKUP)
   // ============================================================================
-  function login(username, password) {
+  async function login(username, password) {
     const usernameClean = (username || '').trim().toLowerCase();
     const pwdClean = (password || '').trim();
 
-    // Admin check
+    // 1. Admin check
     if (
       (usernameClean === ADMIN_CREDENTIALS.username || usernameClean === ADMIN_CREDENTIALS.email.toLowerCase() || usernameClean === 'admin') &&
       (pwdClean === ADMIN_CREDENTIALS.password || pwdClean === 'ros2026' || pwdClean === 'admin123')
@@ -114,30 +142,55 @@ export function WorkspaceProvider({ children }) {
       return { success: true, role: 'admin' };
     }
 
-    // Client Workspace check across all workspaces
-    for (const ws of workspaces) {
-      const creds = ws.clientCredentials || {};
-      const wsUser = (creds.username || '').toLowerCase().trim();
-      const wsEmail = (ws.clientEmail || '').toLowerCase().trim();
-      const wsName = (ws.name || '').toLowerCase().trim();
-      const clientName = (ws.clientName || '').toLowerCase().trim();
-      
-      if (
-        (usernameClean === wsUser || usernameClean === wsEmail || usernameClean === wsName || usernameClean === clientName) &&
-        (pwdClean === creds.password || pwdClean === ws.id + '2026' || pwdClean === 'crewlix2026' || pwdClean === 'apex2026')
-      ) {
-        const clientUser = {
-          role: 'client',
-          username: creds.username || ws.name,
-          name: ws.clientName || ws.name,
-          email: ws.clientEmail,
-          workspaceId: ws.id
-        };
-        setCurrentUser(clientUser);
-        setCurrentWorkspaceId(ws.id);
-        setAdminViewingAsClient(false);
-        return { success: true, role: 'client', workspaceId: ws.id };
+    // Helper to check match against a list of workspaces
+    const checkMatch = (wsList) => {
+      for (const ws of wsList) {
+        const creds = ws.clientCredentials || {};
+        const wsUser = (creds.username || '').toLowerCase().trim();
+        const wsEmail = (ws.clientEmail || '').toLowerCase().trim();
+        const wsName = (ws.name || '').toLowerCase().trim();
+        const clientName = (ws.clientName || '').toLowerCase().trim();
+        
+        if (
+          (usernameClean === wsUser || usernameClean === wsEmail || usernameClean === wsName || usernameClean === clientName) &&
+          (pwdClean === creds.password || pwdClean === ws.id + '2026' || pwdClean === 'crewlix2026' || pwdClean === 'apex2026')
+        ) {
+          return ws;
+        }
       }
+      return null;
+    };
+
+    // 2. Check local state & initial workspaces
+    let matchedWs = checkMatch(workspaces) || checkMatch(initialWorkspaces);
+
+    // 3. If not matched locally, query Cloud Database in real time
+    if (!matchedWs) {
+      try {
+        const cloudWorkspaces = await fetchWorkspacesFromCloud(workspaces);
+        if (Array.isArray(cloudWorkspaces) && cloudWorkspaces.length > 0) {
+          matchedWs = checkMatch(cloudWorkspaces);
+          if (matchedWs) {
+            setWorkspaces(cloudWorkspaces);
+          }
+        }
+      } catch (err) {
+        console.warn('Cloud login lookup notice:', err);
+      }
+    }
+
+    if (matchedWs) {
+      const clientUser = {
+        role: 'client',
+        username: matchedWs.clientCredentials?.username || matchedWs.name,
+        name: matchedWs.clientName || matchedWs.name,
+        email: matchedWs.clientEmail,
+        workspaceId: matchedWs.id
+      };
+      setCurrentUser(clientUser);
+      setCurrentWorkspaceId(matchedWs.id);
+      setAdminViewingAsClient(false);
+      return { success: true, role: 'client', workspaceId: matchedWs.id };
     }
 
     return { success: false, message: 'Invalid username or password.' };
@@ -485,7 +538,9 @@ export function WorkspaceProvider({ children }) {
     updateWorkspace,
     updateClientCredentials,
     deleteWorkspace,
-    resetToDefaults
+    resetToDefaults,
+    getSupabaseConfig,
+    saveSupabaseConfig
   };
 
   return (

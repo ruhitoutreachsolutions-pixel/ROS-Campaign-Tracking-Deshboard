@@ -12,6 +12,7 @@ import AnalyticsCharts from './components/AnalyticsCharts';
 import WorkspaceModal from './components/WorkspaceModal';
 import LeadDetailModal from './components/LeadDetailModal';
 import ImportLeadsModal from './components/ImportLeadsModal';
+import CloudSyncModal from './components/CloudSyncModal';
 import { 
   BarChart3, 
   Send, 
@@ -38,6 +39,7 @@ export default function App() {
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
   const [workspaceEditMode, setWorkspaceEditMode] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
   const [selectedLeadForModal, setSelectedLeadForModal] = useState(null);
 
   // If user is not logged in, show Login Screen
@@ -67,6 +69,7 @@ export default function App() {
       <Navbar 
         onOpenNewWorkspace={handleOpenNewWorkspace}
         onOpenWorkspaceSettings={handleOpenWorkspaceSettings}
+        onOpenCloudSync={() => setCloudSyncModalOpen(true)}
       />
 
       {/* Admin Preview Banner when viewing client view */}
@@ -121,7 +124,7 @@ export default function App() {
                     <button
                       key={tab.id}
                       onClick={() => setActiveAdminTab(tab.id)}
-                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-[#00C2FF] text-[#0A0A0A] shadow-md shadow-[#00C2FF]/20'
                           : 'text-gray-400 hover:text-white hover:bg-[#0A0A0A]'
@@ -187,6 +190,11 @@ export default function App() {
       <ImportLeadsModal
         isOpen={importModalOpen}
         onClose={() => setImportModalOpen(false)}
+      />
+
+      <CloudSyncModal
+        isOpen={cloudSyncModalOpen}
+        onClose={() => setCloudSyncModalOpen(false)}
       />
 
       {/* Brand Footer */}
