@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { exportLeadsToCSV } from '../utils/helpers';
+import BulkEditModal from './BulkEditModal';
 import { 
   Search, 
   Filter, 
@@ -28,7 +29,8 @@ import {
   RotateCcw,
   Cloud,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Sliders
 } from 'lucide-react';
 
 export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
@@ -65,6 +67,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const [pageSize, setPageSize] = useState(25);
   const [copyToast, setCopyToast] = useState(false);
   const [applyToast, setApplyToast] = useState(false);
+  const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
+  const [bulkEditToast, setBulkEditToast] = useState(null);
 
   // Cloud Sync Notification & Status State
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -276,6 +280,12 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     }
   };
 
+  // Bulk Edit Complete Callback
+  const handleBulkEditComplete = (count, updates) => {
+    setBulkEditToast(`✅ Successfully bulk updated ${count} leads in "${currentWorkspace?.name}"!`);
+    setTimeout(() => setBulkEditToast(null), 5000);
+  };
+
   // Manual 1-Click Cloud Sync Handler
   const handleManualCloudSync = async () => {
     if (!syncAllWorkspacesToCloud) return;
@@ -310,6 +320,22 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
   return (
     <div className="space-y-4">
+
+      {/* BULK EDIT SUCCESS TOAST BANNER */}
+      {bulkEditToast && (
+        <div className="p-3.5 rounded-2xl border bg-[#00E5A0]/10 border-[#00E5A0]/40 text-[#00E5A0] text-xs flex items-center justify-between gap-3 shadow-2xl animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-[#00E5A0] flex-shrink-0" />
+            <span className="font-semibold">{bulkEditToast}</span>
+          </div>
+          <button
+            onClick={() => setBulkEditToast(null)}
+            className="p-1 rounded hover:bg-white/10 text-white cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* CLOUD SYNC LIVE NOTIFICATION TOAST BANNER */}
       {cloudSyncToast && (
@@ -393,7 +419,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                 onClick={() => setSortConfig({ key: null, direction: null })}
                 className="ml-1 p-0.5 hover:text-white cursor-pointer"
               >
-                <X className="w-3 h-3" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
@@ -450,69 +476,88 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
       </div>
 
-      {/* MULTI-SELECT FLOATING ACTION BAR */}
+      {/* MULTI-SELECT FLOATING BULK ACTIONS TOOLBAR */}
       {selectedLeadIds.length > 0 && isAdmin && (
-        <div className="p-3 rounded-xl bg-[#0A0A0A] border border-[#00C2FF] flex flex-wrap items-center justify-between gap-3 shadow-2xl animate-fade-in">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-bold text-[#00C2FF] font-mono px-2 py-0.5 rounded bg-[#111827] border border-[#00C2FF]/30">
+        <div className="p-3.5 rounded-2xl bg-[#0A0A0A] border-2 border-[#00C2FF] flex flex-wrap items-center justify-between gap-3 shadow-2xl cyan-glow animate-fade-in">
+          
+          {/* Left: Lead Counter & Quick Select Shortcuts */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-bold text-[#00C2FF] font-mono px-2.5 py-1 rounded-xl bg-[#111827] border border-[#00C2FF]/40">
               {selectedLeadIds.length} Leads Selected
             </span>
 
             {/* Quick Presets */}
-            <div className="hidden sm:flex items-center gap-1 text-[11px] text-[#7B7B7B]">
-              <span>Select:</span>
-              {[10, 25, 50, 100].map(cnt => (
+            <div className="flex flex-wrap items-center gap-1 text-[11px] text-[#7B7B7B]">
+              <span className="hidden sm:inline">Select:</span>
+              {[10, 25, 50, 100, 500].map(cnt => (
                 <button
                   key={cnt}
                   onClick={() => handleSelectTopN(cnt)}
-                  className="px-1.5 py-0.5 rounded bg-[#111827] hover:text-white text-gray-400 font-mono border border-[#1E3A5F]"
+                  className="px-2 py-0.5 rounded-lg bg-[#111827] hover:text-white hover:border-[#00C2FF] text-gray-300 font-mono border border-[#1E3A5F] transition-all cursor-pointer"
                 >
                   {cnt}
                 </button>
               ))}
               <button
                 onClick={() => setSelectedLeadIds(filteredAndSortedLeads.map(l => l.id))}
-                className="px-1.5 py-0.5 rounded bg-[#111827] hover:text-white text-gray-400 font-mono border border-[#1E3A5F]"
+                className="px-2 py-0.5 rounded-lg bg-[#111827] hover:text-white hover:border-[#00C2FF] text-gray-300 font-mono border border-[#1E3A5F] transition-all cursor-pointer"
               >
-                All ({filteredAndSortedLeads.length})
+                All Filtered ({filteredAndSortedLeads.length})
+              </button>
+              <button
+                onClick={() => setSelectedLeadIds([])}
+                className="px-2 py-0.5 rounded-lg bg-[#111827] hover:text-red-400 text-gray-400 font-mono border border-[#1E3A5F] transition-all cursor-pointer"
+              >
+                Clear
               </button>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Right: Bulk Edit, Copy, Auto-Apply, and Delete Actions */}
+          <div className="flex flex-wrap items-center gap-2">
+            
+            {/* 🌟 BULK EDIT BUTTON (PRIMARY) */}
+            <button
+              onClick={() => setBulkEditModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-[#00C2FF] to-[#00E5A0] hover:brightness-110 text-[#0A0A0A] text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-[#00C2FF]/30 cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Bulk Edit ({selectedLeadIds.length})</span>
+            </button>
+
             {/* COPY 4 COLUMNS BUTTON */}
             <button
               onClick={handleCopySelected}
-              className="px-3 py-1.5 rounded-lg bg-[#00C2FF] hover:bg-[#00C2FF]/90 text-[#0A0A0A] text-xs font-bold flex items-center gap-1.5 transition-all shadow cursor-pointer"
+              className="px-3 py-1.5 rounded-xl bg-[#00C2FF]/15 hover:bg-[#00C2FF]/25 text-[#00C2FF] border border-[#00C2FF]/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              {copyToast ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copyToast ? 'Copied 4 Columns!' : 'Copy 4 Cols (Sheets)'}</span>
+              {copyToast ? <Check className="w-3.5 h-3.5 text-[#00E5A0]" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copyToast ? 'Copied 4 Cols!' : 'Copy 4 Cols'}</span>
             </button>
 
             {/* AUTO APPLY EMAIL 1 */}
             <button
               onClick={() => handleApplySentSelected('email1')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#00E5A0] hover:bg-[#00E5A0]/90 text-[#0A0A0A] text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+              className="px-2.5 py-1.5 rounded-xl bg-[#00E5A0]/15 hover:bg-[#00E5A0]/25 text-[#00E5A0] border border-[#00E5A0]/40 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
               title="Apply 'Email Sent - Today' to Email 1"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Mark Sent (E1)</span>
+              <span>Mark E1 Sent</span>
             </button>
 
             {/* AUTO APPLY EMAIL 2 */}
             <button
               onClick={() => handleApplySentSelected('email2')}
-              className="px-2.5 py-1.5 rounded-lg bg-[#00E5A0]/80 hover:bg-[#00E5A0] text-[#0A0A0A] text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+              className="px-2.5 py-1.5 rounded-xl bg-[#00E5A0]/15 hover:bg-[#00E5A0]/25 text-[#00E5A0] border border-[#00E5A0]/40 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
               title="Apply 'Email Sent - Today' to Email 2"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Mark Sent (E2)</span>
+              <span>Mark E2 Sent</span>
             </button>
 
             {/* DELETE BUTTON */}
             <button
               onClick={handleDeleteSelected}
-              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-all cursor-pointer"
+              className="p-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-all cursor-pointer"
               title="Delete Selected Leads"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -869,6 +914,14 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
         </div>
 
       </div>
+
+      {/* BULK EDIT MODAL */}
+      <BulkEditModal
+        isOpen={bulkEditModalOpen}
+        onClose={() => setBulkEditModalOpen(false)}
+        selectedLeadIds={selectedLeadIds}
+        onComplete={handleBulkEditComplete}
+      />
 
     </div>
   );

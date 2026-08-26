@@ -421,6 +421,93 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
+  // 5b. Multi-Lead Bulk Update
+  function bulkUpdateLeads(leadIds, updates) {
+    if (!currentWorkspace || !leadIds || leadIds.length === 0 || !updates) return 0;
+
+    const targetSet = new Set(leadIds);
+    const updatedLeads = currentWorkspace.leads.map(lead => {
+      if (!targetSet.has(lead.id)) return lead;
+
+      const next = { ...lead };
+
+      if (updates.campaignName !== undefined && updates.campaignName !== '') {
+        next.campaignName = updates.campaignName.trim();
+      }
+
+      if (updates.stage !== undefined && updates.stage !== '') {
+        next.stage = updates.stage;
+        const isInterested = updates.stage && !updates.stage.toLowerCase().includes('lost') && !updates.stage.toLowerCase().includes('not a');
+        if (isInterested) {
+          next.status = 'interested';
+          if (!next.replyDate) next.replyDate = getTodayFormatted();
+        } else if (updates.stage.toLowerCase().includes('lost') || updates.stage.toLowerCase().includes('disqual')) {
+          next.status = 'lost';
+        }
+      }
+
+      if (updates.dealValue !== undefined && updates.dealValue !== '') {
+        next.dealValue = Number(updates.dealValue) || 0;
+      }
+
+      if (updates.accountName !== undefined && updates.accountName !== '') {
+        next.accountName = updates.accountName.trim();
+      }
+
+      if (updates.city !== undefined && updates.city !== '') {
+        next.city = updates.city.trim();
+      }
+
+      if (updates.email1 !== undefined && updates.email1 !== null) {
+        next.email1 = updates.email1;
+      }
+
+      if (updates.email2 !== undefined && updates.email2 !== null) {
+        next.email2 = updates.email2;
+      }
+
+      if (updates.email3 !== undefined && updates.email3 !== null) {
+        next.email3 = updates.email3;
+      }
+
+      if (updates.status !== undefined && updates.status !== '') {
+        next.status = updates.status;
+      }
+
+      if (updates.notes !== undefined && updates.notes !== '') {
+        if (updates.notesMode === 'append') {
+          next.notes = next.notes ? `${next.notes} | ${updates.notes.trim()}` : updates.notes.trim();
+        } else {
+          next.notes = updates.notes.trim();
+        }
+      }
+
+      next.updatedAt = new Date().toISOString();
+      return next;
+    });
+
+    const newActivity = {
+      id: 'act_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'bulk_edit',
+      count: leadIds.length,
+      description: `Bulk updated ${leadIds.length} selected leads`
+    };
+
+    setWorkspaces(prev => prev.map(w => {
+      if (w.id === currentWorkspaceId) {
+        return {
+          ...w,
+          leads: updatedLeads,
+          activityLog: [newActivity, ...(w.activityLog || [])]
+        };
+      }
+      return w;
+    }));
+
+    return leadIds.length;
+  }
+
   // 6. Add Leads in Bulk (from CSV / Google Sheets)
   function addLeadsBulk(newLeads, defaultCampaignName = null) {
     if (!currentWorkspace || !newLeads || newLeads.length === 0) return 0;
@@ -603,6 +690,7 @@ export function WorkspaceProvider({ children }) {
     updateLeadStage,
     updateLeadDealValue,
     updateLead,
+    bulkUpdateLeads,
     addLeadsBulk,
     deleteLead,
     bulkDeleteLeads,
