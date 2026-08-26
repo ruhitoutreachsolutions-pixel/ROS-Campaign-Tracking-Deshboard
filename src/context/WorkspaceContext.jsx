@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { initialWorkspaces, ADMIN_CREDENTIALS } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard } from '../utils/helpers';
-import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient } from '../services/db';
+import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
 
 const WorkspaceContext = createContext(null);
 
@@ -122,6 +122,42 @@ export function WorkspaceProvider({ children }) {
 
   // Active Role (Considers Admin Preview Mode)
   const effectiveRole = currentUser ? (currentUser.role === 'admin' && adminViewingAsClient ? 'client' : currentUser.role) : 'guest';
+
+  // Manual 1-Click Sync to Cloud Function
+  async function syncAllWorkspacesToCloud() {
+    const isConnected = isCloudDatabaseConnected();
+    if (!isConnected) {
+      return { 
+        success: false, 
+        connected: false, 
+        message: 'Cloud Database (Supabase) is not connected yet. Click to connect so leads sync to all devices.' 
+      };
+    }
+
+    try {
+      const ok = await saveWorkspacesToCloud(workspaces);
+      if (ok) {
+        const totalLeads = workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+        return { 
+          success: true, 
+          connected: true, 
+          count: totalLeads,
+          message: `Successfully synced ${workspaces.length} workspace(s) and ${totalLeads} leads to Cloud Database!`
+        };
+      }
+      return { 
+        success: false, 
+        connected: true, 
+        message: 'Cloud sync failed. Make sure your Supabase "workspaces" SQL table is created.' 
+      };
+    } catch (err) {
+      return { 
+        success: false, 
+        connected: true, 
+        message: 'Sync error: ' + (err.message || 'Unknown error') 
+      };
+    }
+  }
 
   // ============================================================================
   // AUTHENTICATION (SUPER ROBUST WITH REAL-TIME CLOUD LOOKUP)
@@ -576,7 +612,8 @@ export function WorkspaceProvider({ children }) {
     deleteWorkspace,
     resetToDefaults,
     getSupabaseConfig,
-    saveSupabaseConfig
+    saveSupabaseConfig,
+    syncAllWorkspacesToCloud
   };
 
   return (

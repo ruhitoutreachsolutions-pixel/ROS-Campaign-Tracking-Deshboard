@@ -25,10 +25,13 @@ import {
   ArrowUp,
   ArrowDown,
   X,
-  RotateCcw
+  RotateCcw,
+  Cloud,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 
-export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
+export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
   const {
     currentWorkspace,
     currentUser,
@@ -36,7 +39,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
     applyBatchSentStatus,
     deleteLead,
     bulkDeleteLeads,
-    updateLead
+    updateLead,
+    syncAllWorkspacesToCloud
   } = useWorkspace();
 
   const isAdmin = currentUser?.role === 'admin';
@@ -61,6 +65,10 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
   const [pageSize, setPageSize] = useState(25);
   const [copyToast, setCopyToast] = useState(false);
   const [applyToast, setApplyToast] = useState(false);
+
+  // Cloud Sync Notification & Status State
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudSyncToast, setCloudSyncToast] = useState(null); // { type: 'success' | 'warning' | 'error', message: string }
 
   // Close dropdown when clicking outside
   const dropdownRef = useRef(null);
@@ -268,10 +276,77 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
     }
   };
 
+  // Manual 1-Click Cloud Sync Handler
+  const handleManualCloudSync = async () => {
+    if (!syncAllWorkspacesToCloud) return;
+    setIsSyncingCloud(true);
+    setCloudSyncToast(null);
+
+    const result = await syncAllWorkspacesToCloud();
+    setIsSyncingCloud(false);
+
+    if (result.success) {
+      setCloudSyncToast({
+        type: 'success',
+        message: `✅ Success! Synced ${leads.length} leads in "${currentWorkspace?.name}" to Cloud Database. All clients can now view them live!`
+      });
+      setTimeout(() => setCloudSyncToast(null), 6000);
+    } else if (!result.connected) {
+      setCloudSyncToast({
+        type: 'warning',
+        message: `⚠️ Cloud Database not connected. Click "Setup Supabase" to enable worldwide sync.`,
+        action: () => onOpenCloudSync && onOpenCloudSync()
+      });
+    } else {
+      setCloudSyncToast({
+        type: 'error',
+        message: `❌ Sync Error: ${result.message}`
+      });
+      setTimeout(() => setCloudSyncToast(null), 6000);
+    }
+  };
+
   const isAllPageSelected = paginatedLeads.length > 0 && paginatedLeads.every(l => selectedLeadIds.includes(l.id));
 
   return (
     <div className="space-y-4">
+
+      {/* CLOUD SYNC LIVE NOTIFICATION TOAST BANNER */}
+      {cloudSyncToast && (
+        <div className={`p-3.5 rounded-2xl border text-xs flex items-center justify-between gap-3 shadow-2xl animate-fade-in ${
+          cloudSyncToast.type === 'success' 
+            ? 'bg-[#00E5A0]/10 border-[#00E5A0]/40 text-[#00E5A0]' 
+            : cloudSyncToast.type === 'warning'
+            ? 'bg-amber-500/10 border-amber-500/40 text-amber-300'
+            : 'bg-red-500/10 border-red-500/40 text-red-400'
+        }`}>
+          <div className="flex items-center gap-2.5">
+            {cloudSyncToast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-[#00E5A0] flex-shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            )}
+            <span className="font-semibold">{cloudSyncToast.message}</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {cloudSyncToast.action && (
+              <button
+                onClick={cloudSyncToast.action}
+                className="px-3 py-1 rounded-xl bg-[#00C2FF] text-[#0A0A0A] font-bold text-xs hover:bg-[#00C2FF]/90 transition-all cursor-pointer"
+              >
+                Setup Supabase
+              </button>
+            )}
+            <button
+              onClick={() => setCloudSyncToast(null)}
+              className="p-1 rounded hover:bg-white/10 text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
       
       {/* Top Action & Filter Summary Bar */}
       <div className="p-4 rounded-2xl bg-[#111827] border border-[#1E3A5F] flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
@@ -316,7 +391,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
               <span>Sorted by {columns.find(c => c.key === sortConfig.key)?.label} ({sortConfig.direction === 'asc' ? 'A→Z' : 'Z→A'})</span>
               <button
                 onClick={() => setSortConfig({ key: null, direction: null })}
-                className="ml-1 p-0.5 hover:text-white"
+                className="ml-1 p-0.5 hover:text-white cursor-pointer"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -325,8 +400,25 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail }) {
 
         </div>
 
-        {/* Action Buttons: Import, Export, Reset */}
+        {/* Action Buttons: Sync to Cloud, Import, Export, Reset */}
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+          
+          {/* SYNC TO CLOUD BUTTON */}
+          {isAdmin && (
+            <button
+              onClick={handleManualCloudSync}
+              disabled={isSyncingCloud}
+              className="px-3.5 py-1.5 rounded-xl bg-[#00E5A0]/10 hover:bg-[#00E5A0]/20 text-[#00E5A0] border border-[#00E5A0]/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-md hover:shadow-[#00E5A0]/10 cursor-pointer disabled:opacity-50"
+              title="Sync all leads and tracking data to Cloud Database so clients see them in real time"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingCloud ? 'animate-spin' : ''}`} />
+              <span>{isSyncingCloud ? 'Syncing...' : 'Sync to Cloud'}</span>
+              <span className="text-[10px] px-1 py-0.2 rounded bg-[#0A0A0A] font-mono text-white">
+                {leads.length}
+              </span>
+            </button>
+          )}
+
           {activeFiltersCount > 0 && (
             <button
               onClick={handleClearAllFilters}

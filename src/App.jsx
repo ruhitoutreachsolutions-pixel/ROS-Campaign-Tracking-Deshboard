@@ -166,6 +166,7 @@ export default function App() {
               <LeadsTable 
                 onOpenImportModal={() => setImportModalOpen(true)}
                 onOpenLeadDetail={handleOpenLeadDetail}
+                onOpenCloudSync={() => setCloudSyncModalOpen(true)}
               />
             )}
 
