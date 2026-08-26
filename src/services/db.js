@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Default / Environment Supabase configuration
-const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+// Default Supabase project for ROS Outreach Dashboard
+const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
+const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const ENV_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
@@ -9,10 +10,10 @@ const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
 
 // 1. Get active Supabase client
 export function getSupabaseClient() {
-  const url = localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL;
+  const url = localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL;
   const key = localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY;
 
-  if (url && key && url.startsWith('http') && url.includes('supabase.co')) {
+  if (url && key && url.startsWith('http')) {
     try {
       return createClient(url.trim(), key.trim(), {
         auth: { persistSession: false }
@@ -35,7 +36,7 @@ export function saveSupabaseConfig(url, key) {
 
 export function getSupabaseConfig() {
   return {
-    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || '',
+    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL,
     key: localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY || ''
   };
 }
