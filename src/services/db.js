@@ -1,12 +1,26 @@
-// LIVE ONLINE CLOUD DATABASE ENGINE FOR ROS CAMPAIGN DASHBOARD
-// Synchronizes all client workspaces, credentials, and leads across all devices, Chrome profiles, and Vercel in real time.
+import { createClient } from '@supabase/supabase-js';
 
-const CLOUD_DATABASE_URL = 'https://api.restful-api.dev/objects/ff8081819ff5b11001a03a8fda0b2031';
+// Default / Environment Supabase configuration
+const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const ENV_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v1';
-const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v1';
+const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
+const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
 
+// 1. Get active Supabase client
 export function getSupabaseClient() {
+  const url = localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL;
+  const key = localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY;
+
+  if (url && key && url.startsWith('http') && url.includes('supabase.co')) {
+    try {
+      return createClient(url.trim(), key.trim(), {
+        auth: { persistSession: false }
+      });
+    } catch (err) {
+      console.warn('Failed to initialize Supabase client:', err);
+    }
+  }
   return null;
 }
 
@@ -21,55 +35,95 @@ export function saveSupabaseConfig(url, key) {
 
 export function getSupabaseConfig() {
   return {
-    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || '',
-    key: localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ''
+    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || '',
+    key: localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY || ''
   };
 }
 
-// 1. Fetch workspaces in real-time from Cloud Database
-export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
-  try {
-    const res = await fetch(CLOUD_DATABASE_URL, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
-      }
-    });
+export function isCloudDatabaseConnected() {
+  return !!getSupabaseClient();
+}
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.data && Array.isArray(data.data.workspaces) && data.data.workspaces.length > 0) {
-        return data.data.workspaces;
-      }
+// 2. Fetch all workspaces and their thousands of leads from Supabase Cloud Database
+export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return fallbackWorkspaces;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.warn('Supabase fetch error:', error);
+      return fallbackWorkspaces;
+    }
+
+    if (Array.isArray(data) && data.length > 0) {
+      return data.map(item => ({
+        id: item.id,
+        name: item.name,
+        clientName: item.client_name || item.name,
+        clientEmail: item.client_email || '',
+        campaignName: item.campaign_name || 'Care Campaign',
+        activeSendingAccount: item.active_sending_account || '',
+        sendingAccounts: Array.isArray(item.sending_accounts) ? item.sending_accounts : (typeof item.sending_accounts === 'string' ? JSON.parse(item.sending_accounts) : [item.active_sending_account]),
+        clientCredentials: typeof item.client_credentials === 'object' && item.client_credentials !== null 
+          ? item.client_credentials 
+          : (typeof item.client_credentials === 'string' ? JSON.parse(item.client_credentials) : { username: item.username || item.name, password: item.password || 'client2026' }),
+        sequenceConfig: typeof item.sequence_config === 'object' && item.sequence_config !== null
+          ? item.sequence_config
+          : (typeof item.sequence_config === 'string' ? JSON.parse(item.sequence_config) : {}),
+        activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
+        leads: Array.isArray(item.leads) ? item.leads : (typeof item.leads === 'string' ? JSON.parse(item.leads) : []),
+        createdAt: item.created_at || new Date().toISOString().split('T')[0]
+      }));
     }
   } catch (err) {
-    console.warn('Cloud database fetch notice:', err);
+    console.warn('Cloud database fetch failed:', err);
   }
+
   return fallbackWorkspaces;
 }
 
-// 2. Save / Sync Workspaces to Cloud Database
+// 3. Save / Sync Workspaces (including all leads) to Supabase Cloud Database
 export async function saveWorkspacesToCloud(workspaces) {
   if (!workspaces || !Array.isArray(workspaces) || workspaces.length === 0) return false;
 
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
   try {
-    const res = await fetch(CLOUD_DATABASE_URL, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        name: 'ros_workspaces',
-        data: {
-          workspaces: workspaces,
-          updated_at: new Date().toISOString()
-        }
-      })
-    });
-    return res.ok;
+    for (const ws of workspaces) {
+      const payload = {
+        id: ws.id,
+        name: ws.name,
+        client_name: ws.clientName || ws.name,
+        client_email: ws.clientEmail || '',
+        campaign_name: ws.campaignName || 'Care Campaign',
+        active_sending_account: ws.activeSendingAccount || ws.sendingAccounts?.[0] || '',
+        sending_accounts: ws.sendingAccounts || [ws.activeSendingAccount],
+        client_credentials: ws.clientCredentials || { username: ws.name, password: 'client2026' },
+        sequence_config: ws.sequenceConfig || {},
+        activity_log: ws.activityLog || [],
+        leads: ws.leads || [],
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from('workspaces')
+        .upsert(payload, { onConflict: 'id' });
+
+      if (error) {
+        console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
+      }
+    }
+    return true;
   } catch (err) {
-    console.warn('Cloud database sync error:', err);
+    console.warn('Supabase save failed:', err);
     return false;
   }
 }

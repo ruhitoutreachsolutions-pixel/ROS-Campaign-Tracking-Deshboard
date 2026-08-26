@@ -1,6 +1,3 @@
-// Production Client Workspaces Configuration
-// Updated: 2026-08-26 (Public Repository Build)
-
 export const initialWorkspaces = [
   {
     id: 'ws_crewlixuk',

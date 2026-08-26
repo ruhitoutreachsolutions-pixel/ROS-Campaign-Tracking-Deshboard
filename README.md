@@ -40,6 +40,12 @@ Adheres strictly to the official **ROS Brand Identity Guidelines**:
 - **Username**: `admin` (or `ruhitahmed111@gmail.com`)
 - **Password**: `ros2026` (or `admin123`)
 
+### 🏢 Client Portals (Client View Only)
+| Client Workspace | Username | Password | Sending Account |
+| :--- | :--- | :--- | :--- |
+| **Crewlix Global** | `crewlix` | `crewlix2026` | `hello@crewlixglobal.com` |
+| **Apex Solutions UK** | `apex` | `apex2026` | `outreach@apexsolutions.io` |
+| **FinTech Reach B2B** | `fintech` | `fintech2026` | `ruhit@fintechreach.co` |
 
 *(You can also create new client workspaces and set custom client login credentials anytime inside the Workspace Settings modal).*
 
