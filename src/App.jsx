@@ -74,14 +74,14 @@ export default function App() {
 
       {/* Admin Preview Banner when viewing client view */}
       {adminViewingAsClient && (
-        <div className="bg-[#00E5A0] text-[#0A0A0A] px-4 py-1.5 text-xs font-bold flex items-center justify-center gap-2 shadow-md">
-          <Sparkles className="w-4 h-4" />
-          <span>You are currently previewing the exact Client Portal view for <strong>{currentWorkspace?.clientName || currentWorkspace?.name}</strong>.</span>
+        <div className="bg-[#00E5A0] text-[#0A0A0A] px-4 py-2 text-xs font-bold flex items-center justify-center gap-2 shadow-md">
+          <Sparkles className="w-4 h-4 flex-shrink-0" />
+          <span className="truncate">You are previewing the Client Portal for <strong>{currentWorkspace?.clientName || currentWorkspace?.name}</strong>.</span>
         </div>
       )}
 
-      {/* MAIN CONTENT CONTAINER */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-8">
+      {/* MAIN CONTENT CONTAINER (FULL WIDTH FLUID LAYOUT) */}
+      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 xl:px-12 py-5 sm:py-7 space-y-6 sm:space-y-8">
         
         {effectiveRole === 'client' ? (
           // ==========================================
@@ -92,7 +92,7 @@ export default function App() {
           // ==========================================
           // 2. AGENCY ADMIN VIEW (FULL CONTROL)
           // ==========================================
-          <div className="space-y-8">
+          <div className="space-y-6 sm:space-y-8">
             
             {/* Admin Header with quick stats */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#1E3A5F]">
@@ -110,8 +110,8 @@ export default function App() {
                 </h1>
               </div>
 
-              {/* Admin Navigation Tabs */}
-              <div className="flex flex-wrap items-center gap-2 bg-[#111827] p-1.5 rounded-2xl border border-[#1E3A5F]">
+              {/* Admin Navigation Tabs (Responsive & Scrollable on Mobile) */}
+              <div className="flex items-center gap-1.5 sm:gap-2 bg-[#111827] p-1.5 rounded-2xl border border-[#1E3A5F] overflow-x-auto max-w-full no-scrollbar">
                 {[
                   { id: 'dispatcher', label: 'Mail Merge Dispatcher', icon: Send, badge: 'Fast' },
                   { id: 'pipeline', label: 'Interested Pipeline', icon: Target, badge: `${metrics.interestedCount}` },
@@ -124,13 +124,13 @@ export default function App() {
                     <button
                       key={tab.id}
                       onClick={() => setActiveAdminTab(tab.id)}
-                      className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 ${
                         isSelected
                           ? 'bg-[#00C2FF] text-[#0A0A0A] shadow-md shadow-[#00C2FF]/20'
                           : 'text-gray-400 hover:text-white hover:bg-[#0A0A0A]'
                       }`}
                     >
-                      <IconComp className="w-4 h-4" />
+                      <IconComp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                       <span>{tab.label}</span>
                       {tab.badge && (
                         <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#0A0A0A] text-[#00E5A0]'}`}>
@@ -198,10 +198,10 @@ export default function App() {
         onClose={() => setCloudSyncModalOpen(false)}
       />
 
-      {/* Brand Footer */}
-      <footer className="w-full border-t border-[#1E3A5F] bg-[#0A0A0A] py-8 text-xs text-[#7B7B7B]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
+      {/* Brand Footer (Full Width Fluid) */}
+      <footer className="w-full border-t border-[#1E3A5F] bg-[#0A0A0A] py-6 sm:py-8 text-xs text-[#7B7B7B]">
+        <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4 text-center sm:text-left">
             <span className="font-bold text-white">RUHIT OUTREACH SOLUTIONS</span>
             <span className="hidden sm:inline text-[#1E3A5F]">|</span>
             <span className="text-[#00C2FF]">B2B Outbound Growth · Cold Email Systems · AI Automation</span>

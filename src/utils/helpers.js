@@ -5,7 +5,22 @@ export function getTodayFormatted() {
   const dd = String(now.getDate()).padStart(2, '0');
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yy = String(now.getFullYear()).slice(-2);
+  return `${dd}/${mm}/${yy}`; // e.g. 26/08/26
+}
+
+export function getYesterdayFormatted() {
+  const now = new Date();
+  now.setDate(now.getDate() - 1);
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yy = String(now.getFullYear()).slice(-2);
   return `${dd}/${mm}/${yy}`; // e.g. 25/08/26
+}
+
+export function extractDateFromStatus(statusStr) {
+  if (!statusStr || typeof statusStr !== 'string') return null;
+  const match = statusStr.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+  return match ? match[1] : null;
 }
 
 export function formatDateDisplay(dateStr) {
@@ -62,46 +77,59 @@ export async function copyToClipboard(text) {
   }
 }
 
-// Calculate workspace metrics dynamically (Including Campaign-by-Campaign Telemetry)
+// Calculate workspace metrics dynamically (Strict Date Separation: Today vs Yesterday / Last Day)
 export function calculateWorkspaceMetrics(workspace) {
+  const emptyMetrics = {
+    totalLeads: 0,
+    sentToday: 0,
+    sentYesterday: 0,
+    lastDaySent: 0,
+    lastActiveDate: null,
+    totalSent: 0,
+    uniqueSent: 0,
+    totalReplied: 0,
+    replyRate: '0.0',
+    interestedCount: 0,
+    pipelineValue: 0,
+    sequenceStats: {
+      email1: { sent: 0, replied: 0, pending: 0 },
+      email2: { sent: 0, replied: 0, pending: 0 },
+      email3: { sent: 0, replied: 0, pending: 0 }
+    },
+    stageCounts: {
+      interested: 0,
+      booked: 0,
+      proposal: 0,
+      negotiation: 0,
+      won: 0,
+      lost: 0
+    },
+    campaignsBreakdown: [],
+    todayCampaignStats: [],
+    yesterdayCampaignStats: [],
+    lastDayCampaignStats: []
+  };
+
   if (!workspace || !workspace.leads) {
-    return {
-      totalLeads: 0,
-      sentToday: 0,
-      totalSent: 0,
-      uniqueSent: 0,
-      totalReplied: 0,
-      replyRate: '0.0',
-      interestedCount: 0,
-      pipelineValue: 0,
-      sequenceStats: {
-        email1: { sent: 0, replied: 0, pending: 0 },
-        email2: { sent: 0, replied: 0, pending: 0 },
-        email3: { sent: 0, replied: 0, pending: 0 }
-      },
-      stageCounts: {
-        interested: 0,
-        booked: 0,
-        proposal: 0,
-        negotiation: 0,
-        won: 0,
-        lost: 0
-      },
-      campaignsBreakdown: [],
-      todayCampaignStats: []
-    };
+    return emptyMetrics;
   }
 
   const leads = workspace.leads;
   const todayStr = getTodayFormatted();
+  const yesterdayStr = getYesterdayFormatted();
   const defaultCampName = workspace.campaignName || 'General Outbound';
 
   let sentToday = 0;
+  let sentYesterday = 0;
   let totalSent = 0;
   let uniqueSentIds = new Set();
   let totalReplied = 0;
   let interestedCount = 0;
   let pipelineValue = 0;
+
+  // Track counts per date to determine the most recent dispatch day
+  const dateCounts = {}; // { '25/08/26': 1495, '18/08/26': 745 }
+  const dateCampaignMap = {}; // { '25/08/26': { 'Care Campaign UK': { email1: 0, email2: 1495, email3: 0 } } }
   
   const sequenceStats = {
     email1: { sent: 0, replied: 0, pending: 0 },
@@ -128,9 +156,13 @@ export function calculateWorkspaceMetrics(workspace) {
         name: cName,
         totalLeads: 0,
         sentToday: 0,
+        sentYesterday: 0,
         email1Today: 0,
         email2Today: 0,
         email3Today: 0,
+        email1Yesterday: 0,
+        email2Yesterday: 0,
+        email3Yesterday: 0,
         email1Sent: 0,
         email2Sent: 0,
         email3Sent: 0,
@@ -144,54 +176,51 @@ export function calculateWorkspaceMetrics(workspace) {
     camp.totalLeads++;
 
     let hasSentAny = false;
-    
-    // Email 1
-    if (lead.email1 && lead.email1.trim() !== '') {
+
+    // Helper to process sequence send
+    const processSequenceSend = (val, seqKey) => {
+      if (!val || typeof val !== 'string' || val.trim() === '') return false;
       totalSent++;
       camp.totalSent++;
-      camp.email1Sent++;
+      camp[`${seqKey}Sent`]++;
+      sequenceStats[seqKey].sent++;
       hasSentAny = true;
-      sequenceStats.email1.sent++;
-      if (lead.email1.includes(todayStr) || lead.email1.includes('10/08/26') || lead.email1.includes('25/08/26')) {
-        sentToday++;
-        camp.sentToday++;
-        camp.email1Today++;
+
+      const date = extractDateFromStatus(val);
+      if (date) {
+        dateCounts[date] = (dateCounts[date] || 0) + 1;
+        if (!dateCampaignMap[date]) dateCampaignMap[date] = {};
+        if (!dateCampaignMap[date][cName]) {
+          dateCampaignMap[date][cName] = { email1: 0, email2: 0, email3: 0, total: 0 };
+        }
+        dateCampaignMap[date][cName][seqKey]++;
+        dateCampaignMap[date][cName].total++;
+
+        // Strictly check Today vs Yesterday
+        if (date === todayStr) {
+          sentToday++;
+          camp.sentToday++;
+          camp[`${seqKey}Today`]++;
+        } else if (date === yesterdayStr) {
+          sentYesterday++;
+          camp.sentYesterday++;
+          camp[`${seqKey}Yesterday`]++;
+        }
       }
-    } else {
-      sequenceStats.email1.pending++;
-    }
+      return true;
+    };
+
+    // Email 1
+    const hasE1 = processSequenceSend(lead.email1, 'email1');
+    if (!hasE1) sequenceStats.email1.pending++;
 
     // Email 2
-    if (lead.email2 && lead.email2.trim() !== '') {
-      totalSent++;
-      camp.totalSent++;
-      camp.email2Sent++;
-      hasSentAny = true;
-      sequenceStats.email2.sent++;
-      if (lead.email2.includes(todayStr) || lead.email2.includes('25/08/26')) {
-        sentToday++;
-        camp.sentToday++;
-        camp.email2Today++;
-      }
-    } else if (lead.email1 && lead.email1.trim() !== '') {
-      sequenceStats.email2.pending++;
-    }
+    const hasE2 = processSequenceSend(lead.email2, 'email2');
+    if (!hasE2 && hasE1) sequenceStats.email2.pending++;
 
     // Email 3
-    if (lead.email3 && lead.email3.trim() !== '') {
-      totalSent++;
-      camp.totalSent++;
-      camp.email3Sent++;
-      hasSentAny = true;
-      sequenceStats.email3.sent++;
-      if (lead.email3.includes(todayStr) || lead.email3.includes('25/08/26')) {
-        sentToday++;
-        camp.sentToday++;
-        camp.email3Today++;
-      }
-    } else if (lead.email2 && lead.email2.trim() !== '') {
-      sequenceStats.email3.pending++;
-    }
+    const hasE3 = processSequenceSend(lead.email3, 'email3');
+    if (!hasE3 && hasE2) sequenceStats.email3.pending++;
 
     if (hasSentAny) {
       uniqueSentIds.add(lead.id);
@@ -219,174 +248,195 @@ export function calculateWorkspaceMetrics(workspace) {
     }
   });
 
-  const uniqueSent = uniqueSentIds.size;
-  const replyRate = uniqueSent > 0 ? ((totalReplied / uniqueSent) * 100).toFixed(1) : '0.0';
-  const campaignsBreakdown = Object.values(campaignMap);
+  // Calculate Last Active Date (excluding today if today is 0)
+  const sortedDates = Object.keys(dateCounts).sort((a, b) => {
+    const parse = (s) => {
+      const parts = s.split('/');
+      if (parts.length === 3) {
+        const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+        return new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+      }
+      return 0;
+    };
+    return parse(b) - parse(a);
+  });
 
-  // Active today summary cards
+  const lastActiveDate = sortedDates.find(d => d !== todayStr) || sortedDates[0] || null;
+  const lastDaySent = lastActiveDate ? (dateCounts[lastActiveDate] || 0) : 0;
+
+  // Build Today's Campaign Telemetry Cards
   const todayCampaignStats = [];
-  campaignsBreakdown.forEach(c => {
-    if (c.email1Today > 0) {
+  Object.values(campaignMap).forEach(camp => {
+    if (camp.sentToday > 0) {
+      const details = [];
+      if (camp.email1Today > 0) details.push(`Initial Outreach: ${camp.email1Today}`);
+      if (camp.email2Today > 0) details.push(`Follow Up 1: ${camp.email2Today}`);
+      if (camp.email3Today > 0) details.push(`Follow Up 2: ${camp.email3Today}`);
+
       todayCampaignStats.push({
-        campaignName: c.name,
-        stepLabel: 'Initial Outreach Sent',
-        stepShort: 'Initial Sent',
-        count: c.email1Today,
-        sequence: 'Email 1'
-      });
-    }
-    if (c.email2Today > 0) {
-      todayCampaignStats.push({
-        campaignName: c.name,
-        stepLabel: 'Follow Up 1 Sent',
-        stepShort: 'Follow Up Sent',
-        count: c.email2Today,
-        sequence: 'Email 2'
-      });
-    }
-    if (c.email3Today > 0) {
-      todayCampaignStats.push({
-        campaignName: c.name,
-        stepLabel: 'Follow Up 2 Sent',
-        stepShort: 'Follow Up 2 Sent',
-        count: c.email3Today,
-        sequence: 'Email 3'
+        campaignName: camp.name,
+        sentToday: camp.sentToday,
+        details: details.join(' · '),
+        email1: camp.email1Today,
+        email2: camp.email2Today,
+        email3: camp.email3Today
       });
     }
   });
 
+  // Build Yesterday's Campaign Telemetry Cards
+  const yesterdayCampaignStats = [];
+  Object.values(campaignMap).forEach(camp => {
+    if (camp.sentYesterday > 0) {
+      const details = [];
+      if (camp.email1Yesterday > 0) details.push(`Initial Outreach: ${camp.email1Yesterday}`);
+      if (camp.email2Yesterday > 0) details.push(`Follow Up 1: ${camp.email2Yesterday}`);
+      if (camp.email3Yesterday > 0) details.push(`Follow Up 2: ${camp.email3Yesterday}`);
+
+      yesterdayCampaignStats.push({
+        campaignName: camp.name,
+        sentYesterday: camp.sentYesterday,
+        date: yesterdayStr,
+        details: details.join(' · '),
+        email1: camp.email1Yesterday,
+        email2: camp.email2Yesterday,
+        email3: camp.email3Yesterday
+      });
+    }
+  });
+
+  // Build Last Active Day Breakdown (e.g. 25/08/26)
+  const lastDayCampaignStats = [];
+  if (lastActiveDate && dateCampaignMap[lastActiveDate]) {
+    Object.entries(dateCampaignMap[lastActiveDate]).forEach(([cName, stats]) => {
+      const details = [];
+      if (stats.email1 > 0) details.push(`Initial Outreach: ${stats.email1}`);
+      if (stats.email2 > 0) details.push(`Follow Up 1: ${stats.email2}`);
+      if (stats.email3 > 0) details.push(`Follow Up 2: ${stats.email3}`);
+
+      lastDayCampaignStats.push({
+        campaignName: cName,
+        date: lastActiveDate,
+        totalSent: stats.total,
+        details: details.join(' · ')
+      });
+    });
+  }
+
+  const replyRate = totalSent > 0 ? ((totalReplied / totalSent) * 100).toFixed(1) : '0.0';
+
   return {
     totalLeads: leads.length,
     sentToday,
+    sentYesterday,
+    lastDaySent,
+    lastActiveDate,
     totalSent,
-    uniqueSent,
+    uniqueSent: uniqueSentIds.size,
     totalReplied,
     replyRate,
     interestedCount,
     pipelineValue,
     sequenceStats,
     stageCounts,
-    campaignsBreakdown,
-    todayCampaignStats
+    campaignsBreakdown: Object.values(campaignMap),
+    todayCampaignStats,
+    yesterdayCampaignStats,
+    lastDayCampaignStats
   };
 }
 
-// CSV Export Helper
-export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
-  const headers = ['Email Address', 'First Name', 'City', 'Company Name', 'Campaign Name', 'Email 1', 'Email 2', 'Email 3', 'Account Name', 'Status', 'Stage', 'Deal Value', 'Notes'];
-  
-  let csvRows = [headers.join(',')];
-  
-  leads.forEach(l => {
-    const row = [
-      `"${(l.email || '').replace(/"/g, '""')}"`,
-      `"${(l.firstName || '').replace(/"/g, '""')}"`,
-      `"${(l.city || '').replace(/"/g, '""')}"`,
-      `"${(l.companyName || '').replace(/"/g, '""')}"`,
-      `"${(l.campaignName || '').replace(/"/g, '""')}"`,
-      `"${(l.email1 || '').replace(/"/g, '""')}"`,
-      `"${(l.email2 || '').replace(/"/g, '""')}"`,
-      `"${(l.email3 || '').replace(/"/g, '""')}"`,
-      `"${(l.accountName || '').replace(/"/g, '""')}"`,
-      `"${(l.status || '').replace(/"/g, '""')}"`,
-      `"${(l.stage || '').replace(/"/g, '""')}"`,
-      l.dealValue || 0,
-      `"${(l.notes || '').replace(/"/g, '""')}"`
-    ];
-    csvRows.push(row.join(','));
-  });
+// Parse pasted TSV / CSV text from Google Sheets into structured lead objects
+export function parsePastedLeadsText(text, defaultCampaignName = null) {
+  if (!text || typeof text !== 'string') return [];
 
-  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const lines = text.trim().split(/\r?\n/);
+  const leads = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // Detect TSV or CSV
+    const separator = line.includes('\t') ? '\t' : ',';
+    const cols = line.split(separator).map(c => c.replace(/^["']|["']$/g, '').trim());
+
+    // Skip Header line if detected
+    if (i === 0 && (
+      cols[0].toLowerCase().includes('email') || 
+      cols[1]?.toLowerCase().includes('first') || 
+      cols[0].toLowerCase().includes('address')
+    )) {
+      continue;
+    }
+
+    if (cols.length >= 1 && cols[0].includes('@')) {
+      leads.push({
+        id: 'ld_' + Math.random().toString(36).substr(2, 9),
+        email: cols[0] || '',
+        firstName: cols[1] || '',
+        city: cols[2] || '',
+        companyName: cols[3] || '',
+        campaignName: cols[4] || defaultCampaignName || 'General Outbound',
+        email1: cols[5] || '',
+        email2: cols[6] || '',
+        email3: cols[7] || '',
+        accountName: cols[8] || '',
+        status: 'pending',
+        stage: '',
+        dealValue: 0,
+        notes: '',
+        importedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  return leads;
+}
+
+// Export array of leads to CSV download
+export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
+  if (!leads || leads.length === 0) return;
+
+  const headers = [
+    'Email Address',
+    'First Name',
+    'City',
+    'Company Name',
+    'Campaign Name',
+    'Email 1',
+    'Email 2',
+    'Email 3',
+    'Account Name',
+    'Pipeline Stage',
+    'Deal Value ($)',
+    'Status',
+    'Notes'
+  ];
+
+  const rows = leads.map(l => [
+    `"${(l.email || '').replace(/"/g, '""')}"`,
+    `"${(l.firstName || '').replace(/"/g, '""')}"`,
+    `"${(l.city || '').replace(/"/g, '""')}"`,
+    `"${(l.companyName || '').replace(/"/g, '""')}"`,
+    `"${(l.campaignName || '').replace(/"/g, '""')}"`,
+    `"${(l.email1 || '').replace(/"/g, '""')}"`,
+    `"${(l.email2 || '').replace(/"/g, '""')}"`,
+    `"${(l.email3 || '').replace(/"/g, '""')}"`,
+    `"${(l.accountName || '').replace(/"/g, '""')}"`,
+    `"${(l.stage || '').replace(/"/g, '""')}"`,
+    `"${l.dealValue || 0}"`,
+    `"${(l.status || '').replace(/"/g, '""')}"`,
+    `"${(l.notes || '').replace(/"/g, '""')}"`
+  ]);
+
+  const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  link.href = url;
+  link.setAttribute('href', url);
   link.setAttribute('download', filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-}
-
-// Parse Pasted Data or CSV Text into Leads Array with Campaign Name Support
-export function parsePastedLeadsText(rawText, defaultAccount = '', defaultCampaign = '') {
-  if (!rawText || !rawText.trim()) return [];
-  
-  const lines = rawText.trim().split(/\r?\n/);
-  if (lines.length === 0) return [];
-
-  const results = [];
-  let startIndex = 0;
-  const firstLineLower = lines[0].toLowerCase();
-  
-  let hasCampaignHeader = firstLineLower.includes('campaign');
-
-  if (firstLineLower.includes('email') || firstLineLower.includes('name') || firstLineLower.includes('company')) {
-    startIndex = 1;
-  }
-
-  for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    let columns = [];
-    if (line.includes('\t')) {
-      columns = line.split('\t');
-    } else if (line.includes(',')) {
-      columns = line.split(',');
-    } else if (line.includes(';')) {
-      columns = line.split(';');
-    } else {
-      columns = [line];
-    }
-
-    columns = columns.map(c => c.trim().replace(/^["']|["']$/g, ''));
-
-    const email = columns[0] || '';
-    if (!email || !email.includes('@')) continue;
-
-    const firstName = columns[1] || '';
-    const city = columns[2] || '';
-    const companyName = columns[3] || '';
-    
-    // Check if column 4 is campaign name or email1
-    let campaignName = defaultCampaign;
-    let email1 = '';
-    let email2 = '';
-    let email3 = '';
-    let accountName = defaultAccount;
-
-    if (columns.length >= 5) {
-      if (columns[4].toLowerCase().includes('campaign') || (!columns[4].toLowerCase().includes('email') && !columns[4].includes('/'))) {
-        campaignName = columns[4] || defaultCampaign;
-        email1 = columns[5] || '';
-        email2 = columns[6] || '';
-        email3 = columns[7] || '';
-        accountName = columns[8] || defaultAccount;
-      } else {
-        email1 = columns[4] || '';
-        email2 = columns[5] || '';
-        email3 = columns[6] || '';
-        accountName = columns[7] || defaultAccount;
-      }
-    }
-
-    results.push({
-      id: 'lead_' + Math.random().toString(36).substr(2, 9),
-      email,
-      firstName,
-      city,
-      companyName,
-      campaignName: campaignName || defaultCampaign || 'General Outbound',
-      email1,
-      email2,
-      email3,
-      accountName,
-      status: email1 ? 'sent_1' : 'pending',
-      stage: '',
-      replyDate: '',
-      notes: '',
-      dealValue: 0
-    });
-  }
-
-  return results;
 }

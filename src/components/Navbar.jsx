@@ -45,7 +45,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#1E3A5F] bg-[#0A0A0A]/95 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12 h-16 flex items-center justify-between gap-3 sm:gap-4">
         
         {/* LEFT: BRAND LOGO */}
         <div className="flex items-center gap-6">
