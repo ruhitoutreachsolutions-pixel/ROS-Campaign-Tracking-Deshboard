@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { initialWorkspaces, ADMIN_CREDENTIALS } from '../data/initialWorkspaces';
-import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard } from '../utils/helpers';
+import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
 import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
 
 const WorkspaceContext = createContext(null);
@@ -285,20 +285,33 @@ export function WorkspaceProvider({ children }) {
   // MAIL MERGE BATCH & STATUS UPDATES
   // ============================================================================
 
-  // 1. Copy Batch to Clipboard for Google Sheets
-  async function copyBatchForMailMerge(leadIds, includeHeaders = false) {
+  // 1. Copy Batch to Clipboard for Google Sheets (Automatically avoids DNC & Not Interested)
+  async function copyBatchForMailMerge(leadIds, includeHeaders = false, filterDNC = true) {
     if (!currentWorkspace || !leadIds || leadIds.length === 0) {
-      return { success: false, count: 0 };
+      return { success: false, count: 0, excludedDnc: 0 };
     }
 
     const selectedLeads = currentWorkspace.leads.filter(l => leadIds.includes(l.id));
-    const tsvText = generateMailMergeTSV(selectedLeads, includeHeaders);
+    const eligibleLeads = filterDNC ? selectedLeads.filter(l => !isLeadDNC(l)) : selectedLeads;
+    const excludedDnc = selectedLeads.length - eligibleLeads.length;
+
+    if (eligibleLeads.length === 0) {
+      return { 
+        success: false, 
+        count: 0, 
+        excludedDnc, 
+        message: 'All selected leads are marked as DNC / Unsubscribed. No leads were copied.' 
+      };
+    }
+
+    const tsvText = generateMailMergeTSV(eligibleLeads, includeHeaders, false);
     const success = await copyToClipboard(tsvText);
 
     return {
       success,
-      count: selectedLeads.length,
-      sample: selectedLeads.slice(0, 3).map(l => `${l.email} - ${l.firstName} (${l.companyName})`).join(', ')
+      count: eligibleLeads.length,
+      excludedDnc,
+      sample: eligibleLeads.slice(0, 3).map(l => `${l.email} - ${l.firstName} (${l.companyName})`).join(', ')
     };
   }
 
@@ -508,6 +521,34 @@ export function WorkspaceProvider({ children }) {
     return leadIds.length;
   }
 
+  // 5c. Mark Single Lead as DNC / Unsubscribed / Not Interested
+  function markLeadAsDNC(leadId, isDnc = true, reason = 'Not Interested / DNC') {
+    if (!currentWorkspace) return false;
+    const target = currentWorkspace.leads.find(l => l.id === leadId);
+    if (!target) return false;
+
+    const newStage = isDnc ? (reason || 'DNC') : 'In Progress';
+    const newStatus = isDnc ? 'dnc' : 'pending';
+    const dncNote = isDnc ? `[Marked as ${reason} on ${getTodayFormatted()}]` : '';
+
+    return updateLead(leadId, {
+      isDNC: isDnc,
+      stage: newStage,
+      status: newStatus,
+      notes: target.notes ? (isDnc ? `${target.notes} | ${dncNote}` : target.notes) : dncNote
+    });
+  }
+
+  // 5d. Bulk Mark Leads as DNC / Unsubscribed
+  function bulkMarkAsDNC(leadIds, isDnc = true, reason = 'DNC') {
+    if (!currentWorkspace || !leadIds || leadIds.length === 0) return 0;
+    return bulkUpdateLeads(leadIds, {
+      isDNC: isDnc,
+      stage: isDnc ? (reason || 'DNC') : 'In Progress',
+      status: isDnc ? 'dnc' : 'pending'
+    });
+  }
+
   // 6. Add Leads in Bulk (from CSV / Google Sheets)
   function addLeadsBulk(newLeads, defaultCampaignName = null) {
     if (!currentWorkspace || !newLeads || newLeads.length === 0) return 0;
@@ -691,6 +732,8 @@ export function WorkspaceProvider({ children }) {
     updateLeadDealValue,
     updateLead,
     bulkUpdateLeads,
+    markLeadAsDNC,
+    bulkMarkAsDNC,
     addLeadsBulk,
     deleteLead,
     bulkDeleteLeads,

@@ -322,11 +322,14 @@ export default function BulkEditModal({ isOpen, onClose, selectedLeadIds, onComp
                     onChange={(e) => setStage(e.target.value)}
                     className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] rounded-xl text-white outline-none focus:border-[#00C2FF]"
                   >
-                    <option value="Interested">Interested / Positive Reply</option>
-                    <option value="Call Booked">Discovery Call Booked</option>
-                    <option value="Proposal Sent">Proposal Sent / Audit</option>
-                    <option value="Negotiation">In Negotiation</option>
-                    <option value="Closed Won">Closed Won Deal</option>
+                    <option value="Interested">🎯 Interested / Positive Reply</option>
+                    <option value="Call Booked">📅 Discovery Call Booked</option>
+                    <option value="Proposal Sent">📑 Proposal Sent / Audit</option>
+                    <option value="Negotiation">🤝 In Negotiation</option>
+                    <option value="Closed Won">🏆 Closed Won Deal</option>
+                    <option value="DNC / Do Not Contact">⛔ DNC (Do Not Contact - Auto-Excluded)</option>
+                    <option value="Unsubscribed / Opt-Out">🚫 Unsubscribed / Opt-Out</option>
+                    <option value="Not Interested">❌ Not Interested</option>
                     <option value="Not a Fit">Disqualified / Not a Fit</option>
                     <option value="In Progress">In Progress (Outreach Active)</option>
                   </select>

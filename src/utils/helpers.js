@@ -28,16 +28,53 @@ export function formatDateDisplay(dateStr) {
   return dateStr;
 }
 
-// Generates tab-separated values ready for Google Mail Merge Sheets instant paste
-export function generateMailMergeTSV(leads, includeHeaders = false) {
+// Check if a lead is labeled as DNC, Unsubscribed, or Not Interested
+export function isLeadDNC(lead) {
+  if (!lead) return false;
+  if (lead.isDNC === true) return true;
+
+  const stage = (lead.stage || '').toLowerCase().trim();
+  const status = (lead.status || '').toLowerCase().trim();
+
+  // Explicit DNC, Unsubscribe, and Not Interested conditions
+  if (
+    stage === 'dnc' ||
+    stage.includes('do not contact') ||
+    stage.includes('unsub') ||
+    stage.includes('not interested') ||
+    stage.includes('opt out') ||
+    stage.includes('remove') ||
+    stage.includes('disqual') ||
+    stage.includes('not a fit')
+  ) {
+    return true;
+  }
+
+  if (
+    status === 'dnc' ||
+    status === 'unsubscribed' ||
+    status === 'not_interested' ||
+    status === 'disqualified'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// Generates tab-separated values ready for Google Mail Merge Sheets instant paste (Automatically avoids DNC / Not Interested)
+export function generateMailMergeTSV(leads, includeHeaders = false, filterDNC = true) {
   if (!leads || leads.length === 0) return '';
   
+  const validLeads = filterDNC ? leads.filter(l => !isLeadDNC(l)) : leads;
+  if (validLeads.length === 0) return '';
+
   let lines = [];
   if (includeHeaders) {
     lines.push('Email Address\tFirst Name\tCity\tCompany Name');
   }
   
-  leads.forEach(lead => {
+  validLeads.forEach(lead => {
     const email = (lead.email || '').trim();
     const firstName = (lead.firstName || '').trim();
     const city = (lead.city || '').trim();
@@ -77,10 +114,12 @@ export async function copyToClipboard(text) {
   }
 }
 
-// Calculate workspace metrics dynamically (Strict Date Separation: Today vs Yesterday / Last Day)
+// Calculate workspace metrics dynamically (Strict Date Separation & DNC Intelligence)
 export function calculateWorkspaceMetrics(workspace) {
   const emptyMetrics = {
     totalLeads: 0,
+    activeLeads: 0,
+    dncCount: 0,
     sentToday: 0,
     sentYesterday: 0,
     lastDaySent: 0,
@@ -102,7 +141,8 @@ export function calculateWorkspaceMetrics(workspace) {
       proposal: 0,
       negotiation: 0,
       won: 0,
-      lost: 0
+      lost: 0,
+      dnc: 0
     },
     campaignsBreakdown: [],
     todayCampaignStats: [],
@@ -126,6 +166,7 @@ export function calculateWorkspaceMetrics(workspace) {
   let totalReplied = 0;
   let interestedCount = 0;
   let pipelineValue = 0;
+  let dncCount = 0;
 
   // Track counts per date to determine the most recent dispatch day
   const dateCounts = {}; // { '25/08/26': 1495, '18/08/26': 745 }
@@ -143,18 +184,26 @@ export function calculateWorkspaceMetrics(workspace) {
     proposal: 0,
     negotiation: 0,
     won: 0,
-    lost: 0
+    lost: 0,
+    dnc: 0
   };
 
   // Map to hold campaign-specific breakdowns
   const campaignMap = {};
 
   leads.forEach(lead => {
+    const isDnc = isLeadDNC(lead);
+    if (isDnc) {
+      dncCount++;
+      stageCounts.dnc++;
+    }
+
     const cName = (lead.campaignName && lead.campaignName.trim()) || defaultCampName;
     if (!campaignMap[cName]) {
       campaignMap[cName] = {
         name: cName,
         totalLeads: 0,
+        dncCount: 0,
         sentToday: 0,
         sentYesterday: 0,
         email1Today: 0,
@@ -174,6 +223,7 @@ export function calculateWorkspaceMetrics(workspace) {
     }
     const camp = campaignMap[cName];
     camp.totalLeads++;
+    if (isDnc) camp.dncCount++;
 
     let hasSentAny = false;
 
@@ -212,22 +262,22 @@ export function calculateWorkspaceMetrics(workspace) {
 
     // Email 1
     const hasE1 = processSequenceSend(lead.email1, 'email1');
-    if (!hasE1) sequenceStats.email1.pending++;
+    if (!hasE1 && !isDnc) sequenceStats.email1.pending++;
 
     // Email 2
     const hasE2 = processSequenceSend(lead.email2, 'email2');
-    if (!hasE2 && hasE1) sequenceStats.email2.pending++;
+    if (!hasE2 && hasE1 && !isDnc) sequenceStats.email2.pending++;
 
     // Email 3
     const hasE3 = processSequenceSend(lead.email3, 'email3');
-    if (!hasE3 && hasE2) sequenceStats.email3.pending++;
+    if (!hasE3 && hasE2 && !isDnc) sequenceStats.email3.pending++;
 
     if (hasSentAny) {
       uniqueSentIds.add(lead.id);
     }
 
-    // Replies & Interested
-    if (lead.status === 'interested' || (lead.stage && lead.stage.trim() !== '')) {
+    // Replies & Interested (Excluding DNC from positive interested pipeline)
+    if (!isDnc && (lead.status === 'interested' || (lead.stage && lead.stage.trim() !== ''))) {
       totalReplied++;
       interestedCount++;
       camp.replied++;
@@ -327,6 +377,8 @@ export function calculateWorkspaceMetrics(workspace) {
 
   return {
     totalLeads: leads.length,
+    activeLeads: leads.length - dncCount,
+    dncCount,
     sentToday,
     sentYesterday,
     lastDaySent,
@@ -386,6 +438,7 @@ export function parsePastedLeadsText(text, defaultCampaignName = null) {
         stage: '',
         dealValue: 0,
         notes: '',
+        isDNC: false,
         importedAt: new Date().toISOString()
       });
     }
@@ -411,6 +464,7 @@ export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
     'Pipeline Stage',
     'Deal Value ($)',
     'Status',
+    'DNC Status',
     'Notes'
   ];
 
@@ -427,6 +481,7 @@ export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
     `"${(l.stage || '').replace(/"/g, '""')}"`,
     `"${l.dealValue || 0}"`,
     `"${(l.status || '').replace(/"/g, '""')}"`,
+    `"${isLeadDNC(l) ? 'DNC / Unsubscribed' : 'Active'}"`,
     `"${(l.notes || '').replace(/"/g, '""')}"`
   ]);
 

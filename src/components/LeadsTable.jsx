@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { exportLeadsToCSV } from '../utils/helpers';
+import { exportLeadsToCSV, isLeadDNC } from '../utils/helpers';
 import BulkEditModal from './BulkEditModal';
 import { 
   Search, 
@@ -30,7 +30,9 @@ import {
   Cloud,
   RefreshCw,
   AlertCircle,
-  Sliders
+  Sliders,
+  Ban,
+  ShieldCheck
 } from 'lucide-react';
 
 export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
@@ -42,6 +44,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     deleteLead,
     bulkDeleteLeads,
     updateLead,
+    markLeadAsDNC,
+    bulkMarkAsDNC,
     syncAllWorkspacesToCloud
   } = useWorkspace();
 
@@ -65,7 +69,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const [selectedLeadIds, setSelectedLeadIds] = useState([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [copyToast, setCopyToast] = useState(false);
+  const [copyToast, setCopyToast] = useState(null);
   const [applyToast, setApplyToast] = useState(false);
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
   const [bulkEditToast, setBulkEditToast] = useState(null);
@@ -105,7 +109,10 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const getLeadValue = (lead, key) => {
     if (key === 'campaignName') return lead.campaignName || currentWorkspace?.campaignName || 'General Outbound';
     if (key === 'accountName') return lead.accountName || currentWorkspace?.activeSendingAccount || '';
-    if (key === 'stage') return lead.stage || (lead.status === 'interested' ? 'Interested' : 'In Progress');
+    if (key === 'stage') {
+      if (isLeadDNC(lead)) return lead.stage || 'DNC / Unsubscribed';
+      return lead.stage || (lead.status === 'interested' ? 'Interested' : 'In Progress');
+    }
     return lead[key] || '';
   };
 
@@ -136,7 +143,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                         (lead.companyName || '').toLowerCase().includes(q) ||
                         (lead.campaignName || '').toLowerCase().includes(q) ||
                         (lead.accountName || '').toLowerCase().includes(q) ||
-                        (lead.notes || '').toLowerCase().includes(q);
+                        (lead.notes || '').toLowerCase().includes(q) ||
+                        (isLeadDNC(lead) && 'dnc unsubscribed opt out not interested'.includes(q));
         if (!matches) return false;
       }
 
@@ -252,13 +260,17 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     setSelectedLeadIds(topIds);
   };
 
-  // Batch Clipboard Copy
+  // Batch Clipboard Copy (with DNC avoidance)
   const handleCopySelected = async () => {
     if (selectedLeadIds.length === 0) return;
-    const res = await copyBatchForMailMerge(selectedLeadIds, false);
+    const res = await copyBatchForMailMerge(selectedLeadIds, false, true);
     if (res.success) {
-      setCopyToast(true);
-      setTimeout(() => setCopyToast(false), 3000);
+      setCopyToast(res.excludedDnc > 0 
+        ? `Copied ${res.count} Leads (${res.excludedDnc} DNC excluded)` 
+        : `Copied ${res.count} Columns!`);
+      setTimeout(() => setCopyToast(null), 3500);
+    } else if (res.excludedDnc > 0 && res.count === 0) {
+      alert('All selected leads are marked as DNC / Unsubscribed and were excluded from copy.');
     }
   };
 
@@ -270,6 +282,17 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
       setApplyToast(true);
       setSelectedLeadIds([]);
       setTimeout(() => setApplyToast(false), 3000);
+    }
+  };
+
+  // Bulk Mark as DNC
+  const handleBulkMarkDNC = () => {
+    if (selectedLeadIds.length === 0) return;
+    if (window.confirm(`Mark ${selectedLeadIds.length} selected leads as DNC / Not Interested? They will be excluded from all follow-up copies.`)) {
+      bulkMarkAsDNC(selectedLeadIds, true, 'DNC / Not Interested');
+      setBulkEditToast(`⛔ Marked ${selectedLeadIds.length} leads as DNC / Excluded from follow-ups.`);
+      setSelectedLeadIds([]);
+      setTimeout(() => setBulkEditToast(null), 5000);
     }
   };
 
@@ -390,7 +413,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                 setGlobalSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Quick search all columns..."
+              placeholder="Search leads, city, DNC..."
               className="w-full pl-9 pr-3 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-white text-xs outline-none focus:border-[#00C2FF]"
             />
           </div>
@@ -513,7 +536,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
             </div>
           </div>
 
-          {/* Right: Bulk Edit, Copy, Auto-Apply, and Delete Actions */}
+          {/* Right: Bulk Edit, DNC Labeling, Copy, Auto-Apply, and Delete Actions */}
           <div className="flex flex-wrap items-center gap-2">
             
             {/* 🌟 BULK EDIT BUTTON (PRIMARY) */}
@@ -525,13 +548,23 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               <span>Bulk Edit ({selectedLeadIds.length})</span>
             </button>
 
+            {/* ⛔ MARK AS DNC / NOT INTERESTED */}
+            <button
+              onClick={handleBulkMarkDNC}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Mark all selected leads as DNC/Unsubscribed (excludes from follow-ups)"
+            >
+              <Ban className="w-3.5 h-3.5 text-rose-400" />
+              <span>Mark DNC</span>
+            </button>
+
             {/* COPY 4 COLUMNS BUTTON */}
             <button
               onClick={handleCopySelected}
               className="px-3 py-1.5 rounded-xl bg-[#00C2FF]/15 hover:bg-[#00C2FF]/25 text-[#00C2FF] border border-[#00C2FF]/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
             >
               {copyToast ? <Check className="w-3.5 h-3.5 text-[#00E5A0]" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copyToast ? 'Copied 4 Cols!' : 'Copy 4 Cols'}</span>
+              <span>{copyToast || 'Copy 4 Cols'}</span>
             </button>
 
             {/* AUTO APPLY EMAIL 1 */}
@@ -541,7 +574,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               title="Apply 'Email Sent - Today' to Email 1"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Mark E1 Sent</span>
+              <span>Mark E1</span>
             </button>
 
             {/* AUTO APPLY EMAIL 2 */}
@@ -551,7 +584,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               title="Apply 'Email Sent - Today' to Email 2"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>Mark E2 Sent</span>
+              <span>Mark E2</span>
             </button>
 
             {/* DELETE BUTTON */}
@@ -775,11 +808,18 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               ) : (
                 paginatedLeads.map((lead) => {
                   const isSelected = selectedLeadIds.includes(lead.id);
+                  const isDnc = isLeadDNC(lead);
 
                   return (
                     <tr 
                       key={lead.id}
-                      className={`hover:bg-[#1E3A5F]/20 transition-colors ${isSelected ? 'bg-[#00C2FF]/5' : ''}`}
+                      className={`transition-colors ${
+                        isDnc 
+                          ? 'bg-rose-950/10 hover:bg-rose-900/20 text-gray-300' 
+                          : isSelected 
+                          ? 'bg-[#00C2FF]/5 hover:bg-[#1E3A5F]/20' 
+                          : 'hover:bg-[#1E3A5F]/20'
+                      }`}
                     >
                       {isAdmin && (
                         <td className="py-2.5 px-3 text-center">
@@ -793,8 +833,13 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                       )}
 
                       {/* Email Address */}
-                      <td className="py-2.5 px-3 font-mono font-medium text-[#00C2FF] truncate max-w-[200px]">
-                        {lead.email}
+                      <td className="py-2.5 px-3 font-mono font-medium truncate max-w-[200px]">
+                        <div className="flex items-center gap-1.5">
+                          {isDnc && <Ban className="w-3 h-3 text-rose-400 flex-shrink-0" title="DNC / Excluded" />}
+                          <span className={isDnc ? 'text-rose-300 line-through' : 'text-[#00C2FF]'}>
+                            {lead.email}
+                          </span>
+                        </div>
                       </td>
 
                       {/* First Name */}
@@ -841,7 +886,12 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
                       {/* Pipeline Stage */}
                       <td className="py-2.5 px-3">
-                        {lead.stage ? (
+                        {isDnc ? (
+                          <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30 text-[10px] font-bold font-mono inline-flex items-center gap-1">
+                            <Ban className="w-2.5 h-2.5" />
+                            <span>{lead.stage || 'DNC / Unsub'}</span>
+                          </span>
+                        ) : lead.stage ? (
                           <span className="px-2 py-0.5 rounded bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/30 text-[10px] font-semibold">
                             {lead.stage}
                           </span>
