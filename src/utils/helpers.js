@@ -5,7 +5,7 @@ export function getTodayFormatted() {
   const dd = String(now.getDate()).padStart(2, '0');
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yy = String(now.getFullYear()).slice(-2);
-  return `${dd}/${mm}/${yy}`; // e.g. 26/08/26
+  return `${dd}/${mm}/${yy}`; // e.g. 27/08/26
 }
 
 export function getYesterdayFormatted() {
@@ -14,7 +14,7 @@ export function getYesterdayFormatted() {
   const dd = String(now.getDate()).padStart(2, '0');
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yy = String(now.getFullYear()).slice(-2);
-  return `${dd}/${mm}/${yy}`; // e.g. 25/08/26
+  return `${dd}/${mm}/${yy}`; // e.g. 26/08/26
 }
 
 export function extractDateFromStatus(statusStr) {
@@ -398,47 +398,175 @@ export function calculateWorkspaceMetrics(workspace) {
   };
 }
 
-// Parse pasted TSV / CSV text from Google Sheets into structured lead objects
-export function parsePastedLeadsText(text, defaultCampaignName = null) {
+// Robust CSV row parser that handles commas inside quotes and escaped quotes
+export function parseCSVRow(rowStr, delimiter = ',') {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < rowStr.length; i++) {
+    const char = rowStr[i];
+    const nextChar = rowStr[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        current += '"';
+        i++; // skip escaped quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === delimiter && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+// Intelligent Multi-Column CSV & TSV Parser (Auto-detects all column headers & automatically assigns Date Added)
+export function parsePastedLeadsText(text, defaultCampaignName = null, defaultAccount = null) {
   if (!text || typeof text !== 'string') return [];
 
-  const lines = text.trim().split(/\r?\n/);
+  const rawLines = text.trim().split(/\r?\n/);
+  if (rawLines.length === 0) return [];
+
+  // Determine separator (Tab, Comma, or Semicolon)
+  const firstLine = rawLines[0];
+  const tabCount = (firstLine.match(/\t/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semiCount = (firstLine.match(/;/g) || []).length;
+
+  let separator = '\t';
+  if (tabCount >= 2) separator = '\t';
+  else if (commaCount >= 1) separator = ',';
+  else if (semiCount >= 1) separator = ';';
+
+  const todayStr = getTodayFormatted();
   const leads = [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
+  // Check if Line 0 is a Header Row
+  const headerCols = separator === '\t' ? firstLine.split('\t').map(c => c.replace(/^["']|["']$/g, '').trim()) : parseCSVRow(firstLine, separator);
+  
+  const normalize = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isHeaderRow = headerCols.some(h => {
+    const nh = normalize(h);
+    return nh.includes('email') || nh.includes('name') || nh.includes('city') || nh.includes('company') || nh.includes('campaign');
+  });
+
+  // Build Column Index Mapping
+  const headerMap = {};
+  if (isHeaderRow) {
+    headerCols.forEach((rawH, idx) => {
+      const nh = normalize(rawH);
+      if (nh.includes('emailaddress') || nh === 'email' || nh === 'e-mail' || nh === 'mail' || nh === 'contactemail') {
+        headerMap.email = idx;
+      } else if (nh.includes('firstname') || nh === 'first' || nh === 'name' || nh === 'contact' || nh === 'leadname') {
+        headerMap.firstName = idx;
+      } else if (nh === 'city' || nh.includes('location') || nh === 'town' || nh === 'region') {
+        headerMap.city = idx;
+      } else if (nh.includes('company') || nh === 'business' || nh === 'organization' || nh === 'client') {
+        headerMap.companyName = idx;
+      } else if (nh.includes('campaign')) {
+        headerMap.campaignName = idx;
+      } else if (nh.includes('email1') || nh.includes('touch1') || nh.includes('step1') || nh.includes('initial')) {
+        headerMap.email1 = idx;
+      } else if (nh.includes('email2') || nh.includes('touch2') || nh.includes('step2') || nh.includes('followup1') || nh.includes('follow1')) {
+        headerMap.email2 = idx;
+      } else if (nh.includes('email3') || nh.includes('touch3') || nh.includes('step3') || nh.includes('followup2') || nh.includes('follow2')) {
+        headerMap.email3 = idx;
+      } else if (nh.includes('account') || nh.includes('sender') || nh.includes('sendingaccount')) {
+        headerMap.accountName = idx;
+      } else if (nh.includes('stage') || nh === 'status' || nh.includes('pipelinestage')) {
+        headerMap.stage = idx;
+      } else if (nh.includes('dealvalue') || nh === 'deal' || nh === 'value' || nh === 'amount') {
+        headerMap.dealValue = idx;
+      } else if (nh.includes('dateadded') || nh.includes('importdate') || nh.includes('createdat') || nh === 'date' || nh.includes('added')) {
+        headerMap.dateAdded = idx;
+      } else if (nh.includes('note') || nh.includes('comment') || nh.includes('context')) {
+        headerMap.notes = idx;
+      }
+    });
+  }
+
+  const startIdx = isHeaderRow ? 1 : 0;
+
+  for (let i = startIdx; i < rawLines.length; i++) {
+    const line = rawLines[i].trim();
     if (!line) continue;
 
-    // Detect TSV or CSV
-    const separator = line.includes('\t') ? '\t' : ',';
-    const cols = line.split(separator).map(c => c.replace(/^["']|["']$/g, '').trim());
+    const cols = separator === '\t' ? line.split('\t').map(c => c.replace(/^["']|["']$/g, '').trim()) : parseCSVRow(line, separator);
 
-    // Skip Header line if detected
-    if (i === 0 && (
-      cols[0].toLowerCase().includes('email') || 
-      cols[1]?.toLowerCase().includes('first') || 
-      cols[0].toLowerCase().includes('address')
-    )) {
-      continue;
+    let email = '';
+    let firstName = '';
+    let city = '';
+    let companyName = '';
+    let campaignName = defaultCampaignName || 'General Outbound';
+    let email1 = '';
+    let email2 = '';
+    let email3 = '';
+    let accountName = defaultAccount || '';
+    let stage = '';
+    let dealValue = 0;
+    let dateAdded = todayStr;
+    let notes = '';
+
+    if (isHeaderRow && Object.keys(headerMap).length > 0) {
+      if (headerMap.email !== undefined) email = cols[headerMap.email] || '';
+      if (headerMap.firstName !== undefined) firstName = cols[headerMap.firstName] || '';
+      if (headerMap.city !== undefined) city = cols[headerMap.city] || '';
+      if (headerMap.companyName !== undefined) companyName = cols[headerMap.companyName] || '';
+      if (headerMap.campaignName !== undefined && cols[headerMap.campaignName]) campaignName = cols[headerMap.campaignName];
+      if (headerMap.email1 !== undefined) email1 = cols[headerMap.email1] || '';
+      if (headerMap.email2 !== undefined) email2 = cols[headerMap.email2] || '';
+      if (headerMap.email3 !== undefined) email3 = cols[headerMap.email3] || '';
+      if (headerMap.accountName !== undefined) accountName = cols[headerMap.accountName] || '';
+      if (headerMap.stage !== undefined) stage = cols[headerMap.stage] || '';
+      if (headerMap.dealValue !== undefined) dealValue = Number(cols[headerMap.dealValue]) || 0;
+      if (headerMap.dateAdded !== undefined && cols[headerMap.dateAdded]) dateAdded = cols[headerMap.dateAdded];
+      if (headerMap.notes !== undefined) notes = cols[headerMap.notes] || '';
+    } else {
+      // Positional fallback (Standard Google Sheets format)
+      email = cols[0] || '';
+      firstName = cols[1] || '';
+      city = cols[2] || '';
+      companyName = cols[3] || '';
+      campaignName = cols[4] || defaultCampaignName || 'General Outbound';
+      email1 = cols[5] || '';
+      email2 = cols[6] || '';
+      email3 = cols[7] || '';
+      accountName = cols[8] || defaultAccount || '';
+      stage = cols[9] || '';
+      dealValue = Number(cols[10]) || 0;
+      dateAdded = cols[11] || todayStr;
+      notes = cols[12] || '';
     }
 
-    if (cols.length >= 1 && cols[0].includes('@')) {
+    // Only add valid records with an email address
+    if (email && email.includes('@')) {
+      const isDnc = stage.toLowerCase().includes('dnc') || 
+                    stage.toLowerCase().includes('unsub') || 
+                    stage.toLowerCase().includes('not interested');
+
       leads.push({
         id: 'ld_' + Math.random().toString(36).substr(2, 9),
-        email: cols[0] || '',
-        firstName: cols[1] || '',
-        city: cols[2] || '',
-        companyName: cols[3] || '',
-        campaignName: cols[4] || defaultCampaignName || 'General Outbound',
-        email1: cols[5] || '',
-        email2: cols[6] || '',
-        email3: cols[7] || '',
-        accountName: cols[8] || '',
-        status: 'pending',
-        stage: '',
-        dealValue: 0,
-        notes: '',
-        isDNC: false,
+        email: email.trim(),
+        firstName: firstName.trim(),
+        city: city.trim(),
+        companyName: companyName.trim(),
+        campaignName: campaignName.trim(),
+        email1: email1.trim(),
+        email2: email2.trim(),
+        email3: email3.trim(),
+        accountName: accountName.trim(),
+        status: isDnc ? 'dnc' : (stage && !stage.toLowerCase().includes('lost') ? 'interested' : 'pending'),
+        stage: stage.trim(),
+        dealValue: Number(dealValue) || 0,
+        dateAdded: dateAdded.trim() || todayStr,
+        notes: notes.trim(),
+        isDNC: isDnc,
         importedAt: new Date().toISOString()
       });
     }
@@ -447,7 +575,7 @@ export function parsePastedLeadsText(text, defaultCampaignName = null) {
   return leads;
 }
 
-// Export array of leads to CSV download
+// Export array of leads to CSV download (Includes Date Added)
 export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
   if (!leads || leads.length === 0) return;
 
@@ -463,6 +591,7 @@ export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
     'Account Name',
     'Pipeline Stage',
     'Deal Value ($)',
+    'Date Added',
     'Status',
     'DNC Status',
     'Notes'
@@ -480,6 +609,7 @@ export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
     `"${(l.accountName || '').replace(/"/g, '""')}"`,
     `"${(l.stage || '').replace(/"/g, '""')}"`,
     `"${l.dealValue || 0}"`,
+    `"${(l.dateAdded || getTodayFormatted()).replace(/"/g, '""')}"`,
     `"${(l.status || '').replace(/"/g, '""')}"`,
     `"${isLeadDNC(l) ? 'DNC / Unsubscribed' : 'Active'}"`,
     `"${(l.notes || '').replace(/"/g, '""')}"`

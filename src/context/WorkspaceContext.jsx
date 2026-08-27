@@ -487,6 +487,10 @@ export function WorkspaceProvider({ children }) {
         next.status = updates.status;
       }
 
+      if (updates.dateAdded !== undefined && updates.dateAdded !== '') {
+        next.dateAdded = updates.dateAdded.trim();
+      }
+
       if (updates.notes !== undefined && updates.notes !== '') {
         if (updates.notesMode === 'append') {
           next.notes = next.notes ? `${next.notes} | ${updates.notes.trim()}` : updates.notes.trim();
@@ -553,10 +557,13 @@ export function WorkspaceProvider({ children }) {
   function addLeadsBulk(newLeads, defaultCampaignName = null) {
     if (!currentWorkspace || !newLeads || newLeads.length === 0) return 0;
 
+    const todayStr = getTodayFormatted();
     const campName = defaultCampaignName || currentWorkspace.campaignName || 'General Outbound';
     const leadsWithCampaign = newLeads.map(l => ({
       ...l,
-      campaignName: l.campaignName || campName
+      campaignName: l.campaignName || campName,
+      dateAdded: l.dateAdded || todayStr,
+      importedAt: l.importedAt || new Date().toISOString()
     }));
 
     setWorkspaces(prev => prev.map(w => {
@@ -571,7 +578,7 @@ export function WorkspaceProvider({ children }) {
               type: 'import',
               count: newLeads.length,
               campaignName: campName,
-              description: `Imported ${newLeads.length} leads into campaign "${campName}"`
+              description: `Imported ${newLeads.length} leads into campaign "${campName}" on ${todayStr}`
             },
             ...(w.activityLog || [])
           ]

@@ -102,7 +102,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     { key: 'email2', label: 'Email 2', type: 'status' },
     { key: 'email3', label: 'Email 3', type: 'status' },
     { key: 'accountName', label: 'Account Name', type: 'text' },
-    { key: 'stage', label: 'Pipeline Stage', type: 'stage' }
+    { key: 'stage', label: 'Pipeline Stage', type: 'stage' },
+    { key: 'dateAdded', label: 'Date Added', type: 'date', color: '#F97316' }
   ];
 
   // Helper to extract clean value for lead column
@@ -112,6 +113,21 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     if (key === 'stage') {
       if (isLeadDNC(lead)) return lead.stage || 'DNC / Unsubscribed';
       return lead.stage || (lead.status === 'interested' ? 'Interested' : 'In Progress');
+    }
+    if (key === 'dateAdded') {
+      if (lead.dateAdded) return lead.dateAdded;
+      if (lead.importedAt) {
+        try {
+          const d = new Date(lead.importedAt);
+          if (!isNaN(d.getTime())) {
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const yy = String(d.getFullYear()).slice(-2);
+            return `${dd}/${mm}/${yy}`;
+          }
+        } catch (e) {}
+      }
+      return '25/08/26';
     }
     return lead[key] || '';
   };
@@ -789,7 +805,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
             <tbody className="divide-y divide-[#1E3A5F]/50 font-sans text-xs">
               {paginatedLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 12 : 11} className="py-16 text-center text-[#7B7B7B]">
+                  <td colSpan={isAdmin ? 13 : 12} className="py-16 text-center text-[#7B7B7B]">
                     <div className="flex flex-col items-center gap-2">
                       <Filter className="w-8 h-8 text-[#7B7B7B]/40" />
                       <span className="text-sm font-semibold text-gray-300">No leads match the active filters</span>
@@ -898,6 +914,11 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                         ) : (
                           <span className="text-[#7B7B7B] text-[10px]">{lead.status || 'In Progress'}</span>
                         )}
+                      </td>
+
+                      {/* Date Added */}
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-[#F97316] font-bold whitespace-nowrap">
+                        {getLeadValue(lead, 'dateAdded')}
                       </td>
 
                       {/* Actions */}

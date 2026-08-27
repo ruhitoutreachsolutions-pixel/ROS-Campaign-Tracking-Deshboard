@@ -54,6 +54,7 @@ export default function BulkEditModal({ isOpen, onClose, selectedLeadIds, onComp
     dealValue: false,
     accountName: false,
     city: false,
+    dateAdded: false,
     email1: false,
     email2: false,
     email3: false,
@@ -66,6 +67,7 @@ export default function BulkEditModal({ isOpen, onClose, selectedLeadIds, onComp
   const [dealValue, setDealValue] = useState('');
   const [accountName, setAccountName] = useState(currentWorkspace?.activeSendingAccount || '');
   const [city, setCity] = useState('');
+  const [dateAdded, setDateAdded] = useState(todayStr);
   const [email1Option, setEmail1Option] = useState(`Email Sent - ${todayStr}`);
   const [email2Option, setEmail2Option] = useState(`Email Sent - ${todayStr}`);
   const [email3Option, setEmail3Option] = useState(`Email Sent - ${todayStr}`);
@@ -111,6 +113,10 @@ export default function BulkEditModal({ isOpen, onClose, selectedLeadIds, onComp
 
     if (fieldsToUpdate.city) {
       updates.city = city;
+    }
+
+    if (fieldsToUpdate.dateAdded) {
+      updates.dateAdded = dateAdded;
     }
 
     if (fieldsToUpdate.email1) {
@@ -365,6 +371,33 @@ export default function BulkEditModal({ isOpen, onClose, selectedLeadIds, onComp
                       className="w-full pl-8 pr-3 py-2 bg-[#111827] border border-[#1E3A5F] rounded-xl text-white outline-none focus:border-[#00C2FF]"
                     />
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* Date Added */}
+            <div className="space-y-1.5 pt-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={fieldsToUpdate.dateAdded}
+                  onChange={() => toggleField('dateAdded')}
+                  className="rounded border-[#1E3A5F] bg-[#111827] accent-[#00C2FF] w-4 h-4 cursor-pointer"
+                />
+                <span className={`font-semibold ${fieldsToUpdate.dateAdded ? 'text-white' : 'text-gray-400'}`}>
+                  Update Date Added Tag
+                </span>
+              </label>
+
+              {fieldsToUpdate.dateAdded && (
+                <div className="pl-6 pt-1">
+                  <input
+                    type="text"
+                    value={dateAdded}
+                    onChange={(e) => setDateAdded(e.target.value)}
+                    placeholder="DD/MM/YY (e.g. 27/08/26)"
+                    className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] rounded-xl text-[#F97316] font-mono font-bold outline-none focus:border-[#F97316]"
+                  />
                 </div>
               )}
             </div>

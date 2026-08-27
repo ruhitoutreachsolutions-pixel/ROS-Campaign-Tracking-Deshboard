@@ -34,6 +34,7 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
   const [stage, setStage] = useState('');
   const [dealValue, setDealValue] = useState('');
   const [replyDate, setReplyDate] = useState('');
+  const [dateAdded, setDateAdded] = useState('');
   const [notes, setNotes] = useState('');
   const [isDncState, setIsDncState] = useState(false);
 
@@ -51,6 +52,7 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
       setStage(lead.stage || '');
       setDealValue(lead.dealValue !== undefined && lead.dealValue !== null ? String(lead.dealValue) : '0');
       setReplyDate(lead.replyDate || '');
+      setDateAdded(lead.dateAdded || (lead.importedAt ? new Date(lead.importedAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '25/08/26'));
       setNotes(lead.notes || '');
       setIsDncState(isLeadDNC(lead));
     }
@@ -90,6 +92,7 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
       isDNC: isNowDnc,
       dealValue: Number(dealValue) || 0,
       replyDate,
+      dateAdded: dateAdded.trim() || getTodayFormatted(),
       notes
     });
     onClose();
@@ -320,6 +323,19 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
                   className="w-full pl-7 pr-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] focus:border-[#00E5A0] rounded-xl text-white text-xs font-mono font-bold outline-none"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#F97316] uppercase tracking-wider mb-1">
+                Date Added
+              </label>
+              <input
+                type="text"
+                value={dateAdded}
+                onChange={(e) => setDateAdded(e.target.value)}
+                placeholder="DD/MM/YY (e.g. 27/08/26)"
+                className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-[#F97316] text-xs font-mono font-bold outline-none focus:border-[#F97316]"
+              />
             </div>
 
             <div>
