@@ -431,7 +431,20 @@ export function calculateWorkspaceMetrics(workspace) {
     });
   }
 
-  const replyRate = totalSent > 0 ? ((totalReplied / totalSent) * 100).toFixed(1) : '0.0';
+  // Calculate Reply Rate
+  // In outreach analytics: conversion rate is based on unique contacts reached (uniqueSent), or totalSent, or total leads
+  const denominator = uniqueSentIds.size > 0 ? uniqueSentIds.size : totalSent > 0 ? totalSent : leads.length;
+  const rawReplyRate = denominator > 0 ? (totalReplied / denominator) * 100 : 0;
+  
+  // Format reply rate with smart precision:
+  // If 0 -> '0.0'
+  // If > 0 but < 1 -> toFixed(2) (e.g. 0.13%, 0.07%, 0.45%)
+  // If >= 1 -> toFixed(1) (e.g. 1.5%, 4.0%, 12.5%)
+  const replyRate = rawReplyRate === 0 
+    ? '0.0' 
+    : rawReplyRate < 1 
+    ? rawReplyRate.toFixed(2) 
+    : rawReplyRate.toFixed(1);
 
   return {
     totalLeads: leads.length,
