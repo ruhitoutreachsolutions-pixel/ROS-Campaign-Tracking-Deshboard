@@ -5,7 +5,7 @@ export function getTodayFormatted() {
   const dd = String(now.getDate()).padStart(2, '0');
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yy = String(now.getFullYear()).slice(-2);
-  return `${dd}/${mm}/${yy}`; // e.g. 27/08/26
+  return `${dd}/${mm}/${yy}`; // e.g. 31/08/26
 }
 
 export function getYesterdayFormatted() {
@@ -14,7 +14,7 @@ export function getYesterdayFormatted() {
   const dd = String(now.getDate()).padStart(2, '0');
   const mm = String(now.getMonth() + 1).padStart(2, '0');
   const yy = String(now.getFullYear()).slice(-2);
-  return `${dd}/${mm}/${yy}`; // e.g. 26/08/26
+  return `${dd}/${mm}/${yy}`; // e.g. 30/08/26
 }
 
 export function extractDateFromStatus(statusStr) {
@@ -58,6 +58,64 @@ export function isLeadDNC(lead) {
   ) {
     return true;
   }
+
+  return false;
+}
+
+// Normalizes any stage string or lead object to the standard pipeline column ID
+export function normalizeLeadStage(leadOrStage) {
+  let stage = '';
+  let status = '';
+  if (typeof leadOrStage === 'string') {
+    stage = leadOrStage;
+  } else if (leadOrStage && typeof leadOrStage === 'object') {
+    stage = leadOrStage.stage || '';
+    status = leadOrStage.status || '';
+  }
+
+  const s = (stage || '').toLowerCase().trim();
+
+  if (s.includes('book') || s.includes('call') || s.includes('discovery')) {
+    return 'Discovery Call Booked';
+  }
+  if (s.includes('proposal') || s.includes('audit')) {
+    return 'Proposal / Audit Sent';
+  }
+  if (s.includes('negotiat')) {
+    return 'Negotiation';
+  }
+  if (s.includes('won') || s.includes('closed won') || s.includes('deal won') || s.includes('close')) {
+    return 'Closed Won';
+  }
+  if (s.includes('lost') || s.includes('not a fit') || s.includes('disqual') || s.includes('not fit')) {
+    return 'Not a Fit';
+  }
+  
+  // Default for any interested / positive reply / positive status
+  return 'Interested / Positive Reply';
+}
+
+// Check if a lead belongs to the Interested Pipeline
+export function isLeadInterested(lead) {
+  if (!lead) return false;
+  if (isLeadDNC(lead)) return false;
+
+  const stage = (lead.stage || '').toLowerCase().trim();
+  const status = (lead.status || '').toLowerCase().trim();
+
+  if (status === 'interested') return true;
+  if (
+    stage !== '' && 
+    !stage.includes('progress') && 
+    !stage.includes('pending') && 
+    !stage.includes('dnc') && 
+    !stage.includes('unsub') &&
+    !stage.includes('not interested')
+  ) {
+    return true;
+  }
+  if (lead.dealValue && Number(lead.dealValue) > 0) return true;
+  if (lead.replyDate && lead.replyDate.trim() !== '') return true;
 
   return false;
 }
@@ -277,7 +335,7 @@ export function calculateWorkspaceMetrics(workspace) {
     }
 
     // Replies & Interested (Excluding DNC from positive interested pipeline)
-    if (!isDnc && (lead.status === 'interested' || (lead.stage && lead.stage.trim() !== ''))) {
+    if (isLeadInterested(lead)) {
       totalReplied++;
       interestedCount++;
       camp.replied++;
@@ -288,12 +346,12 @@ export function calculateWorkspaceMetrics(workspace) {
         camp.pipelineValue += val;
       }
 
-      const stg = (lead.stage || '').toLowerCase();
-      if (stg.includes('booked') || stg.includes('call')) stageCounts.booked++;
-      else if (stg.includes('proposal') || stg.includes('audit')) stageCounts.proposal++;
-      else if (stg.includes('negotiat')) stageCounts.negotiation++;
-      else if (stg.includes('won') || stg.includes('closed')) stageCounts.won++;
-      else if (stg.includes('lost') || stg.includes('not a') || stg.includes('disqual')) stageCounts.lost++;
+      const stgNorm = normalizeLeadStage(lead);
+      if (stgNorm === 'Discovery Call Booked') stageCounts.booked++;
+      else if (stgNorm === 'Proposal / Audit Sent') stageCounts.proposal++;
+      else if (stgNorm === 'Negotiation') stageCounts.negotiation++;
+      else if (stgNorm === 'Closed Won') stageCounts.won++;
+      else if (stgNorm === 'Not a Fit') stageCounts.lost++;
       else stageCounts.interested++;
     }
   });
@@ -550,6 +608,8 @@ export function parsePastedLeadsText(text, defaultCampaignName = null, defaultAc
                     stage.toLowerCase().includes('unsub') || 
                     stage.toLowerCase().includes('not interested');
 
+      const isInterested = !isDnc && (stage !== '' || dealValue > 0);
+
       leads.push({
         id: 'ld_' + Math.random().toString(36).substr(2, 9),
         email: email.trim(),
@@ -561,7 +621,7 @@ export function parsePastedLeadsText(text, defaultCampaignName = null, defaultAc
         email2: email2.trim(),
         email3: email3.trim(),
         accountName: accountName.trim(),
-        status: isDnc ? 'dnc' : (stage && !stage.toLowerCase().includes('lost') ? 'interested' : 'pending'),
+        status: isDnc ? 'dnc' : (isInterested ? 'interested' : 'pending'),
         stage: stage.trim(),
         dealValue: Number(dealValue) || 0,
         dateAdded: dateAdded.trim() || todayStr,

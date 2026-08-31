@@ -422,11 +422,21 @@ export function WorkspaceProvider({ children }) {
   // 5. Generic Lead Update
   function updateLead(leadId, updates) {
     if (!currentWorkspace) return false;
+    const today = getTodayFormatted();
     setWorkspaces(prev => prev.map(w => {
       if (w.id === currentWorkspaceId) {
         return {
           ...w,
-          leads: w.leads.map(l => l.id === leadId ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l)
+          leads: w.leads.map(l => {
+            if (l.id !== leadId) return l;
+            const next = { ...l, ...updates, updatedAt: new Date().toISOString() };
+            const isInterested = next.status === 'interested' || (next.stage && !next.stage.toLowerCase().includes('lost') && !next.stage.toLowerCase().includes('not a') && !next.stage.toLowerCase().includes('dnc'));
+            if (isInterested) {
+              next.status = 'interested';
+              if (!next.replyDate) next.replyDate = today;
+            }
+            return next;
+          })
         };
       }
       return w;

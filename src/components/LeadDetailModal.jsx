@@ -77,6 +77,14 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
                      stage.toLowerCase().includes('unsub') || 
                      stage.toLowerCase().includes('not interested');
 
+    const isPositiveStage = stage && 
+                            !stage.toLowerCase().includes('lost') && 
+                            !stage.toLowerCase().includes('not a') && 
+                            !isNowDnc;
+
+    const finalStatus = isNowDnc ? 'dnc' : (isPositiveStage ? 'interested' : (lead.status || 'pending'));
+    const finalReplyDate = replyDate.trim() || (isPositiveStage ? (lead.replyDate || getTodayFormatted()) : lead.replyDate || '');
+
     updateLead(lead.id, {
       firstName,
       companyName,
@@ -88,10 +96,10 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
       email3,
       accountName,
       stage,
-      status: isNowDnc ? 'dnc' : (stage && !stage.toLowerCase().includes('lost') ? 'interested' : lead.status),
+      status: finalStatus,
       isDNC: isNowDnc,
       dealValue: Number(dealValue) || 0,
-      replyDate,
+      replyDate: finalReplyDate,
       dateAdded: dateAdded.trim() || getTodayFormatted(),
       notes
     });

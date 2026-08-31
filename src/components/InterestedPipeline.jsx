@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
+import { normalizeLeadStage, isLeadInterested, isLeadDNC } from '../utils/helpers';
 import { 
   Target, 
   Calendar, 
@@ -33,28 +34,6 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
 
   const isAdmin = currentUser?.role === 'admin';
   const leads = currentWorkspace?.leads || [];
-
-  // Filter for leads that are interested or have a stage
-  const interestedLeads = leads.filter(l => {
-    const isInterested = l.status === 'interested' || (l.stage && l.stage.trim() !== '');
-    if (!isInterested) return false;
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const match = (l.firstName || '').toLowerCase().includes(q) ||
-                    (l.companyName || '').toLowerCase().includes(q) ||
-                    (l.email || '').toLowerCase().includes(q) ||
-                    (l.city || '').toLowerCase().includes(q) ||
-                    (l.notes || '').toLowerCase().includes(q);
-      if (!match) return false;
-    }
-
-    if (selectedStageFilter !== 'all' && l.stage !== selectedStageFilter) {
-      return false;
-    }
-
-    return true;
-  });
 
   const stageColumns = [
     {
@@ -107,9 +86,31 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
     }
   ];
 
+  // Filter for leads that are interested or have a pipeline stage
+  const interestedLeads = leads.filter(l => {
+    if (!isLeadInterested(l)) return false;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const match = (l.firstName || '').toLowerCase().includes(q) ||
+                    (l.companyName || '').toLowerCase().includes(q) ||
+                    (l.email || '').toLowerCase().includes(q) ||
+                    (l.city || '').toLowerCase().includes(q) ||
+                    (l.notes || '').toLowerCase().includes(q);
+      if (!match) return false;
+    }
+
+    if (selectedStageFilter !== 'all' && normalizeLeadStage(l) !== selectedStageFilter) {
+      return false;
+    }
+
+    return true;
+  });
+
   // Helper to move lead to adjacent stage
   const handleMoveStage = (lead, direction) => {
-    const currentIndex = stageColumns.findIndex(col => col.id === (lead.stage || 'Interested / Positive Reply'));
+    const currentNormStage = normalizeLeadStage(lead);
+    const currentIndex = stageColumns.findIndex(col => col.id === currentNormStage);
     if (currentIndex === -1) return;
     const newIndex = currentIndex + direction;
     if (newIndex >= 0 && newIndex < stageColumns.length) {
@@ -130,14 +131,14 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
 
   // Calculate totals
   const totalPipelineValue = interestedLeads.reduce((acc, l) => acc + (Number(l.dealValue) || 0), 0);
-  const totalCallsBooked = interestedLeads.filter(l => (l.stage || '').includes('Booked')).length;
-  const totalClosedWon = interestedLeads.filter(l => (l.stage || '').includes('Won')).length;
+  const totalCallsBooked = interestedLeads.filter(l => normalizeLeadStage(l) === 'Discovery Call Booked').length;
+  const totalClosedWon = interestedLeads.filter(l => normalizeLeadStage(l) === 'Closed Won').length;
 
   return (
     <div className="space-y-6">
       
       {/* Header & Pipeline Summary Banner */}
-      <div className="p-5 rounded-2xl bg-[#111827] border border-[#1E3A5F] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="p-5 rounded-2xl bg-[#111827] border border-[#1E3A5F] flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-[#00C2FF] uppercase tracking-wider">
@@ -206,7 +207,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
           <div className="flex items-center bg-[#0A0A0A] p-0.5 rounded-xl border border-[#1E3A5F]">
             <button
               onClick={() => setViewMode('kanban')}
-              className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+              className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 viewMode === 'kanban' ? 'bg-[#00C2FF] text-[#0A0A0A]' : 'text-[#7B7B7B] hover:text-white'
               }`}
               title="Kanban Board View"
@@ -216,7 +217,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
             </button>
             <button
               onClick={() => setViewMode('list')}
-              className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
+              className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
                 viewMode === 'list' ? 'bg-[#00C2FF] text-[#0A0A0A]' : 'text-[#7B7B7B] hover:text-white'
               }`}
               title="Table List View"
@@ -233,8 +234,8 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
       {/* VIEW 1: KANBAN BOARD */}
       {viewMode === 'kanban' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 items-start">
-          {stageColumns.map((col, colIdx) => {
-            const colLeads = interestedLeads.filter(l => (l.stage || 'Interested / Positive Reply') === col.id);
+          {stageColumns.map((col) => {
+            const colLeads = interestedLeads.filter(l => normalizeLeadStage(l) === col.id);
             const colValue = colLeads.reduce((acc, l) => acc + (Number(l.dealValue) || 0), 0);
             const IconComponent = col.icon;
 
@@ -278,7 +279,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                           {/* Lead Name & Editable Deal Value */}
                           <div className="flex items-start justify-between gap-1.5 mb-1.5">
                             <div className="font-bold text-white text-xs group-hover:text-[#00C2FF] transition-colors truncate">
-                              {lead.firstName || 'Lead'}
+                              {lead.firstName || lead.email.split('@')[0]}
                             </div>
 
                             {/* Deal Value Badge / Inline Edit */}
@@ -299,7 +300,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                                 <button
                                   type="button"
                                   onClick={() => handleSaveValue(lead.id)}
-                                  className="p-1 rounded bg-[#00E5A0] text-[#0A0A0A]"
+                                  className="p-1 rounded bg-[#00E5A0] text-[#0A0A0A] cursor-pointer"
                                 >
                                   <Check className="w-3 h-3 font-bold" />
                                 </button>
@@ -309,7 +310,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                                 type="button"
                                 onClick={() => handleStartEditingValue(lead)}
                                 title={isAdmin ? "Click to edit deal value" : ""}
-                                className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border transition-all ${
+                                className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border transition-all cursor-pointer ${
                                   lead.dealValue > 0
                                     ? 'bg-[#00E5A0]/10 text-[#00E5A0] border-[#00E5A0]/30 hover:border-[#00E5A0]'
                                     : 'bg-[#1E3A5F]/50 text-[#7B7B7B] border-[#1E3A5F] hover:text-[#00C2FF] hover:border-[#00C2FF]'
@@ -323,7 +324,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                           {/* Company Name */}
                           <div className="text-xs text-gray-300 font-medium flex items-center gap-1 mb-1 truncate">
                             <Building2 className="w-3 h-3 text-[#7B7B7B] flex-shrink-0" />
-                            <span className="truncate">{lead.companyName}</span>
+                            <span className="truncate">{lead.companyName || '—'}</span>
                           </div>
 
                           {/* Email & City */}
@@ -348,29 +349,31 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
 
                         {/* Stage Controls */}
                         {isAdmin && (
-                          <div className="pt-2 border-t border-[#1E3A5F]/70 flex items-center justify-between text-xs">
+                          <div className="pt-2 border-t border-[#1E3A5F]/40 flex items-center justify-between gap-1 text-[10px]">
                             <button
-                              disabled={colIdx === 0}
+                              type="button"
                               onClick={() => handleMoveStage(lead, -1)}
-                              className="p-1 rounded bg-[#111827] hover:bg-[#1E3A5F] text-[#7B7B7B] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              title="Move to Previous Stage"
+                              disabled={stageColumns.findIndex(c => c.id === col.id) === 0}
+                              className="p-1 rounded bg-[#111827] text-gray-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                              title="Move to previous stage"
                             >
                               <ArrowLeft className="w-3 h-3" />
                             </button>
 
                             <button
+                              type="button"
                               onClick={() => onOpenLeadDetail && onOpenLeadDetail(lead)}
-                              className="text-[10px] text-[#00C2FF] hover:underline font-medium flex items-center gap-1"
+                              className="text-[10px] font-semibold text-[#00C2FF] hover:underline cursor-pointer"
                             >
-                              <Edit3 className="w-3 h-3" />
-                              Edit
+                              Details
                             </button>
 
                             <button
-                              disabled={colIdx === stageColumns.length - 1}
+                              type="button"
                               onClick={() => handleMoveStage(lead, 1)}
-                              className="p-1 rounded bg-[#111827] hover:bg-[#1E3A5F] text-[#7B7B7B] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                              title="Move to Next Stage"
+                              disabled={stageColumns.findIndex(c => c.id === col.id) === stageColumns.length - 1}
+                              className="p-1 rounded bg-[#111827] text-gray-400 hover:text-white disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                              title="Move to next stage"
                             >
                               <ArrowRight className="w-3 h-3" />
                             </button>
@@ -385,27 +388,27 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
           })}
         </div>
       ) : (
-        /* VIEW 2: PIPELINE TABLE VIEW */
+        /* VIEW 2: LIST / SPREADSHEET VIEW */
         <div className="rounded-2xl bg-[#111827] border border-[#1E3A5F] overflow-hidden shadow-xl">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
-              <thead className="bg-[#0A0A0A] text-[#7B7B7B] uppercase font-semibold border-b border-[#1E3A5F]">
+              <thead className="bg-[#0A0A0A] text-[#7B7B7B] uppercase font-mono border-b border-[#1E3A5F]">
                 <tr>
-                  <th className="py-3 px-4 text-white">Lead Name</th>
-                  <th className="py-3 px-4 text-white">Company</th>
+                  <th className="py-3 px-4">Contact</th>
+                  <th className="py-3 px-4">Company</th>
                   <th className="py-3 px-4">Email</th>
-                  <th className="py-3 px-4 text-white">Stage</th>
+                  <th className="py-3 px-4">Pipeline Stage</th>
                   <th className="py-3 px-4 text-right">Deal Value ($)</th>
                   <th className="py-3 px-4">Replied Date</th>
-                  <th className="py-3 px-4">Latest Notes</th>
+                  <th className="py-3 px-4">Notes</th>
                   {isAdmin && <th className="py-3 px-4 text-center">Actions</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1E3A5F]/50 font-sans">
+              <tbody className="divide-y divide-[#1E3A5F]/40">
                 {interestedLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 8 : 7} className="py-8 text-center text-[#7B7B7B]">
-                      No interested leads found matching query.
+                    <td colSpan={isAdmin ? 8 : 7} className="py-12 text-center text-[#7B7B7B]">
+                      No interested leads match the filter.
                     </td>
                   </tr>
                 ) : (
@@ -414,7 +417,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                       <td className="py-3 px-4 font-bold text-white">
                         {lead.firstName || '—'}
                       </td>
-                      <td className="py-3 px-4 font-medium text-gray-200">
+                      <td className="py-3 px-4 text-gray-200">
                         {lead.companyName || '—'}
                       </td>
                       <td className="py-3 px-4 font-mono text-[#00C2FF]">
@@ -423,17 +426,17 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                       <td className="py-3 px-4">
                         {isAdmin ? (
                           <select
-                            value={lead.stage || 'Interested / Positive Reply'}
+                            value={normalizeLeadStage(lead)}
                             onChange={(e) => updateLeadStage(lead.id, e.target.value, lead.notes, lead.dealValue)}
                             className="bg-[#0A0A0A] border border-[#1E3A5F] text-xs text-white rounded-lg px-2 py-1 outline-none focus:border-[#00C2FF]"
                           >
                             {stageColumns.map(col => (
-                              <option key={col.id} value={col.id}>{col.id}</option>
+                              <option key={col.id} value={col.id}>{col.label}</option>
                             ))}
                           </select>
                         ) : (
                           <span className="px-2.5 py-1 rounded-full bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/30 font-semibold text-[11px]">
-                            {lead.stage || 'Interested / Positive Reply'}
+                            {normalizeLeadStage(lead)}
                           </span>
                         )}
                       </td>
@@ -454,7 +457,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                             />
                             <button
                               onClick={() => handleSaveValue(lead.id)}
-                              className="p-1 rounded bg-[#00E5A0] text-[#0A0A0A]"
+                              className="p-1 rounded bg-[#00E5A0] text-[#0A0A0A] cursor-pointer"
                             >
                               <Check className="w-3.5 h-3.5 font-bold" />
                             </button>
@@ -464,7 +467,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                             type="button"
                             onClick={() => handleStartEditingValue(lead)}
                             title={isAdmin ? "Click to edit value" : ""}
-                            className="hover:underline"
+                            className="hover:underline cursor-pointer"
                           >
                             {lead.dealValue ? `$${Number(lead.dealValue).toLocaleString()}` : (isAdmin ? '$0 (Edit)' : '$0')}
                           </button>
@@ -480,7 +483,7 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
                         <td className="py-3 px-4 text-center">
                           <button
                             onClick={() => onOpenLeadDetail && onOpenLeadDetail(lead)}
-                            className="px-2.5 py-1 rounded bg-[#0A0A0A] hover:bg-[#1E3A5F] border border-[#1E3A5F] text-[#00C2FF] text-[11px] font-semibold transition-all"
+                            className="px-2.5 py-1 rounded bg-[#0A0A0A] hover:bg-[#1E3A5F] border border-[#1E3A5F] text-[#00C2FF] text-[11px] font-semibold transition-all cursor-pointer"
                           >
                             Details
                           </button>
