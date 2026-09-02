@@ -330,7 +330,7 @@ export function WorkspaceProvider({ children }) {
           ...lead,
           [sequenceKey]: formattedStatus,
           campaignName: assignedCampaign || lead.campaignName || currentWorkspace.campaignName || 'General Outbound',
-          accountName: lead.accountName || account,
+          accountName: (sendingAccount && sendingAccount.trim()) ? sendingAccount.trim() : (lead.accountName || account),
           status: lead.status === 'interested' ? 'interested' : `sent_${sequenceKey.replace('email', '')}`,
           updatedAt: new Date().toISOString()
         };
@@ -532,6 +532,23 @@ export function WorkspaceProvider({ children }) {
       return w;
     }));
 
+    return leadIds.length;
+  }
+
+  // 5b2. Reassign Lead Sender Accounts
+  function reassignLeadSenderAccounts(leadIds, newAccount) {
+    if (!currentWorkspace || !leadIds || leadIds.length === 0 || !newAccount) return 0;
+    const clean = newAccount.trim();
+    const idSet = new Set(leadIds);
+    setWorkspaces(prev => prev.map(w => {
+      if (w.id === currentWorkspaceId) {
+        return {
+          ...w,
+          leads: w.leads.map(l => idSet.has(l.id) ? { ...l, accountName: clean, updatedAt: new Date().toISOString() } : l)
+        };
+      }
+      return w;
+    }));
     return leadIds.length;
   }
 
@@ -749,6 +766,7 @@ export function WorkspaceProvider({ children }) {
     updateLeadDealValue,
     updateLead,
     bulkUpdateLeads,
+    reassignLeadSenderAccounts,
     markLeadAsDNC,
     bulkMarkAsDNC,
     addLeadsBulk,

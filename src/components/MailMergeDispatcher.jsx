@@ -22,14 +22,38 @@ import {
   Ban,
   AtSign,
   UserCheck,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle,
+  Zap
 } from 'lucide-react';
+
+// Helper to reliably get a lead's sender account
+function getLeadSenderAccount(lead, workspace) {
+  if (!lead) return '';
+  const raw = lead.accountName || lead.sendingAccount || '';
+  if (raw && typeof raw === 'string' && raw.trim() !== '') {
+    return raw.replace(/^["']|["']$/g, '').trim();
+  }
+  return (workspace?.activeSendingAccount || workspace?.sendingAccounts?.[0] || 'Default Account').trim();
+}
+
+// Helper to get previous touch date based on active sequence
+function getLeadPrevDate(lead, sequence) {
+  if (!lead) return '—';
+  if (sequence === 'email2') {
+    return extractDateFromStatus(lead.email1) || (lead.email1 ? lead.email1.trim() : 'Unknown Date');
+  } else if (sequence === 'email3') {
+    return extractDateFromStatus(lead.email2) || (lead.email2 ? lead.email2.trim() : 'Unknown Date');
+  }
+  return lead.dateAdded || 'Standard Import';
+}
 
 export default function MailMergeDispatcher() {
   const { 
     currentWorkspace, 
     copyBatchForMailMerge, 
-    applyBatchSentStatus 
+    applyBatchSentStatus,
+    reassignLeadSenderAccounts
   } = useWorkspace();
 
   const [activeSequence, setActiveSequence] = useState('email1'); // 'email1', 'email2', 'email3'
@@ -49,13 +73,14 @@ export default function MailMergeDispatcher() {
   const [applySuccess, setApplySuccess] = useState(false);
   const [appliedCount, setAppliedCount] = useState(0);
   const [manualSelection, setManualSelection] = useState([]);
+  const [reassignSuccessMsg, setReassignSuccessMsg] = useState(null);
 
   const leads = currentWorkspace?.leads || [];
 
   // Extract unique campaign names
   const existingCampaigns = useMemo(() => {
     const set = new Set();
-    if (currentWorkspace?.campaignName) set.add(currentWorkspace.campaignName);
+    if (currentWorkspace?.campaignName) set.add(currentWorkspace.campaignName.trim());
     leads.forEach(l => {
       if (l.campaignName && l.campaignName.trim()) set.add(l.campaignName.trim());
     });
@@ -67,69 +92,18 @@ export default function MailMergeDispatcher() {
     return leads.filter(l => isLeadDNC(l)).length;
   }, [leads]);
 
-  // Extract available Associated Sending Accounts for the active sequence stage
-  const availableSenderAccounts = useMemo(() => {
-    const counts = {};
-    leads.forEach(l => {
-      if (isLeadDNC(l)) return;
-
-      // Check sequence eligibility
-      let matches = false;
-      if (activeSequence === 'email1') {
-        matches = !l.email1 || l.email1.trim() === '';
-      } else if (activeSequence === 'email2') {
-        matches = l.email1 && l.email1.trim() !== '' && (!l.email2 || l.email2.trim() === '');
-      } else if (activeSequence === 'email3') {
-        matches = l.email2 && l.email2.trim() !== '' && (!l.email3 || l.email3.trim() === '');
-      }
-
-      if (matches) {
-        const acc = (l.accountName || currentWorkspace?.activeSendingAccount || currentWorkspace?.sendingAccounts?.[0] || 'Default Account').trim();
-        counts[acc] = (counts[acc] || 0) + 1;
-      }
-    });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [leads, activeSequence, currentWorkspace]);
-
-  // Extract available Initial / Previous Sent Dates for the active sequence stage
-  const availablePrevDates = useMemo(() => {
-    const counts = {};
-    leads.forEach(l => {
-      if (isLeadDNC(l)) return;
-
-      let matches = false;
-      let dateFound = null;
-
-      if (activeSequence === 'email1') {
-        matches = !l.email1 || l.email1.trim() === '';
-        dateFound = l.dateAdded || 'Standard Import';
-      } else if (activeSequence === 'email2') {
-        matches = l.email1 && l.email1.trim() !== '' && (!l.email2 || l.email2.trim() === '');
-        dateFound = extractDateFromStatus(l.email1) || 'Unknown Date';
-      } else if (activeSequence === 'email3') {
-        matches = l.email2 && l.email2.trim() !== '' && (!l.email3 || l.email3.trim() === '');
-        dateFound = extractDateFromStatus(l.email2) || 'Unknown Date';
-      }
-
-      if (matches && dateFound) {
-        counts[dateFound] = (counts[dateFound] || 0) + 1;
-      }
-    });
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [leads, activeSequence]);
-
-  // Filter leads based on sequence, campaign, sending account, date, and status (AUTOMATICALLY AVOIDS DNC & NOT INTERESTED)
-  const { eligibleLeads, dncExcludedInSequence } = useMemo(() => {
+  // BASE LEADS FOR THIS SEQUENCE & CAMPAIGN (Excluding DNC)
+  const { sequenceBaseLeads, dncExcludedInSequence } = useMemo(() => {
     let dncExcluded = 0;
 
     const filtered = leads.filter(l => {
-      // 1. Campaign filter
+      // Campaign filter
       if (selectedCampaign !== 'all') {
-        const leadCamp = l.campaignName || currentWorkspace?.campaignName || 'General Outbound';
-        if (leadCamp !== selectedCampaign) return false;
+        const leadCamp = (l.campaignName || currentWorkspace?.campaignName || 'General Outbound').trim();
+        if (leadCamp.toLowerCase() !== selectedCampaign.toLowerCase()) return false;
       }
 
-      // 2. Check sequence eligibility condition
+      // Check sequence eligibility condition
       let matchesSequence = true;
       if (filterMode === 'pending') {
         if (activeSequence === 'email1') {
@@ -143,26 +117,7 @@ export default function MailMergeDispatcher() {
 
       if (!matchesSequence) return false;
 
-      // 3. Associated Sending Account filter (Critical for Follow-ups Email 2 & Email 3)
-      if (selectedSenderAccount !== 'all') {
-        const leadAcc = (l.accountName || currentWorkspace?.activeSendingAccount || currentWorkspace?.sendingAccounts?.[0] || '').trim().toLowerCase();
-        if (leadAcc !== selectedSenderAccount.toLowerCase()) return false;
-      }
-
-      // 4. Initial / Previous Sent Date filter
-      if (selectedPrevDate !== 'all') {
-        let dateOfLead = null;
-        if (activeSequence === 'email1') {
-          dateOfLead = l.dateAdded || 'Standard Import';
-        } else if (activeSequence === 'email2') {
-          dateOfLead = extractDateFromStatus(l.email1) || 'Unknown Date';
-        } else if (activeSequence === 'email3') {
-          dateOfLead = extractDateFromStatus(l.email2) || 'Unknown Date';
-        }
-        if (dateOfLead !== selectedPrevDate) return false;
-      }
-
-      // 5. 🛡️ DNC / Unsubscribe / Not Interested Exclusion
+      // DNC Exclusion
       if (isLeadDNC(l)) {
         dncExcluded++;
         return false;
@@ -171,8 +126,79 @@ export default function MailMergeDispatcher() {
       return true;
     });
 
-    return { eligibleLeads: filtered, dncExcludedInSequence: dncExcluded };
-  }, [leads, activeSequence, filterMode, selectedCampaign, selectedSenderAccount, selectedPrevDate, currentWorkspace]);
+    return { sequenceBaseLeads: filtered, dncExcludedInSequence: dncExcluded };
+  }, [leads, activeSequence, filterMode, selectedCampaign, currentWorkspace]);
+
+  // DYNAMIC SENDER ACCOUNTS (CASCADED WITH SELECTED DATE)
+  const availableSenderAccounts = useMemo(() => {
+    const totalCounts = {};
+    const dateMatchCounts = {};
+
+    sequenceBaseLeads.forEach(l => {
+      const acc = getLeadSenderAccount(l, currentWorkspace);
+      totalCounts[acc] = (totalCounts[acc] || 0) + 1;
+
+      if (selectedPrevDate !== 'all') {
+        const d = getLeadPrevDate(l, activeSequence);
+        if (d === selectedPrevDate) {
+          dateMatchCounts[acc] = (dateMatchCounts[acc] || 0) + 1;
+        }
+      } else {
+        dateMatchCounts[acc] = (dateMatchCounts[acc] || 0) + 1;
+      }
+    });
+
+    return Object.keys(totalCounts).map(acc => ({
+      account: acc,
+      totalCount: totalCounts[acc],
+      matchCount: dateMatchCounts[acc] || 0
+    })).sort((a, b) => b.matchCount - a.matchCount || b.totalCount - a.totalCount);
+  }, [sequenceBaseLeads, selectedPrevDate, currentWorkspace, activeSequence]);
+
+  // DYNAMIC PREVIOUS TOUCH DATES (CASCADED WITH SELECTED SENDER ACCOUNT)
+  const availablePrevDates = useMemo(() => {
+    const totalCounts = {};
+    const accMatchCounts = {};
+
+    sequenceBaseLeads.forEach(l => {
+      const d = getLeadPrevDate(l, activeSequence);
+      totalCounts[d] = (totalCounts[d] || 0) + 1;
+
+      if (selectedSenderAccount !== 'all') {
+        const acc = getLeadSenderAccount(l, currentWorkspace);
+        if (acc.toLowerCase() === selectedSenderAccount.toLowerCase()) {
+          accMatchCounts[d] = (accMatchCounts[d] || 0) + 1;
+        }
+      } else {
+        accMatchCounts[d] = (accMatchCounts[d] || 0) + 1;
+      }
+    });
+
+    return Object.keys(totalCounts).map(dateStr => ({
+      date: dateStr,
+      totalCount: totalCounts[dateStr],
+      matchCount: accMatchCounts[dateStr] || 0
+    })).sort((a, b) => b.matchCount - a.matchCount || b.totalCount - a.totalCount);
+  }, [sequenceBaseLeads, selectedSenderAccount, currentWorkspace, activeSequence]);
+
+  // FINAL FILTERED ELIGIBLE LEADS
+  const eligibleLeads = useMemo(() => {
+    return sequenceBaseLeads.filter(l => {
+      // 1. Sender account filter
+      if (selectedSenderAccount !== 'all') {
+        const acc = getLeadSenderAccount(l, currentWorkspace);
+        if (acc.toLowerCase() !== selectedSenderAccount.toLowerCase()) return false;
+      }
+
+      // 2. Sent date filter
+      if (selectedPrevDate !== 'all') {
+        const d = getLeadPrevDate(l, activeSequence);
+        if (d !== selectedPrevDate) return false;
+      }
+
+      return true;
+    });
+  }, [sequenceBaseLeads, selectedSenderAccount, selectedPrevDate, currentWorkspace, activeSequence]);
 
   // Selected batch leads (either manually selected or top N of eligible)
   const batchLeads = useMemo(() => {
@@ -196,7 +222,23 @@ export default function MailMergeDispatcher() {
     }
   };
 
-  // Handle Quick Batch Copy (with DNC protection)
+  // Quick batch re-assignment if user wants to match leads to an account
+  const handleQuickReassignAccount = (targetAccount) => {
+    if (!targetAccount || selectedPrevDate === 'all') return;
+    const leadsOnDate = sequenceBaseLeads.filter(l => getLeadPrevDate(l, activeSequence) === selectedPrevDate);
+    if (leadsOnDate.length === 0) return;
+
+    const ids = leadsOnDate.map(l => l.id);
+    const count = reassignLeadSenderAccounts(ids, targetAccount);
+    if (count > 0) {
+      setReassignSuccessMsg(`Reassigned ${count} leads sent on ${selectedPrevDate} to ${targetAccount}!`);
+      setSelectedSenderAccount(targetAccount);
+      setSelectedAccount(targetAccount);
+      setTimeout(() => setReassignSuccessMsg(null), 5000);
+    }
+  };
+
+  // Handle Quick Batch Copy
   const handleCopyForSheets = async () => {
     if (selectedIds.length === 0) return;
     const res = await copyBatchForMailMerge(selectedIds, false, true);
@@ -212,7 +254,7 @@ export default function MailMergeDispatcher() {
     if (selectedIds.length === 0) return;
     const campaignToApply = customCampaignInput.trim() || (selectedCampaign !== 'all' ? selectedCampaign : currentWorkspace?.campaignName) || 'General Outbound';
     
-    // For follow-ups, preserve the associated sender account or use selectedAccount
+    // Explicitly use selectedSenderAccount or input selectedAccount
     const senderToApply = (selectedSenderAccount !== 'all' ? selectedSenderAccount : selectedAccount).trim();
     
     const ok = applyBatchSentStatus(selectedIds, activeSequence, customDate, senderToApply, campaignToApply);
@@ -232,6 +274,12 @@ export default function MailMergeDispatcher() {
 
   const isFollowUp = activeSequence === 'email2' || activeSequence === 'email3';
   const prevStepLabel = activeSequence === 'email3' ? 'Email 2' : 'Email 1';
+
+  // Leads that were sent on selectedPrevDate across all accounts (for diagnosis)
+  const leadsOnSelectedDateAllAccounts = useMemo(() => {
+    if (selectedPrevDate === 'all') return [];
+    return sequenceBaseLeads.filter(l => getLeadPrevDate(l, activeSequence) === selectedPrevDate);
+  }, [sequenceBaseLeads, selectedPrevDate, activeSequence]);
 
   return (
     <div className="space-y-6">
@@ -253,7 +301,7 @@ export default function MailMergeDispatcher() {
               Google Mail Merge Batch Dispatcher
             </h2>
             <p className="text-xs text-[#7B7B7B] mt-1 max-w-2xl leading-relaxed">
-              1) Select sequence & batch count → 2) Filter by <strong>Sending Account</strong> & <strong>Sent Date</strong> for follow-ups → 3) Click <strong>"Copy 4 Columns for Mail Merge"</strong> and paste into your Google Sheet row 2 → 4) Click <strong>"Auto-Apply Sent Status"</strong>.
+              1) Select sequence & campaign → 2) Target by <strong>Sending Account</strong> & <strong>Sent Date</strong> for follow-ups → 3) Click <strong>"Copy 4 Columns for Mail Merge"</strong> and paste into row 2 of Google Sheets → 4) Click <strong>"Auto-Apply Sent Status"</strong>.
             </p>
           </div>
 
@@ -283,7 +331,7 @@ export default function MailMergeDispatcher() {
         </div>
       </div>
 
-      {/* DNC / UNSUBSCRIBE PROTECTION SHIELD BANNER */}
+      {/* DNC PROTECTION BANNER */}
       {dncExcludedInSequence > 0 && (
         <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-3 text-xs text-rose-300 shadow-lg">
           <div className="flex items-center gap-2.5">
@@ -295,6 +343,16 @@ export default function MailMergeDispatcher() {
           <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-[#0A0A0A] border border-rose-500/40 text-rose-400">
             {dncExcludedInSequence} Avoided
           </span>
+        </div>
+      )}
+
+      {/* REASSIGN SUCCESS MESSAGE */}
+      {reassignSuccessMsg && (
+        <div className="p-3.5 rounded-2xl bg-[#00E5A0]/15 border border-[#00E5A0]/40 flex items-center justify-between gap-3 text-xs text-[#00E5A0] shadow-lg green-glow">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-[#00E5A0]" />
+            <span>{reassignSuccessMsg}</span>
+          </div>
         </div>
       )}
 
@@ -366,34 +424,41 @@ export default function MailMergeDispatcher() {
 
             {/* Campaign Filter Dropdown */}
             <div className="space-y-1.5 pt-1">
-              <label className="text-xs font-semibold text-gray-300 flex items-center gap-1.5">
-                <Target className="w-3.5 h-3.5 text-[#00C2FF]" />
-                Filter by Campaign Pool:
+              <label className="text-xs font-semibold text-gray-300 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Target className="w-3.5 h-3.5 text-[#00C2FF]" />
+                  Filter by Campaign Pool:
+                </span>
+                <span className="text-[10px] text-[#7B7B7B] font-mono">
+                  {sequenceBaseLeads.length} leads in stage
+                </span>
               </label>
               <select
                 value={selectedCampaign}
                 onChange={(e) => {
                   setSelectedCampaign(e.target.value);
+                  setSelectedSenderAccount('all');
+                  setSelectedPrevDate('all');
                   setManualSelection([]);
                 }}
                 className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-white text-xs outline-none focus:border-[#00C2FF]"
               >
-                <option value="all">All Campaigns Combined ({leads.length} leads)</option>
+                <option value="all">All Campaigns Combined ({leads.length} leads total)</option>
                 {existingCampaigns.map(camp => (
                   <option key={camp} value={camp}>Campaign: {camp}</option>
                 ))}
               </select>
             </div>
 
-            {/* DEDICATED FOLLOW-UP THREADING FILTERS: ASSOCIATED SENDER ACCOUNT & INITIAL SENT DATE */}
+            {/* DEDICATED FOLLOW-UP THREADING FILTERS */}
             {isFollowUp && (
-              <div className="pt-2 border-t border-[#1E3A5F]/70 space-y-3 bg-[#0A0A0A]/40 p-3 rounded-xl border border-[#00C2FF]/20">
+              <div className="pt-2 border-t border-[#1E3A5F]/70 space-y-3 bg-[#0A0A0A]/60 p-3.5 rounded-xl border border-[#00C2FF]/20">
                 <span className="text-[11px] font-bold text-[#00E5A0] uppercase tracking-wider flex items-center gap-1.5">
                   <UserCheck className="w-3.5 h-3.5 text-[#00E5A0]" />
                   Follow-Up Match Settings ({sequenceLabels[activeSequence]})
                 </span>
 
-                {/* 1. Associated Sending Account Filter */}
+                {/* 1. Associated Sending Account Filter (Cascaded with Date) */}
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-300 flex items-center justify-between">
                     <span className="flex items-center gap-1">
@@ -416,16 +481,25 @@ export default function MailMergeDispatcher() {
                     }}
                     className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#00C2FF]/50 rounded-xl text-white font-mono text-xs outline-none focus:border-[#00C2FF]"
                   >
-                    <option value="all">All Sender Accounts ({availableSenderAccounts.reduce((acc, a) => acc + a[1], 0)} leads)</option>
-                    {availableSenderAccounts.map(([acc, count]) => (
-                      <option key={acc} value={acc}>
-                        {acc} ({count} leads)
-                      </option>
-                    ))}
+                    <option value="all">
+                      All Sender Accounts ({sequenceBaseLeads.length} leads in campaign)
+                    </option>
+                    {availableSenderAccounts.map(item => {
+                      const label = selectedPrevDate === 'all'
+                        ? `${item.account} (${item.totalCount} leads)`
+                        : item.matchCount > 0
+                          ? `${item.account} (${item.matchCount} leads on ${selectedPrevDate})`
+                          : `${item.account} (0 on ${selectedPrevDate} · ${item.totalCount} total)`;
+                      return (
+                        <option key={item.account} value={item.account}>
+                          {label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
-                {/* 2. Initial / Previous Touch Sent Date Filter */}
+                {/* 2. Previous Touch Sent Date Filter (Cascaded with Account) */}
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-gray-300 flex items-center justify-between">
                     <span className="flex items-center gap-1">
@@ -444,14 +518,108 @@ export default function MailMergeDispatcher() {
                     }}
                     className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#F97316]/50 rounded-xl text-white font-mono text-xs outline-none focus:border-[#F97316]"
                   >
-                    <option value="all">All {prevStepLabel} Sent Dates ({availablePrevDates.reduce((acc, d) => acc + d[1], 0)} leads)</option>
-                    {availablePrevDates.map(([dateVal, count]) => (
-                      <option key={dateVal} value={dateVal}>
-                        Sent on {dateVal} ({count} leads)
-                      </option>
-                    ))}
+                    <option value="all">
+                      All {prevStepLabel} Sent Dates ({sequenceBaseLeads.length} leads in campaign)
+                    </option>
+                    {availablePrevDates.map(item => {
+                      const label = selectedSenderAccount === 'all'
+                        ? `Sent on ${item.date} (${item.totalCount} leads)`
+                        : item.matchCount > 0
+                          ? `Sent on ${item.date} (${item.matchCount} leads for ${selectedSenderAccount.split('@')[0]})`
+                          : `Sent on ${item.date} (0 for this account · ${item.totalCount} total)`;
+                      return (
+                        <option key={item.date} value={item.date}>
+                          {label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
+
+                {/* DIAGNOSTIC RESOLUTION BOX WHEN INTERSECTION IS 0 */}
+                {eligibleLeads.length === 0 && (selectedSenderAccount !== 'all' || selectedPrevDate !== 'all') && (
+                  <div className="mt-2 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs space-y-2.5">
+                    <div className="flex items-start gap-2 text-amber-400 font-bold">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                      <span>
+                        0 leads match BOTH sender <span className="text-white">"{selectedSenderAccount}"</span> AND date <span className="text-white">"{selectedPrevDate}"</span>.
+                      </span>
+                    </div>
+
+                    <div className="text-[11px] text-gray-300 space-y-1.5 pl-1">
+                      {/* Where selected account actually has leads */}
+                      {selectedSenderAccount !== 'all' && (
+                        <div>
+                          • <strong className="text-white">{selectedSenderAccount}</strong> has leads on:
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            {availablePrevDates.filter(d => d.matchCount > 0).map(d => (
+                              <button
+                                key={d.date}
+                                type="button"
+                                onClick={() => setSelectedPrevDate(d.date)}
+                                className="px-2 py-0.5 rounded bg-[#0A0A0A] border border-[#00C2FF] text-[#00C2FF] hover:bg-[#00C2FF]/20 font-mono text-[10px] cursor-pointer"
+                              >
+                                Switch to {d.date} ({d.matchCount} leads)
+                              </button>
+                            ))}
+                            {availablePrevDates.filter(d => d.matchCount > 0).length === 0 && (
+                              <span className="text-gray-400">None in this campaign</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Where selected date actually has leads */}
+                      {selectedPrevDate !== 'all' && (
+                        <div className="pt-1">
+                          • Leads sent on <strong className="text-white">{selectedPrevDate}</strong> were sent from:
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            {availableSenderAccounts.filter(a => a.matchCount > 0).map(a => (
+                              <button
+                                key={a.account}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedSenderAccount(a.account);
+                                  setSelectedAccount(a.account);
+                                }}
+                                className="px-2 py-0.5 rounded bg-[#0A0A0A] border border-[#00E5A0] text-[#00E5A0] hover:bg-[#00E5A0]/20 font-mono text-[10px] cursor-pointer"
+                              >
+                                Switch to {a.account} ({a.matchCount} leads)
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Quick 1-click Re-assign option */}
+                      {selectedSenderAccount !== 'all' && selectedPrevDate !== 'all' && leadsOnSelectedDateAllAccounts.length > 0 && (
+                        <div className="pt-2 border-t border-amber-500/20">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickReassignAccount(selectedSenderAccount)}
+                            className="w-full py-1.5 px-2.5 rounded-lg bg-[#00E5A0]/20 hover:bg-[#00E5A0]/30 text-[#00E5A0] border border-[#00E5A0]/40 font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>
+                              Re-assign all {leadsOnSelectedDateAllAccounts.length} leads on {selectedPrevDate} to {selectedSenderAccount}
+                            </span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedSenderAccount('all');
+                        setSelectedPrevDate('all');
+                      }}
+                      className="text-[11px] text-[#00C2FF] hover:underline cursor-pointer pt-1 block"
+                    >
+                      Clear filters to view all {sequenceBaseLeads.length} leads in this sequence
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -662,7 +830,7 @@ export default function MailMergeDispatcher() {
                           </span>
                           <span className="text-[11px] text-[#7B7B7B]">
                             {isFollowUp
-                              ? `Try changing the Sender Account or ${prevStepLabel} Sent Date filter.`
+                              ? `Check the filter mismatch guidance on the left panel or reset filters.`
                               : 'All leads may already be sent or marked as DNC.'}
                           </span>
                           {isFollowUp && (selectedSenderAccount !== 'all' || selectedPrevDate !== 'all') && (
@@ -674,7 +842,7 @@ export default function MailMergeDispatcher() {
                               }}
                               className="mt-1 px-3 py-1 rounded-xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/30 text-xs font-semibold hover:bg-[#00C2FF]/20 transition-all cursor-pointer"
                             >
-                              Show All {sequenceLabels[activeSequence]} Leads
+                              Show All {sequenceLabels[activeSequence]} Leads ({sequenceBaseLeads.length})
                             </button>
                           )}
                         </div>
@@ -682,16 +850,8 @@ export default function MailMergeDispatcher() {
                     </tr>
                   ) : (
                     batchLeads.map((lead) => {
-                      const associatedAccount = (lead.accountName || currentWorkspace?.activeSendingAccount || currentWorkspace?.sendingAccounts?.[0] || '—').trim();
-                      
-                      let prevDateDisplay = '—';
-                      if (activeSequence === 'email2') {
-                        prevDateDisplay = extractDateFromStatus(lead.email1) || lead.email1 || '—';
-                      } else if (activeSequence === 'email3') {
-                        prevDateDisplay = extractDateFromStatus(lead.email2) || lead.email2 || '—';
-                      } else {
-                        prevDateDisplay = lead.dateAdded || '—';
-                      }
+                      const associatedAccount = getLeadSenderAccount(lead, currentWorkspace);
+                      const prevDateDisplay = getLeadPrevDate(lead, activeSequence);
 
                       return (
                         <tr key={lead.id} className="hover:bg-[#1E3A5F]/20 transition-colors">

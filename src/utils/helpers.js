@@ -19,8 +19,35 @@ export function getYesterdayFormatted() {
 
 export function extractDateFromStatus(statusStr) {
   if (!statusStr || typeof statusStr !== 'string') return null;
-  const match = statusStr.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-  return match ? match[1] : null;
+
+  // 1. Matches DD/MM/YY or DD/MM/YYYY or D/M/YY
+  const slashMatch = statusStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (slashMatch) {
+    const dd = slashMatch[1].padStart(2, '0');
+    const mm = slashMatch[2].padStart(2, '0');
+    const yy = slashMatch[3].length === 4 ? slashMatch[3].slice(-2) : slashMatch[3].padStart(2, '0');
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  // 2. Matches DD-MM-YY or DD-MM-YYYY
+  const dashMatch = statusStr.match(/(\d{1,2})-(\d{1,2})-(\d{2,4})/);
+  if (dashMatch) {
+    const dd = dashMatch[1].padStart(2, '0');
+    const mm = dashMatch[2].padStart(2, '0');
+    const yy = dashMatch[3].length === 4 ? dashMatch[3].slice(-2) : dashMatch[3].padStart(2, '0');
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  // 3. Matches YYYY-MM-DD
+  const isoMatch = statusStr.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const yy = isoMatch[1].slice(-2);
+    const mm = isoMatch[2].padStart(2, '0');
+    const dd = isoMatch[3].padStart(2, '0');
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  return null;
 }
 
 export function formatDateDisplay(dateStr) {
