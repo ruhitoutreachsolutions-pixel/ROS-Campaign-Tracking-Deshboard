@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { getTodayFormatted, isLeadDNC, extractDateFromStatus } from '../utils/helpers';
 import { 
@@ -24,7 +24,10 @@ import {
   UserCheck,
   RotateCcw,
   AlertTriangle,
-  Zap
+  Zap,
+  Search,
+  ChevronDown,
+  X
 } from 'lucide-react';
 
 // Helper to reliably get a lead's sender account
@@ -74,6 +77,29 @@ export default function MailMergeDispatcher() {
   const [appliedCount, setAppliedCount] = useState(0);
   const [manualSelection, setManualSelection] = useState([]);
   const [reassignSuccessMsg, setReassignSuccessMsg] = useState(null);
+
+  // Searchable Sender Account Dropdown State
+  const [accountSearchQuery, setAccountSearchQuery] = useState('');
+  const [isAccountDropdownOpen, setIsAccountDropdownOpen] = useState(false);
+  const accountDropdownRef = useRef(null);
+  const accountSearchInputRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (accountDropdownRef.current && !accountDropdownRef.current.contains(event.target)) {
+        setIsAccountDropdownOpen(false);
+      }
+    }
+    if (isAccountDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      setTimeout(() => {
+        accountSearchInputRef.current?.focus();
+      }, 50);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isAccountDropdownOpen]);
 
   const leads = currentWorkspace?.leads || [];
 
@@ -154,6 +180,13 @@ export default function MailMergeDispatcher() {
       matchCount: dateMatchCounts[acc] || 0
     })).sort((a, b) => b.matchCount - a.matchCount || b.totalCount - a.totalCount);
   }, [sequenceBaseLeads, selectedPrevDate, currentWorkspace, activeSequence]);
+
+  // Filter sender accounts by user search query in the search bar
+  const filteredSenderAccounts = useMemo(() => {
+    if (!accountSearchQuery.trim()) return availableSenderAccounts;
+    const q = accountSearchQuery.toLowerCase().trim();
+    return availableSenderAccounts.filter(item => item.account.toLowerCase().includes(q));
+  }, [availableSenderAccounts, accountSearchQuery]);
 
   // DYNAMIC PREVIOUS TOUCH DATES (CASCADED WITH SELECTED SENDER ACCOUNT)
   const availablePrevDates = useMemo(() => {
@@ -458,45 +491,155 @@ export default function MailMergeDispatcher() {
                   Follow-Up Match Settings ({sequenceLabels[activeSequence]})
                 </span>
 
-                {/* 1. Associated Sending Account Filter (Cascaded with Date) */}
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1">
+                {/* 1. Associated Sending Account Searchable Dropdown */}
+                <div className="space-y-1 relative" ref={accountDropdownRef}>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-gray-300 flex items-center gap-1">
                       <Mail className="w-3.5 h-3.5 text-[#00C2FF]" />
                       Filter by Associated Sender Account:
-                    </span>
+                    </label>
                     {selectedSenderAccount !== 'all' && (
-                      <span className="text-[10px] text-[#00E5A0] font-mono font-bold">Filtered</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-[#00E5A0] font-mono font-bold">Filtered</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedSenderAccount('all');
+                            setManualSelection([]);
+                          }}
+                          className="text-[10px] text-gray-400 hover:text-white flex items-center gap-0.5 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" /> Clear
+                        </button>
+                      </div>
                     )}
-                  </label>
-                  <select
-                    value={selectedSenderAccount}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSelectedSenderAccount(val);
-                      if (val !== 'all') {
-                        setSelectedAccount(val);
-                      }
-                      setManualSelection([]);
-                    }}
-                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#00C2FF]/50 rounded-xl text-white font-mono text-xs outline-none focus:border-[#00C2FF]"
+                  </div>
+
+                  {/* Dropdown Trigger Button */}
+                  <button
+                    type="button"
+                    onClick={() => setIsAccountDropdownOpen(prev => !prev)}
+                    className={`w-full px-3 py-2 bg-[#0A0A0A] border rounded-xl text-left flex items-center justify-between transition-all cursor-pointer ${
+                      isAccountDropdownOpen 
+                        ? 'border-[#00C2FF] ring-1 ring-[#00C2FF]/40 shadow-lg shadow-[#00C2FF]/10' 
+                        : selectedSenderAccount !== 'all'
+                          ? 'border-[#00C2FF]/60 text-white'
+                          : 'border-[#1E3A5F] hover:border-gray-500 text-gray-300'
+                    }`}
                   >
-                    <option value="all">
-                      All Sender Accounts ({sequenceBaseLeads.length} leads in campaign)
-                    </option>
-                    {availableSenderAccounts.map(item => {
-                      const label = selectedPrevDate === 'all'
-                        ? `${item.account} (${item.totalCount} leads)`
-                        : item.matchCount > 0
-                          ? `${item.account} (${item.matchCount} leads on ${selectedPrevDate})`
-                          : `${item.account} (0 on ${selectedPrevDate} · ${item.totalCount} total)`;
-                      return (
-                        <option key={item.account} value={item.account}>
-                          {label}
-                        </option>
-                      );
-                    })}
-                  </select>
+                    <div className="flex items-center gap-2 truncate pr-2">
+                      <Mail className={`w-3.5 h-3.5 flex-shrink-0 ${selectedSenderAccount !== 'all' ? 'text-[#00C2FF]' : 'text-gray-400'}`} />
+                      <span className="font-mono text-xs truncate">
+                        {selectedSenderAccount === 'all' 
+                          ? `All Sender Accounts (${sequenceBaseLeads.length} leads in campaign)` 
+                          : selectedSenderAccount}
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isAccountDropdownOpen ? 'rotate-180 text-[#00C2FF]' : ''}`} />
+                  </button>
+
+                  {/* Searchable Floating Popover Menu */}
+                  {isAccountDropdownOpen && (
+                    <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-[#0A0A0A] border border-[#00C2FF]/40 rounded-xl shadow-2xl overflow-hidden backdrop-blur-xl animate-in fade-in zoom-in-95 duration-100">
+                      
+                      {/* Search Bar Input */}
+                      <div className="p-2 border-b border-[#1E3A5F] bg-[#111827]/80">
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-[#00C2FF] absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          <input
+                            ref={accountSearchInputRef}
+                            type="text"
+                            value={accountSearchQuery}
+                            onChange={(e) => setAccountSearchQuery(e.target.value)}
+                            placeholder="Search email account (e.g. juned, amit, hello)..."
+                            className="w-full pl-8 pr-7 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-lg text-white font-mono text-xs outline-none focus:border-[#00C2FF]"
+                          />
+                          {accountSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setAccountSearchQuery('')}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white p-0.5 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Options List */}
+                      <div className="max-h-60 overflow-y-auto p-1 space-y-0.5 divide-y divide-[#1E3A5F]/20 no-scrollbar">
+                        {/* 'All Accounts' Option */}
+                        {(!accountSearchQuery || 'all sender accounts'.includes(accountSearchQuery.toLowerCase())) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSenderAccount('all');
+                              setIsAccountDropdownOpen(false);
+                              setAccountSearchQuery('');
+                              setManualSelection([]);
+                            }}
+                            className={`w-full px-2.5 py-2 rounded-lg text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                              selectedSenderAccount === 'all'
+                                ? 'bg-[#00C2FF]/15 text-[#00C2FF] font-bold'
+                                : 'text-gray-300 hover:bg-[#111827] hover:text-white'
+                            }`}
+                          >
+                            <span>All Sender Accounts</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#111827] border border-[#1E3A5F] text-gray-400 font-mono">
+                              {sequenceBaseLeads.length} leads
+                            </span>
+                          </button>
+                        )}
+
+                        {/* Filtered Account Items */}
+                        {filteredSenderAccounts.length === 0 && accountSearchQuery && (
+                          <div className="py-6 text-center text-xs text-gray-400">
+                            No sender accounts matching <span className="text-[#00C2FF]">"{accountSearchQuery}"</span>
+                          </div>
+                        )}
+
+                        {filteredSenderAccounts.map(item => {
+                          const isSelected = selectedSenderAccount.toLowerCase() === item.account.toLowerCase();
+                          const matchLabel = selectedPrevDate === 'all'
+                            ? `${item.totalCount} leads`
+                            : item.matchCount > 0
+                              ? `${item.matchCount} on ${selectedPrevDate}`
+                              : `0 on ${selectedPrevDate}`;
+
+                          return (
+                            <button
+                              key={item.account}
+                              type="button"
+                              onClick={() => {
+                                setSelectedSenderAccount(item.account);
+                                setSelectedAccount(item.account);
+                                setIsAccountDropdownOpen(false);
+                                setAccountSearchQuery('');
+                                setManualSelection([]);
+                              }}
+                              className={`w-full px-2.5 py-2 rounded-lg text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-[#00C2FF]/20 text-[#00C2FF] font-bold'
+                                  : 'text-gray-300 hover:bg-[#111827] hover:text-white'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 truncate pr-2">
+                                {isSelected && <Check className="w-3 h-3 text-[#00C2FF] flex-shrink-0" />}
+                                <span className="truncate">{item.account}</span>
+                              </div>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono flex-shrink-0 ${
+                                item.matchCount > 0 
+                                  ? 'bg-[#00E5A0]/10 border border-[#00E5A0]/30 text-[#00E5A0]' 
+                                  : 'bg-[#111827] border border-[#1E3A5F] text-gray-500'
+                              }`}>
+                                {matchLabel}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 2. Previous Touch Sent Date Filter (Cascaded with Account) */}
