@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { exportLeadsToCSV, isLeadDNC } from '../utils/helpers';
 import BulkEditModal from './BulkEditModal';
+import AddLeadModal from './AddLeadModal';
 import { 
   Search, 
   Filter, 
@@ -32,7 +33,9 @@ import {
   AlertCircle,
   Sliders,
   Ban,
-  ShieldCheck
+  ShieldCheck,
+  UserPlus,
+  Plus
 } from 'lucide-react';
 
 export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
@@ -73,6 +76,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const [applyToast, setApplyToast] = useState(false);
   const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
   const [bulkEditToast, setBulkEditToast] = useState(null);
+  const [isAddLeadModalOpen, setIsAddLeadModalOpen] = useState(false);
+  const [addLeadToast, setAddLeadToast] = useState(null);
 
   // Cloud Sync Notification & Status State
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -360,6 +365,22 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   return (
     <div className="space-y-4">
 
+      {/* ADD SINGLE LEAD SUCCESS TOAST BANNER */}
+      {addLeadToast && (
+        <div className="p-3.5 rounded-2xl border bg-[#00E5A0]/10 border-[#00E5A0]/40 text-[#00E5A0] text-xs flex items-center justify-between gap-3 shadow-2xl animate-fade-in green-glow">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-[#00E5A0] flex-shrink-0" />
+            <span className="font-semibold">{addLeadToast}</span>
+          </div>
+          <button
+            onClick={() => setAddLeadToast(null)}
+            className="p-1 rounded hover:bg-white/10 text-white cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* BULK EDIT SUCCESS TOAST BANNER */}
       {bulkEditToast && (
         <div className="p-3.5 rounded-2xl border bg-[#00E5A0]/10 border-[#00E5A0]/40 text-[#00E5A0] text-xs flex items-center justify-between gap-3 shadow-2xl animate-fade-in">
@@ -491,6 +512,17 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
             >
               <RotateCcw className="w-3 h-3" />
               <span>Reset Filters</span>
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={() => setIsAddLeadModalOpen(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-[#00E5A0] hover:bg-[#00E5A0]/90 text-[#0A0A0A] text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-[#00E5A0]/20 cursor-pointer"
+              title="Add a single new lead record manually"
+            >
+              <UserPlus className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>+ Add Single Lead</span>
             </button>
           )}
 
@@ -992,6 +1024,16 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
         onClose={() => setBulkEditModalOpen(false)}
         selectedLeadIds={selectedLeadIds}
         onComplete={handleBulkEditComplete}
+      />
+
+      {/* ADD SINGLE LEAD MODAL */}
+      <AddLeadModal
+        isOpen={isAddLeadModalOpen}
+        onClose={() => setIsAddLeadModalOpen(false)}
+        onLeadAdded={(newLead) => {
+          setAddLeadToast(`✓ Successfully added lead ${newLead.email} (${newLead.companyName || newLead.campaignName}) to sheet!`);
+          setTimeout(() => setAddLeadToast(null), 5000);
+        }}
       />
 
     </div>

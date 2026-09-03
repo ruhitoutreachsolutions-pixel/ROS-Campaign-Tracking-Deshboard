@@ -617,6 +617,62 @@ export function WorkspaceProvider({ children }) {
     return newLeads.length;
   }
 
+  // 6b. Add Single Lead
+  function addSingleLead(leadData) {
+    if (!currentWorkspace || !leadData || !leadData.email) return null;
+
+    const todayStr = getTodayFormatted();
+    const campName = (leadData.campaignName || currentWorkspace.campaignName || 'General Outbound').trim();
+    const isDnc = leadData.isDNC || isLeadDNC(leadData);
+    const isInterested = !isDnc && (leadData.status === 'interested' || (leadData.stage && !leadData.stage.toLowerCase().includes('lost') && !leadData.stage.toLowerCase().includes('not a')));
+
+    const newLead = {
+      id: 'ld_' + Math.random().toString(36).substr(2, 9),
+      email: leadData.email.trim(),
+      firstName: (leadData.firstName || '').trim(),
+      city: (leadData.city || '').trim(),
+      companyName: (leadData.companyName || '').trim(),
+      campaignName: campName,
+      accountName: (leadData.accountName || currentWorkspace.activeSendingAccount || currentWorkspace.sendingAccounts?.[0] || '').trim(),
+      email1: (leadData.email1 || '').trim(),
+      email2: (leadData.email2 || '').trim(),
+      email3: (leadData.email3 || '').trim(),
+      stage: (leadData.stage || '').trim(),
+      status: isDnc ? 'dnc' : (isInterested ? 'interested' : (leadData.status || 'pending')),
+      isDNC: isDnc,
+      dealValue: Number(leadData.dealValue) || 0,
+      replyDate: leadData.replyDate ? leadData.replyDate.trim() : (isInterested ? todayStr : ''),
+      dateAdded: (leadData.dateAdded || '').trim() || todayStr,
+      notes: (leadData.notes || '').trim(),
+      createdAt: new Date().toISOString(),
+      importedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const newActivity = {
+      id: 'act_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: 'lead_added',
+      leadName: newLead.firstName || newLead.email,
+      company: newLead.companyName,
+      campaignName: newLead.campaignName,
+      description: `Added single lead ${newLead.email} (${newLead.companyName || 'No Company'})`
+    };
+
+    setWorkspaces(prev => prev.map(w => {
+      if (w.id === currentWorkspaceId) {
+        return {
+          ...w,
+          leads: [newLead, ...w.leads],
+          activityLog: [newActivity, ...(w.activityLog || [])]
+        };
+      }
+      return w;
+    }));
+
+    return newLead;
+  }
+
   // 7. Delete Leads
   function deleteLead(leadId) {
     if (!currentWorkspace) return false;
@@ -770,6 +826,7 @@ export function WorkspaceProvider({ children }) {
     markLeadAsDNC,
     bulkMarkAsDNC,
     addLeadsBulk,
+    addSingleLead,
     deleteLead,
     bulkDeleteLeads,
     createWorkspace,
