@@ -28,7 +28,9 @@ import {
   FileText,
   Shield,
   Eye,
-  Lock
+  Lock,
+  X,
+  Bell
 } from 'lucide-react';
 
 export default function App() {
@@ -39,7 +41,9 @@ export default function App() {
     currentWorkspace,
     metrics,
     tasks,
-    payments
+    payments,
+    liveToast,
+    setLiveToast
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');
@@ -110,6 +114,33 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col font-['Space_Grotesk'] selection:bg-[#00C2FF] selection:text-[#0A0A0A]">
       
+      {/* Live Floating In-App Cyber Notification Toast */}
+      {liveToast && (
+        <div className="fixed top-5 right-5 z-50 max-w-sm sm:max-w-md w-full bg-[#111827] border border-[#00C2FF]/50 text-white p-4 rounded-2xl shadow-2xl shadow-[#00C2FF]/20 flex items-start gap-3.5 animate-slideIn backdrop-blur-md">
+          <div className="w-9 h-9 rounded-xl bg-[#00C2FF]/15 border border-[#00C2FF]/30 flex items-center justify-center shrink-0 text-[#00C2FF] mt-0.5">
+            <Bell className="w-4 h-4 animate-bounce" />
+          </div>
+          <div className="flex-1 min-w-0 pr-1">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#00C2FF] truncate">
+                {liveToast.title || 'Live System Update'}
+              </h4>
+              <span className="text-[10px] text-[#7B7B7B] font-mono">Just Now</span>
+            </div>
+            <p className="text-xs text-gray-200 mt-1 leading-relaxed font-medium">
+              {liveToast.message}
+            </p>
+          </div>
+          <button
+            onClick={() => setLiveToast(null)}
+            className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-[#0A0A0A] transition"
+            title="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation */}
       <Navbar 
         onOpenNewWorkspace={handleOpenNewWorkspace}

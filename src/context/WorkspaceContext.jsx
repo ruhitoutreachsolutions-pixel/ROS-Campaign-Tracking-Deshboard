@@ -155,6 +155,15 @@ export function WorkspaceProvider({ children }) {
     } catch (e) { return initialWarriorTimeline || []; }
   });
 
+  // 12b. LIVE FLOATING IN-APP NOTIFICATION TOAST
+  const [liveToast, setLiveToast] = useState(null);
+
+  useEffect(() => {
+    if (!liveToast) return;
+    const timer = setTimeout(() => setLiveToast(null), 6500);
+    return () => clearTimeout(timer);
+  }, [liveToast]);
+
   // 13. AUTO-SYNC STATUS & HEARTBEAT
   const [lastSyncedTime, setLastSyncedTime] = useState(new Date());
   const [isAutoSyncing, setIsAutoSyncing] = useState(false);
@@ -360,6 +369,147 @@ export function WorkspaceProvider({ children }) {
 
     return () => clearInterval(autoSyncInterval);
   }, [workspaces, warriors, tasks, payments, emailCopies, importantNotes, todos, dailyReports, warriorTimeline]);
+
+  // 4b2. FAST 5-SECOND CROSS-BROWSER REAL-TIME SYNC & NOTIFICATION ENGINE
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fastSyncInterval = setInterval(async () => {
+      try {
+        const cloudMeta = await fetchGlobalMetaFromCloud();
+        if (isCancelled || !cloudMeta) return;
+
+        // 1. LIVE ROLE & PERMISSION PROPAGATION WITHOUT LOGOUT
+        if (currentUser?.role === 'warrior' && Array.isArray(cloudMeta.warriors)) {
+          const freshMe = cloudMeta.warriors.find(w => 
+            (w && w.id && currentUser.id && w.id === currentUser.id) ||
+            (w && w.username && currentUser.username && w.username.toLowerCase() === currentUser.username.toLowerCase())
+          );
+
+          if (freshMe) {
+            const hasChanged = 
+              freshMe.accessLevel !== currentUser.accessLevel ||
+              JSON.stringify(freshMe.allowedWorkspaceIds || []) !== JSON.stringify(currentUser.allowedWorkspaceIds || []) ||
+              JSON.stringify(freshMe.allowedTabs || []) !== JSON.stringify(currentUser.allowedTabs || []) ||
+              freshMe.name !== currentUser.name;
+
+            if (hasChanged) {
+              const updatedUser = { ...currentUser, ...freshMe, role: 'warrior' };
+              setCurrentUser(updatedUser);
+              try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updatedUser)); } catch (e) {}
+              setLiveToast({
+                type: 'info',
+                title: '⚡ Permissions Updated Realtime',
+                message: `Admin updated your access to: ${freshMe.accessLevel === 'edit' ? 'Edit & Use (Full Access)' : 'View Only'}`
+              });
+            }
+          }
+        }
+
+        // 2. LIVE WARRIORS LIST SYNC
+        if (Array.isArray(cloudMeta.warriors)) {
+          setWarriors(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.warriors)) {
+              try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(cloudMeta.warriors)); } catch (e) {}
+              return cloudMeta.warriors;
+            }
+            return prev;
+          });
+        }
+
+        // 3. LIVE WARRIOR ACTION TIMELINE SYNC
+        if (Array.isArray(cloudMeta.warriorTimeline) && cloudMeta.warriorTimeline.length > 0) {
+          setWarriorTimeline(prev => {
+            const prevIds = new Set((prev || []).map(e => e.id));
+            const newEvents = cloudMeta.warriorTimeline.filter(e => !prevIds.has(e.id));
+            if (newEvents.length > 0) {
+              if (currentUser?.role === 'admin') {
+                const latest = newEvents[0];
+                setLiveToast({
+                  type: 'action',
+                  title: `⚔️ Live Warrior Action: ${latest.warriorName}`,
+                  message: latest.details
+                });
+              }
+              try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(cloudMeta.warriorTimeline)); } catch (e) {}
+              return cloudMeta.warriorTimeline;
+            }
+            return prev;
+          });
+        }
+
+        // 4. LIVE DAILY REPORTS SYNC & ADMIN REALTIME NOTIFICATIONS
+        if (Array.isArray(cloudMeta.dailyReports) && cloudMeta.dailyReports.length > 0) {
+          setDailyReports(prev => {
+            const prevIds = new Set((prev || []).map(r => r.id));
+            const newReports = cloudMeta.dailyReports.filter(r => !prevIds.has(r.id));
+            if (newReports.length > 0) {
+              if (currentUser?.role === 'admin') {
+                const rep = newReports[0];
+                setLiveToast({
+                  type: 'report',
+                  title: `📊 New Daily Report: ${rep.warriorName}`,
+                  message: `${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups, ${rep.callsBooked} booked`
+                });
+                notifyAdminDesktop(
+                  '📊 ROS Warrior Daily Report Submitted!',
+                  `${rep.warriorName} submitted report for ${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups.`
+                );
+              }
+              try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(cloudMeta.dailyReports)); } catch (e) {}
+              return cloudMeta.dailyReports;
+            }
+            return prev;
+          });
+        }
+
+        // 5. LIVE TASKS & APPROVALS SYNC
+        if (Array.isArray(cloudMeta.tasks) && cloudMeta.tasks.length > 0) {
+          setTasks(prev => {
+            const prevMap = new Map((prev || []).map(t => [t.id, t]));
+            const justSubmitted = cloudMeta.tasks.find(ct => 
+              ct.status === 'submitted_for_approval' && 
+              prevMap.has(ct.id) && prevMap.get(ct.id).status === 'pending'
+            );
+            if (justSubmitted && currentUser?.role === 'admin') {
+              setLiveToast({
+                type: 'task',
+                title: '⏳ Task Submitted for Approval',
+                message: `${justSubmitted.assignedWarriorName} submitted "${justSubmitted.title}"`
+              });
+              notifyAdminDesktop(
+                '⚔️ ROS Warrior Task Submitted!',
+                `${justSubmitted.assignedWarriorName} submitted "${justSubmitted.title}" for approval.`
+              );
+            }
+            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.tasks)) {
+              try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
+              return cloudMeta.tasks;
+            }
+            return prev;
+          });
+        }
+
+        // 6. LIVE PAYMENTS SYNC
+        if (Array.isArray(cloudMeta.payments)) {
+          setPayments(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.payments)) {
+              try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cloudMeta.payments)); } catch (e) {}
+              return cloudMeta.payments;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        // Silent poll fail-safe
+      }
+    }, 5000); // 5-second interval for real-time responsiveness
+
+    return () => {
+      isCancelled = true;
+      clearInterval(fastSyncInterval);
+    };
+  }, [currentUser]);
 
   // 4c. PERSISTENCE EFFECTS FOR NEW MODULES
   useEffect(() => {
@@ -664,6 +814,10 @@ export function WorkspaceProvider({ children }) {
     const tsvText = generateMailMergeTSV(eligibleLeads, includeHeaders, false);
     const success = await copyToClipboard(tsvText);
 
+    if (success) {
+      logWarriorAction('batch_copied', `Copied ${eligibleLeads.length} leads for Mail Merge dispatch (${currentWorkspace.name})`);
+    }
+
     return {
       success,
       count: eligibleLeads.length,
@@ -719,6 +873,8 @@ export function WorkspaceProvider({ children }) {
       return w;
     }));
 
+    logWarriorAction('batch_sent', `Marked ${leadIds.length} leads as Sent: ${assignedCampaign} (${seqLabel})`);
+
     return true;
   }
 
@@ -766,6 +922,8 @@ export function WorkspaceProvider({ children }) {
         }
         return w;
       }));
+
+      logWarriorAction('stage_change', `Moved ${targetLead.firstName || targetLead.email} to "${newStage}" (${targetLead.companyName || 'No Company'})`);
     }
 
     return true;
@@ -1034,6 +1192,8 @@ export function WorkspaceProvider({ children }) {
       return w;
     }));
 
+    logWarriorAction('lead_added', `Added single lead: ${newLead.email} (${newLead.companyName || 'No Company'})`);
+
     return newLead;
   }
 
@@ -1187,20 +1347,25 @@ export function WorkspaceProvider({ children }) {
     }
   }
 
-  // Live action logger for ROS Warriors
+  // Live action logger for ROS Warriors & Operators with instant cloud push
   function logWarriorAction(actionType, details, workspaceName = null) {
-    if (currentUser?.role === 'warrior') {
-      const event = {
-        id: 'tl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-        warriorId: currentUser.id,
-        warriorName: currentUser.name || currentUser.username,
-        actionType,
-        workspaceName: workspaceName || currentWorkspace?.name || 'General',
-        details,
-        timestamp: new Date().toISOString()
-      };
-      setWarriorTimeline(prev => [event, ...(prev || []).slice(0, 200)]);
-    }
+    const actorName = currentUser?.name || currentUser?.username || 'ROS Warrior';
+    const actorId = currentUser?.id || 'warrior_auto';
+    const event = {
+      id: 'tl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+      warriorId: actorId,
+      warriorName: actorName,
+      actionType,
+      workspaceName: workspaceName || currentWorkspace?.name || 'General',
+      details,
+      timestamp: new Date().toISOString()
+    };
+    setWarriorTimeline(prev => {
+      const next = [event, ...(prev || []).slice(0, 200)];
+      try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(next)); } catch (e) {}
+      saveGlobalMetaToCloud({ warriorTimeline: next }).catch(() => {});
+      return next;
+    });
   }
 
   // 9. Email Copies Management
@@ -1311,19 +1476,28 @@ export function WorkspaceProvider({ children }) {
       notes: payData.notes || '',
       createdAt: new Date().toISOString()
     };
-    setPayments(prev => [newPay, ...(prev || [])]);
+    const nextPayments = [newPay, ...(payments || [])];
+    setPayments(nextPayments);
+    try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(nextPayments)); } catch (e) {}
+    saveGlobalMetaToCloud({ payments: nextPayments }).catch(() => {});
     return newPay;
   }
 
   function updatePayment(payId, updates) {
-    setPayments(prev => (prev || []).map(p => 
+    const nextPayments = (payments || []).map(p => 
       p.id === payId ? { ...p, ...updates } : p
-    ));
+    );
+    setPayments(nextPayments);
+    try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(nextPayments)); } catch (e) {}
+    saveGlobalMetaToCloud({ payments: nextPayments }).catch(() => {});
     return true;
   }
 
   function deletePayment(payId) {
-    setPayments(prev => (prev || []).filter(p => p.id !== payId));
+    const nextPayments = (payments || []).filter(p => p.id !== payId);
+    setPayments(nextPayments);
+    try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(nextPayments)); } catch (e) {}
+    saveGlobalMetaToCloud({ payments: nextPayments }).catch(() => {});
     return true;
   }
 
@@ -1345,16 +1519,23 @@ export function WorkspaceProvider({ children }) {
       adminFeedback: '',
       createdAt: new Date().toISOString()
     };
-    setTasks(prev => [newTask, ...(prev || [])]);
+    const nextTasks = [newTask, ...(tasks || [])];
+    setTasks(nextTasks);
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
     return newTask;
   }
 
   function submitTaskForApproval(taskId) {
     const task = (tasks || []).find(t => t.id === taskId);
     const now = new Date().toISOString();
-    setTasks(prev => (prev || []).map(t => 
+    const nextTasks = (tasks || []).map(t => 
       t.id === taskId ? { ...t, status: 'submitted_for_approval', submittedAt: now } : t
-    ));
+    );
+    setTasks(nextTasks);
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
+
     // Trigger Desktop Notification to Admin
     notifyAdminDesktop(
       '⚔️ ROS Warrior Task Completed!',
@@ -1365,39 +1546,49 @@ export function WorkspaceProvider({ children }) {
   }
 
   function approveTask(taskId, feedback = '') {
-    setTasks(prev => (prev || []).map(t => 
+    const nextTasks = (tasks || []).map(t => 
       t.id === taskId ? { 
         ...t, 
         status: 'approved_completed', 
         approvedAt: new Date().toISOString(),
         adminFeedback: feedback || t.adminFeedback 
       } : t
-    ));
+    );
+    setTasks(nextTasks);
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
     return true;
   }
 
   function rejectTask(taskId, feedback = '') {
-    setTasks(prev => (prev || []).map(t => 
+    const nextTasks = (tasks || []).map(t => 
       t.id === taskId ? { 
         ...t, 
         status: 'rejected', 
         adminFeedback: feedback || 'Please review requirements.' 
       } : t
-    ));
+    );
+    setTasks(nextTasks);
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
     return true;
   }
 
   function deleteTask(taskId) {
-    setTasks(prev => (prev || []).filter(t => t.id !== taskId));
+    const nextTasks = (tasks || []).filter(t => t.id !== taskId);
+    setTasks(nextTasks);
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
     return true;
   }
 
   // 13. Daily Reports
   function submitDailyReport(repData) {
+    const warriorName = currentUser?.name || currentUser?.username || 'ROS Warrior';
     const newRep = {
       id: 'rep_' + Date.now(),
       warriorId: currentUser?.id || 'warrior_1',
-      warriorName: currentUser?.name || currentUser?.username || 'Farhan',
+      warriorName,
       date: repData.date || getTodayFormatted(),
       workspaceId: repData.workspaceId || currentWorkspaceId,
       workspaceName: repData.workspaceName || currentWorkspace?.name || 'Client',
@@ -1408,13 +1599,21 @@ export function WorkspaceProvider({ children }) {
       notes: repData.notes || '',
       submittedAt: new Date().toISOString()
     };
-    setDailyReports(prev => [newRep, ...(prev || [])]);
-    logWarriorAction('report_submitted', `Submitted daily outreach report for ${newRep.workspaceName}`);
+    const nextReports = [newRep, ...(dailyReports || [])];
+    setDailyReports(nextReports);
+    try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(nextReports)); } catch (e) {}
+    saveGlobalMetaToCloud({ dailyReports: nextReports }).catch(() => {});
+
+    logWarriorAction('report_submitted', `Submitted daily report for ${newRep.workspaceName} (${newRep.initialSent} initial, ${newRep.followUpsSent} follow-ups, ${newRep.callsBooked} booked)`);
+    notifyAdminDesktop('📊 ROS Warrior Daily Report Submitted!', `${warriorName} submitted report for ${newRep.workspaceName}`);
     return newRep;
   }
 
   function deleteDailyReport(repId) {
-    setDailyReports(prev => (prev || []).filter(r => r.id !== repId));
+    const nextReports = (dailyReports || []).filter(r => r.id !== repId);
+    setDailyReports(nextReports);
+    try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(nextReports)); } catch (e) {}
+    saveGlobalMetaToCloud({ dailyReports: nextReports }).catch(() => {});
     return true;
   }
 
@@ -1499,6 +1698,8 @@ export function WorkspaceProvider({ children }) {
     // Notification & logging
     notifyAdminDesktop,
     logWarriorAction,
+    liveToast,
+    setLiveToast,
     // CRUD handlers
     addEmailCopy,
     updateEmailCopy,

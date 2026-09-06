@@ -19,10 +19,10 @@ export default function PaymentsInvoices() {
   // Strict role check: Admin only
   if (effectiveRole !== 'admin') {
     return (
-      <div className="bg-white rounded-xl border border-red-200 p-12 text-center shadow-sm my-6">
-        <ShieldAlert className="w-16 h-16 text-red-500 mx-auto mb-4" />
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Restricted</h2>
-        <p className="text-gray-600 max-w-md mx-auto">
+      <div className="bg-[#111827] rounded-2xl border border-rose-500/30 p-12 text-center shadow-xl my-6">
+        <ShieldAlert className="w-16 h-16 text-rose-400 mx-auto mb-4" />
+        <h2 className="text-2xl font-bold text-white mb-2">Access Restricted</h2>
+        <p className="text-gray-400 max-w-md mx-auto text-sm">
           The Payments & Invoices portal is strictly confidential and restricted to Super Admins. ROS Warriors and Clients do not have permission to view billing data.
         </p>
       </div>
@@ -201,17 +201,17 @@ export default function PaymentsInvoices() {
 
   return (
     <div className="space-y-6 animate-fadeIn pb-12">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-6 rounded-2xl shadow-xl">
+      {/* Header Banner in Cyber Dark Theme */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-[#111827] via-[#0F2238] to-[#111827] border border-[#1E3A5F] text-white p-6 rounded-2xl shadow-xl">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/20 border border-emerald-400/30 rounded-full text-emerald-300 text-xs font-semibold mb-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#00E5A0]/15 border border-[#00E5A0]/30 rounded-full text-[#00E5A0] text-xs font-semibold mb-2">
             <CreditCard className="w-3.5 h-3.5" />
-            Super Admin Vault · Confidential
+            Super Admin Vault · Confidential Billing
           </div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
+          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2 text-white">
             Client Payments & Monthly Retainers
           </h1>
-          <p className="text-emerald-100/80 text-sm mt-1">
+          <p className="text-gray-400 text-sm mt-1">
             Track outbound retainer contracts, recurring billings, Wise/Stripe receipts, and outstanding dues.
           </p>
         </div>
@@ -219,14 +219,14 @@ export default function PaymentsInvoices() {
         <div className="flex items-center gap-3">
           <button
             onClick={handleExportCSV}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-semibold border border-white/20 transition backdrop-blur-sm"
+            className="flex items-center gap-2 px-4 py-2.5 bg-[#0A0A0A] hover:bg-[#162238] text-white rounded-xl text-sm font-semibold border border-[#1E3A5F] transition"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-4 h-4 text-[#00C2FF]" />
             Export CSV
           </button>
           <button
             onClick={handleOpenNew}
-            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-gray-950 rounded-xl text-sm font-bold shadow-lg shadow-emerald-500/25 transition transform hover:-translate-y-0.5"
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#00E5A0] hover:bg-[#00E5A0]/80 text-[#0A0A0A] rounded-xl text-sm font-bold shadow-lg shadow-[#00E5A0]/20 transition transform hover:-translate-y-0.5"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             New Invoice / Retainer
@@ -234,109 +234,109 @@ export default function PaymentsInvoices() {
         </div>
       </div>
 
-      {/* Metric Cards */}
+      {/* Metric Cards in Signature Cyber Dark Theme */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total MRR */}
-        <div className="bg-white rounded-xl border border-gray-200/80 p-5 shadow-sm hover:shadow-md transition">
+        <div className="bg-[#111827] rounded-2xl border border-[#1E3A5F] p-5 shadow-sm hover:border-[#00C2FF]/40 transition">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-700">Monthly Contract Value</span>
-            <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#7B7B7B]">Monthly Contract Value</span>
+            <div className="w-9 h-9 rounded-lg bg-[#00C2FF]/10 border border-[#00C2FF]/20 flex items-center justify-center text-[#00C2FF]">
               <DollarSign className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-gray-900">
+            <div className="text-2xl font-black text-white font-mono">
               £{stats.totalMRRGBP.toLocaleString()}
             </div>
             {stats.totalMRRUSD > 0 && (
-              <div className="text-xs font-semibold text-emerald-800 mt-0.5">
+              <div className="text-xs font-semibold text-[#00C2FF] mt-0.5 font-mono">
                 + ${stats.totalMRRUSD.toLocaleString()} USD
               </div>
             )}
           </div>
-          <div className="mt-2 text-xs text-gray-700">Total active monthly client retainers</div>
+          <div className="mt-2 text-xs text-gray-400">Total active monthly client retainers</div>
         </div>
 
         {/* Collected This Month */}
-        <div className="bg-white rounded-xl border border-gray-200/80 p-5 shadow-sm hover:shadow-md transition">
+        <div className="bg-[#111827] rounded-2xl border border-[#1E3A5F] p-5 shadow-sm hover:border-[#00E5A0]/40 transition">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-700">Collected / Paid</span>
-            <div className="w-9 h-9 rounded-lg bg-green-50 flex items-center justify-center text-green-600">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#7B7B7B]">Collected / Paid</span>
+            <div className="w-9 h-9 rounded-lg bg-[#00E5A0]/10 border border-[#00E5A0]/20 flex items-center justify-center text-[#00E5A0]">
               <CheckCircle2 className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-green-700">
+            <div className="text-2xl font-black text-[#00E5A0] font-mono">
               £{stats.paidGBP.toLocaleString()}
             </div>
             {stats.paidUSD > 0 && (
-              <div className="text-xs font-semibold text-green-800 mt-0.5">
+              <div className="text-xs font-semibold text-[#00E5A0]/80 mt-0.5 font-mono">
                 + ${stats.paidUSD.toLocaleString()} USD
               </div>
             )}
           </div>
-          <div className="mt-2 text-xs text-green-800 font-medium">Successfully settled retainers</div>
+          <div className="mt-2 text-xs text-[#00E5A0]/90 font-medium">Successfully settled retainers</div>
         </div>
 
         {/* Pending Invoices */}
-        <div className="bg-white rounded-xl border border-gray-200/80 p-5 shadow-sm hover:shadow-md transition">
+        <div className="bg-[#111827] rounded-2xl border border-[#1E3A5F] p-5 shadow-sm hover:border-amber-500/40 transition">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-700">Pending Collection</span>
-            <div className="w-9 h-9 rounded-lg bg-amber-50 flex items-center justify-center text-amber-600">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#7B7B7B]">Pending Collection</span>
+            <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
               <Clock className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-amber-700">
+            <div className="text-2xl font-black text-amber-400 font-mono">
               £{stats.pendingGBP.toLocaleString()}
             </div>
             {stats.pendingUSD > 0 && (
-              <div className="text-xs font-semibold text-amber-800 mt-0.5">
+              <div className="text-xs font-semibold text-amber-400/80 mt-0.5 font-mono">
                 + ${stats.pendingUSD.toLocaleString()} USD
               </div>
             )}
           </div>
-          <div className="mt-2 text-xs text-amber-800 font-medium">Awaiting client bank transfer</div>
+          <div className="mt-2 text-xs text-amber-400/90 font-medium">Awaiting client bank transfer</div>
         </div>
 
         {/* Overdue */}
-        <div className="bg-white rounded-xl border border-gray-200/80 p-5 shadow-sm hover:shadow-md transition">
+        <div className="bg-[#111827] rounded-2xl border border-[#1E3A5F] p-5 shadow-sm hover:border-rose-500/40 transition">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-700">Overdue Invoices</span>
-            <div className="w-9 h-9 rounded-lg bg-rose-50 flex items-center justify-center text-rose-600">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#7B7B7B]">Overdue Invoices</span>
+            <div className="w-9 h-9 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
               <AlertTriangle className="w-5 h-5" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-rose-700">
+            <div className="text-2xl font-black text-rose-400 font-mono">
               {stats.overdueCount}
             </div>
-            <div className="text-xs font-semibold text-rose-800 mt-0.5">
+            <div className="text-xs font-semibold text-rose-400/80 mt-0.5">
               {stats.overdueCount === 0 ? 'All clients up to date' : 'Requires immediate follow-up'}
             </div>
           </div>
-          <div className="mt-2 text-xs text-rose-800 font-medium">Past due date retainers</div>
+          <div className="mt-2 text-xs text-rose-400/90 font-medium">Past due date retainers</div>
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="bg-white p-4 rounded-xl border border-gray-200/80 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+      {/* Filter Bar in Cyber Theme */}
+      <div className="bg-[#111827] p-4 rounded-2xl border border-[#1E3A5F] shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Search */}
         <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+          <Search className="w-4 h-4 text-[#7B7B7B] absolute left-3 top-3" />
           <input
             type="text"
             placeholder="Search client, invoice #, notes..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition"
+            className="w-full pl-9 pr-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white placeholder-gray-500 focus:ring-2 focus:ring-[#00C2FF] focus:border-[#00C2FF] transition outline-none"
           />
         </div>
 
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500">
-            <Filter className="w-3.5 h-3.5" />
+          <div className="flex items-center gap-1.5 text-xs font-medium text-[#7B7B7B]">
+            <Filter className="w-3.5 h-3.5 text-[#00C2FF]" />
             Filters:
           </div>
 
@@ -344,7 +344,7 @@ export default function PaymentsInvoices() {
           <select
             value={selectedWorkspaceFilter}
             onChange={(e) => setSelectedWorkspaceFilter(e.target.value)}
-            className="px-3 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-xs font-medium text-gray-700 focus:ring-2 focus:ring-emerald-500"
+            className="px-3 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-xs font-medium text-gray-200 focus:ring-2 focus:ring-[#00C2FF] outline-none"
           >
             <option value="all">All Workspaces / Clients</option>
             {workspaces.map(w => (
@@ -356,7 +356,7 @@ export default function PaymentsInvoices() {
           <select
             value={selectedStatusFilter}
             onChange={(e) => setSelectedStatusFilter(e.target.value)}
-            className="px-3 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-xs font-medium text-gray-700 focus:ring-2 focus:ring-emerald-500"
+            className="px-3 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-xs font-medium text-gray-200 focus:ring-2 focus:ring-[#00C2FF] outline-none"
           >
             <option value="all">All Statuses</option>
             <option value="paid">Paid</option>
@@ -368,7 +368,7 @@ export default function PaymentsInvoices() {
           <select
             value={currencyFilter}
             onChange={(e) => setCurrencyFilter(e.target.value)}
-            className="px-3 py-1.5 bg-gray-50 border border-gray-300 rounded-lg text-xs font-medium text-gray-700 focus:ring-2 focus:ring-emerald-500"
+            className="px-3 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-xs font-medium text-gray-200 focus:ring-2 focus:ring-[#00C2FF] outline-none"
           >
             <option value="all">All Currencies</option>
             <option value="GBP">GBP (£)</option>
@@ -378,11 +378,11 @@ export default function PaymentsInvoices() {
         </div>
       </div>
 
-      {/* Invoices Table */}
-      <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm overflow-hidden">
+      {/* Invoices Table in Cyber Theme */}
+      <div className="bg-[#111827] rounded-2xl border border-[#1E3A5F] shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-gray-600">
-            <thead className="bg-gray-50/80 text-gray-700 text-xs font-semibold uppercase tracking-wider border-b border-gray-200">
+          <table className="w-full text-left text-sm text-gray-300">
+            <thead className="bg-[#0A0A0A] text-[#7B7B7B] text-xs font-semibold uppercase tracking-wider border-b border-[#1E3A5F]">
               <tr>
                 <th className="py-3.5 px-4">Invoice #</th>
                 <th className="py-3.5 px-4">Client / Brand</th>
@@ -395,11 +395,11 @@ export default function PaymentsInvoices() {
                 <th className="py-3.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-[#1E3A5F]/40">
               {filteredPayments.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-gray-400">
-                    <FileText className="w-12 h-12 mx-auto mb-2 text-gray-300" />
+                  <td colSpan={9} className="py-12 text-center text-gray-500">
+                    <FileText className="w-12 h-12 mx-auto mb-2 text-gray-600" />
                     No invoice records found matching your filters.
                   </td>
                 </tr>
@@ -410,37 +410,37 @@ export default function PaymentsInvoices() {
                   const isOverdue = p.status === 'Overdue';
 
                   return (
-                    <tr key={p.id} className="hover:bg-slate-50/75 transition">
+                    <tr key={p.id} className="hover:bg-[#0A0A0A]/60 transition">
                       {/* Invoice # */}
-                      <td className="py-3.5 px-4 font-mono text-xs font-bold text-gray-900">
+                      <td className="py-3.5 px-4 font-mono text-xs font-bold text-[#00C2FF]">
                         {p.invoiceNumber}
                       </td>
 
                       {/* Client */}
                       <td className="py-3.5 px-4">
-                        <div className="font-semibold text-gray-900">{p.clientName}</div>
-                        {p.notes && <div className="text-xs text-gray-600 line-clamp-1">{p.notes}</div>}
+                        <div className="font-semibold text-white">{p.clientName}</div>
+                        {p.notes && <div className="text-xs text-gray-400 line-clamp-1">{p.notes}</div>}
                       </td>
 
                       {/* Month */}
-                      <td className="py-3.5 px-4 font-medium text-gray-700">
+                      <td className="py-3.5 px-4 font-medium text-gray-300">
                         {p.month}
                       </td>
 
                       {/* Amount */}
-                      <td className="py-3.5 px-4 font-bold text-gray-900">
+                      <td className="py-3.5 px-4 font-bold text-white font-mono">
                         {p.currency === 'GBP' ? '£' : p.currency === 'USD' ? '$' : '€'}
                         {Number(p.amount).toLocaleString()}
-                        <span className="text-[10px] text-gray-600 ml-1 font-semibold">{p.currency}</span>
+                        <span className="text-[10px] text-[#00C2FF] ml-1 font-semibold">{p.currency}</span>
                       </td>
 
                       {/* Billing Date */}
-                      <td className="py-3.5 px-4 text-xs text-gray-700 font-medium">
+                      <td className="py-3.5 px-4 text-xs text-gray-400 font-medium font-mono">
                         {p.billingDate}
                       </td>
 
                       {/* Due Date */}
-                      <td className="py-3.5 px-4 text-xs font-semibold text-gray-800">
+                      <td className="py-3.5 px-4 text-xs font-semibold text-gray-300 font-mono">
                         {p.dueDate}
                       </td>
 
@@ -450,10 +450,10 @@ export default function PaymentsInvoices() {
                           <span
                             className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
                               isPaid 
-                                ? 'bg-green-100 text-green-800 border border-green-200' 
+                                ? 'bg-[#00E5A0]/15 text-[#00E5A0] border border-[#00E5A0]/30' 
                                 : isPending
-                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                : 'bg-rose-100 text-rose-800 border border-rose-200'
+                                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
                             }`}
                           >
                             {isPaid && <CheckCircle2 className="w-3 h-3 mr-1" />}
@@ -467,7 +467,7 @@ export default function PaymentsInvoices() {
                             <button
                               onClick={() => handleQuickStatus(p.id, 'Paid')}
                               title="Quick Mark as Paid"
-                              className="p-1 hover:bg-green-100 text-green-600 rounded-md transition text-xs font-semibold"
+                              className="px-2 py-0.5 bg-[#00E5A0]/20 hover:bg-[#00E5A0]/30 text-[#00E5A0] border border-[#00E5A0]/40 rounded-md transition text-xs font-semibold"
                             >
                               ✓ Paid
                             </button>
@@ -476,7 +476,7 @@ export default function PaymentsInvoices() {
                       </td>
 
                       {/* Payment Method */}
-                      <td className="py-3.5 px-4 text-xs text-gray-700">
+                      <td className="py-3.5 px-4 text-xs text-gray-400">
                         {p.paymentMethod || 'Wise / Wire'}
                       </td>
 
@@ -485,14 +485,14 @@ export default function PaymentsInvoices() {
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             onClick={() => handleOpenEdit(p)}
-                            className="p-1.5 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
+                            className="p-1.5 text-gray-400 hover:text-[#00C2FF] hover:bg-[#0A0A0A] rounded-lg transition"
                             title="Edit Invoice"
                           >
                             <Edit3 className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDelete(p.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                            className="p-1.5 text-gray-400 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition"
                             title="Delete Invoice"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -508,18 +508,18 @@ export default function PaymentsInvoices() {
         </div>
       </div>
 
-      {/* Modal: New / Edit Invoice */}
+      {/* Modal: New / Edit Invoice in Cyber Theme */}
       {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-gray-100 animate-scaleUp">
-            <div className="flex items-center justify-between pb-4 border-b border-gray-100">
-              <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                <CreditCard className="w-5 h-5 text-emerald-600" />
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111827] rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-[#1E3A5F] animate-scaleUp text-white">
+            <div className="flex items-center justify-between pb-4 border-b border-[#1E3A5F]">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-[#00E5A0]" />
                 {editingPayment ? 'Edit Client Invoice' : 'New Client Retainer / Invoice'}
               </h3>
               <button 
                 onClick={() => setShowModal(false)}
-                className="text-gray-400 hover:text-gray-600 text-xl font-bold"
+                className="text-gray-400 hover:text-white text-xl font-bold"
               >
                 ✕
               </button>
@@ -528,7 +528,7 @@ export default function PaymentsInvoices() {
             <form onSubmit={handleSave} className="mt-4 space-y-4">
               {/* Workspace / Client */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label className="block text-xs font-semibold text-gray-300 mb-1">
                   Client / Workspace
                 </label>
                 <select
@@ -541,7 +541,7 @@ export default function PaymentsInvoices() {
                       clientName: ws ? ws.name : formData.clientName
                     });
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   required
                 >
                   {workspaces.map(w => (
@@ -553,26 +553,26 @@ export default function PaymentsInvoices() {
               {/* Invoice Number & Billing Month */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Invoice Number
                   </label>
                   <input
                     type="text"
                     value={formData.invoiceNumber}
                     onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm font-mono text-[#00C2FF] focus:ring-2 focus:ring-[#00C2FF] outline-none"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Billing Month
                   </label>
                   <input
                     type="text"
                     value={formData.month}
                     onChange={(e) => setFormData({ ...formData, month: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                     placeholder="e.g. September 2026"
                     required
                   />
@@ -582,26 +582,26 @@ export default function PaymentsInvoices() {
               {/* Amount & Currency */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Amount
                   </label>
                   <input
                     type="number"
                     value={formData.amount}
                     onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-bold focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm font-bold font-mono text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                     placeholder="e.g. 1500"
                     required
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Currency
                   </label>
                   <select
                     value={formData.currency}
                     onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   >
                     <option value="GBP">GBP (£)</option>
                     <option value="USD">USD ($)</option>
@@ -613,25 +613,25 @@ export default function PaymentsInvoices() {
               {/* Billing Date & Due Date */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Billing Date
                   </label>
                   <input
                     type="date"
                     value={formData.billingDate}
                     onChange={(e) => setFormData({ ...formData, billingDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Due Date
                   </label>
                   <input
                     type="date"
                     value={formData.dueDate}
                     onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   />
                 </div>
               </div>
@@ -639,13 +639,13 @@ export default function PaymentsInvoices() {
               {/* Status & Payment Method */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Status
                   </label>
                   <select
                     value={formData.status}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm font-semibold text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   >
                     <option value="Paid">Paid</option>
                     <option value="Pending">Pending</option>
@@ -653,14 +653,14 @@ export default function PaymentsInvoices() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  <label className="block text-xs font-semibold text-gray-300 mb-1">
                     Payment Method
                   </label>
                   <input
                     type="text"
                     value={formData.paymentMethod}
                     onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                    className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                     placeholder="e.g. Wise Bank Transfer"
                   />
                 </div>
@@ -668,30 +668,30 @@ export default function PaymentsInvoices() {
 
               {/* Notes */}
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                <label className="block text-xs font-semibold text-gray-300 mb-1">
                   Contract / Invoice Notes
                 </label>
                 <textarea
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                   rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500"
+                  className="w-full px-3 py-2 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-sm text-white focus:ring-2 focus:ring-[#00C2FF] outline-none"
                   placeholder="e.g. Monthly cold outbound retainer, includes 2,500 prospects..."
                 />
               </div>
 
               {/* Submit Buttons */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1E3A5F]">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="px-4 py-2 border border-[#1E3A5F] rounded-xl text-sm font-medium text-gray-400 hover:text-white hover:bg-[#0A0A0A] transition"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold shadow transition"
+                  className="px-5 py-2 bg-[#00E5A0] hover:bg-[#00E5A0]/80 text-[#0A0A0A] rounded-xl text-sm font-bold shadow-lg shadow-[#00E5A0]/20 transition"
                 >
                   {editingPayment ? 'Update Invoice' : 'Create Invoice'}
                 </button>

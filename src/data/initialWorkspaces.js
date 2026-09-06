@@ -224,107 +224,15 @@ export const initialPayments = [
   }
 ];
 
-// 4. Initial Tasks & Real-Time Approval Workflows
-export const initialTasks = [
-  {
-    id: 'task_1',
-    title: 'Dispatch Follow-up 1 Batch (300 Leads)',
-    description: 'Filter by juned@ sending mailbox and dispatch Email 2 follow-ups on Crewlix UK campaign. Ensure DNC leads are excluded.',
-    assignedWarriorId: 'warrior_1',
-    assignedWarriorName: 'Farhan (Outreach Lead)',
-    workspaceId: 'ws_crewlixuk',
-    workspaceName: 'Crewlix UK',
-    priority: 'High',
-    dueDate: '07/09/2026 - 02:00 PM',
-    status: 'pending', // 'pending', 'submitted_for_approval', 'approved_completed', 'rejected'
-    submittedAt: null,
-    approvedAt: null,
-    adminFeedback: '',
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'task_2',
-    title: 'Update Positive Replies in Interested Pipeline',
-    description: 'Check inbox for responses and move interested prospects to "Discovery Call Booked" with correct deal values.',
-    assignedWarriorId: 'warrior_1',
-    assignedWarriorName: 'Farhan (Outreach Lead)',
-    workspaceId: 'ws_crewlixuk',
-    workspaceName: 'Crewlix UK',
-    priority: 'Medium',
-    dueDate: '07/09/2026 - 05:00 PM',
-    status: 'submitted_for_approval',
-    submittedAt: new Date(Date.now() - 3600000).toISOString(),
-    approvedAt: null,
-    adminFeedback: '',
-    createdAt: new Date(Date.now() - 7200000).toISOString()
-  }
-];
+// 4. Initial Tasks & Real-Time Approval Workflows (Empty by default)
+export const initialTasks = [];
 
-// 5. Initial Daily Outreach Reports
-export const initialDailyReports = [
-  {
-    id: 'rep_1',
-    warriorId: 'warrior_1',
-    warriorName: 'Farhan (Outreach Lead)',
-    date: '06/09/2026',
-    workspaceId: 'ws_crewlixuk',
-    workspaceName: 'Crewlix UK',
-    initialSent: 150,
-    followUpsSent: 420,
-    repliesReceived: 3,
-    callsBooked: 1,
-    notes: 'Healthy deliverability across all 12 sending mailboxes. Zero spam complaints.',
-    submittedAt: new Date(Date.now() - 86400000).toISOString()
-  }
-];
+// 5. Initial Daily Outreach Reports (Empty by default)
+export const initialDailyReports = [];
 
-// 6. Initial ROS Warriors (Managers)
-export const initialWarriors = [
-  {
-    id: 'warrior_1',
-    username: 'farhan',
-    password: 'warrior2026',
-    name: 'Farhan (Outreach Lead)',
-    email: 'farhan@rosoutreach.com',
-    role: 'warrior',
-    accessLevel: 'edit', // 'edit' (Use & Edit) or 'view' (View Only)
-    allowedWorkspaceIds: ['ws_crewlixuk', 'ws_crewlixukltd'],
-    allowedTabs: ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks'], // Payments is NEVER allowed
-    createdAt: '2026-08-20'
-  },
-  {
-    id: 'warrior_2',
-    username: 'sakib',
-    password: 'warrior2026',
-    name: 'Sakib (Campaign Specialist)',
-    email: 'sakib@rosoutreach.com',
-    role: 'warrior',
-    accessLevel: 'view',
-    allowedWorkspaceIds: ['ws_crewlix'],
-    allowedTabs: ['dispatcher', 'pipeline', 'leads', 'tasks'],
-    createdAt: '2026-08-25'
-  }
-];
+// 6. ROS Warriors (Managers) - No demo accounts; created by Admin
+export const initialWarriors = [];
 
-// 7. Initial Warrior Action Timeline (Live Action Spy / Audit)
-export const initialWarriorTimeline = [
-  {
-    id: 'tl_1',
-    warriorId: 'warrior_1',
-    warriorName: 'Farhan (Outreach Lead)',
-    actionType: 'batch_copied',
-    workspaceName: 'Crewlix UK',
-    details: 'Copied 50 leads for Email 2 Mail Merge dispatch',
-    timestamp: new Date(Date.now() - 1800000).toISOString()
-  },
-  {
-    id: 'tl_2',
-    warriorId: 'warrior_1',
-    warriorName: 'Farhan (Outreach Lead)',
-    actionType: 'task_submitted',
-    workspaceName: 'Crewlix UK',
-    details: 'Submitted task: "Update Positive Replies in Interested Pipeline"',
-    timestamp: new Date(Date.now() - 3600000).toISOString()
-  }
-];
+// 7. Warrior Action Timeline (Live Action Spy / Audit)
+export const initialWarriorTimeline = [];
 
