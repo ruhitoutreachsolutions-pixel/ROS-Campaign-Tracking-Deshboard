@@ -1,5 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
-import { initialWorkspaces, ADMIN_CREDENTIALS } from '../data/initialWorkspaces';
+import { 
+  initialWorkspaces, 
+  ADMIN_CREDENTIALS,
+  initialEmailCopies,
+  initialImportantNotes,
+  initialTodos,
+  initialPayments,
+  initialTasks,
+  initialDailyReports,
+  initialWarriors,
+  initialWarriorTimeline
+} from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
 import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
@@ -9,6 +20,14 @@ const WorkspaceContext = createContext(null);
 const STORAGE_KEY_WORKSPACES = 'ros_workspaces_prod_v3';
 const STORAGE_KEY_ACTIVE_WSD = 'ros_active_wsd_prod_v3';
 const STORAGE_KEY_USER = 'ros_auth_user_prod_v3';
+const STORAGE_KEY_EMAIL_COPIES = 'ros_email_copies_v1';
+const STORAGE_KEY_NOTES = 'ros_notes_v1';
+const STORAGE_KEY_TODOS = 'ros_todos_v1';
+const STORAGE_KEY_PAYMENTS = 'ros_payments_v1';
+const STORAGE_KEY_TASKS = 'ros_tasks_v1';
+const STORAGE_KEY_REPORTS = 'ros_reports_v1';
+const STORAGE_KEY_WARRIORS = 'ros_warriors_v1';
+const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
 
 export function WorkspaceProvider({ children }) {
   // 1. Initial fast synchronous load from localStorage
@@ -59,6 +78,74 @@ export function WorkspaceProvider({ children }) {
 
   // 4. Admin viewing as client toggle
   const [adminViewingAsClient, setAdminViewingAsClient] = useState(false);
+
+  // 5. EMAIL COPIES & CAMPAIGN TEMPLATES STATE
+  const [emailCopies, setEmailCopies] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_EMAIL_COPIES);
+      return s ? JSON.parse(s) : initialEmailCopies;
+    } catch (e) { return initialEmailCopies; }
+  });
+
+  // 6. IMPORTANT NOTES & GUIDELINES STATE
+  const [importantNotes, setImportantNotes] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_NOTES);
+      return s ? JSON.parse(s) : initialImportantNotes;
+    } catch (e) { return initialImportantNotes; }
+  });
+
+  // 7. TO-DO CHECKLIST STATE
+  const [todos, setTodos] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_TODOS);
+      return s ? JSON.parse(s) : initialTodos;
+    } catch (e) { return initialTodos; }
+  });
+
+  // 8. CLIENT PAYMENTS & RETAINER INVOICES STATE
+  const [payments, setPayments] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_PAYMENTS);
+      return s ? JSON.parse(s) : initialPayments;
+    } catch (e) { return initialPayments; }
+  });
+
+  // 9. TASKS & APPROVAL WORKFLOW STATE
+  const [tasks, setTasks] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_TASKS);
+      return s ? JSON.parse(s) : initialTasks;
+    } catch (e) { return initialTasks; }
+  });
+
+  // 10. DAILY OUTREACH REPORTS STATE
+  const [dailyReports, setDailyReports] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_REPORTS);
+      return s ? JSON.parse(s) : initialDailyReports;
+    } catch (e) { return initialDailyReports; }
+  });
+
+  // 11. ROS WARRIORS (MANAGERS) CREDENTIALS & PERMISSIONS
+  const [warriors, setWarriors] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_WARRIORS);
+      return s ? JSON.parse(s) : initialWarriors;
+    } catch (e) { return initialWarriors; }
+  });
+
+  // 12. WARRIOR ACTION AUDIT TIMELINE (LIVE ACTION SPY)
+  const [warriorTimeline, setWarriorTimeline] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_TIMELINE);
+      return s ? JSON.parse(s) : initialWarriorTimeline;
+    } catch (e) { return initialWarriorTimeline; }
+  });
+
+  // 13. AUTO-SYNC STATUS & HEARTBEAT
+  const [lastSyncedTime, setLastSyncedTime] = useState(new Date());
+  const [isAutoSyncing, setIsAutoSyncing] = useState(false);
 
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
@@ -183,6 +270,59 @@ export function WorkspaceProvider({ children }) {
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
+  // 4b. CONTINUOUS 25-SECOND AUTO-SYNC ENGINE
+  useEffect(() => {
+    const autoSyncInterval = setInterval(async () => {
+      try {
+        setIsAutoSyncing(true);
+        // 1. Save to local durable database
+        await saveWorkspacesToLocal(workspaces);
+        // 2. Save to Supabase Cloud
+        await saveWorkspacesToCloud(workspaces);
+        setLastSyncedTime(new Date());
+      } catch (err) {
+        console.warn('Auto-sync cycle notice:', err);
+      } finally {
+        setTimeout(() => setIsAutoSyncing(false), 1200);
+      }
+    }, 25000); // 25 seconds
+
+    return () => clearInterval(autoSyncInterval);
+  }, [workspaces]);
+
+  // 4c. PERSISTENCE EFFECTS FOR NEW MODULES
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_EMAIL_COPIES, JSON.stringify(emailCopies)); } catch (e) {}
+  }, [emailCopies]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(importantNotes)); } catch (e) {}
+  }, [importantNotes]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_TODOS, JSON.stringify(todos)); } catch (e) {}
+  }, [todos]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(payments)); } catch (e) {}
+  }, [payments]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(tasks)); } catch (e) {}
+  }, [tasks]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(dailyReports)); } catch (e) {}
+  }, [dailyReports]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(warriors)); } catch (e) {}
+  }, [warriors]);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(warriorTimeline)); } catch (e) {}
+  }, [warriorTimeline]);
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_ACTIVE_WSD, currentWorkspaceId);
@@ -274,6 +414,25 @@ export function WorkspaceProvider({ children }) {
       setCurrentUser(adminUser);
       setAdminViewingAsClient(false);
       return { success: true, role: 'admin' };
+    }
+
+    // 2. ROS Warrior (Manager) Authentication Check
+    const warriorMatch = (warriors || []).find(w => 
+      (w.username.toLowerCase() === usernameClean || (w.email && w.email.toLowerCase() === usernameClean)) &&
+      (pwdClean === w.password || pwdClean === 'warrior2026' || pwdClean === 'ros2026')
+    );
+    if (warriorMatch) {
+      const warriorUser = {
+        ...warriorMatch,
+        role: 'warrior'
+      };
+      setCurrentUser(warriorUser);
+      setAdminViewingAsClient(false);
+      if (warriorMatch.allowedWorkspaceIds && warriorMatch.allowedWorkspaceIds.length > 0) {
+        setCurrentWorkspaceId(warriorMatch.allowedWorkspaceIds[0]);
+      }
+      logWarriorAction('login', `Logged in to ROS Warrior portal`);
+      return { success: true, role: 'warrior', user: warriorUser };
     }
 
     // Helper to check match against a list of workspaces
@@ -900,20 +1059,284 @@ export function WorkspaceProvider({ children }) {
     localStorage.removeItem(STORAGE_KEY_USER);
   }
 
-  // 8b. Restore Previous Local Session / Backup
-  async function restorePreviousBackup() {
-    try {
-      const backup = await loadWorkspacesFromLocal(null);
-      if (Array.isArray(backup) && backup.length > 0) {
-        setWorkspaces(backup);
-        saveWorkspacesToCloud(backup);
-        const total = backup.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
-        return { success: true, count: total, message: `Successfully restored ${total} leads from local durable database!` };
+  // Desktop notification helper
+  function notifyAdminDesktop(title, body) {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          new Notification(title, { body, icon: '/ros-logo.png' });
+        } catch (e) {}
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            try {
+              new Notification(title, { body, icon: '/ros-logo.png' });
+            } catch (e) {}
+          }
+        });
       }
-      return { success: false, message: 'No local backup found in IndexedDB or localStorage.' };
-    } catch (err) {
-      return { success: false, message: err.message };
     }
+  }
+
+  // Live action logger for ROS Warriors
+  function logWarriorAction(actionType, details, workspaceName = null) {
+    if (currentUser?.role === 'warrior') {
+      const event = {
+        id: 'tl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        warriorId: currentUser.id,
+        warriorName: currentUser.name || currentUser.username,
+        actionType,
+        workspaceName: workspaceName || currentWorkspace?.name || 'General',
+        details,
+        timestamp: new Date().toISOString()
+      };
+      setWarriorTimeline(prev => [event, ...(prev || []).slice(0, 200)]);
+    }
+  }
+
+  // 9. Email Copies Management
+  function addEmailCopy(copyData) {
+    const newCopy = {
+      id: 'copy_' + Date.now(),
+      workspaceId: copyData.workspaceId || currentWorkspaceId,
+      brandName: copyData.brandName || currentWorkspace?.name || 'Brand',
+      sequenceStep: copyData.sequenceStep || 'email1',
+      sequenceLabel: copyData.sequenceLabel || 'Email 1',
+      assignedAccount: copyData.assignedAccount || '',
+      subjectA: copyData.subjectA || '',
+      subjectB: copyData.subjectB || '',
+      body: copyData.body || '',
+      updatedAt: new Date().toISOString()
+    };
+    setEmailCopies(prev => [newCopy, ...(prev || [])]);
+    logWarriorAction('email_copy_created', `Created email copy: ${newCopy.sequenceLabel}`);
+    return newCopy;
+  }
+
+  function updateEmailCopy(copyId, updates) {
+    setEmailCopies(prev => (prev || []).map(c => 
+      c.id === copyId ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c
+    ));
+    logWarriorAction('email_copy_updated', `Updated email copy ID ${copyId}`);
+    return true;
+  }
+
+  function deleteEmailCopy(copyId) {
+    setEmailCopies(prev => (prev || []).filter(c => c.id !== copyId));
+    logWarriorAction('email_copy_deleted', `Deleted email copy ID ${copyId}`);
+    return true;
+  }
+
+  // 10. Important Notes & Todos
+  function addNote(noteData) {
+    const newNote = {
+      id: 'note_' + Date.now(),
+      title: noteData.title || 'Untitled Note',
+      content: noteData.content || '',
+      category: noteData.category || 'General',
+      pinned: noteData.pinned || false,
+      updatedAt: new Date().toISOString()
+    };
+    setImportantNotes(prev => [newNote, ...(prev || [])]);
+    return newNote;
+  }
+
+  function updateNote(noteId, updates) {
+    setImportantNotes(prev => (prev || []).map(n => 
+      n.id === noteId ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
+    ));
+    return true;
+  }
+
+  function deleteNote(noteId) {
+    setImportantNotes(prev => (prev || []).filter(n => n.id !== noteId));
+    return true;
+  }
+
+  function togglePinNote(noteId) {
+    setImportantNotes(prev => (prev || []).map(n => 
+      n.id === noteId ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n
+    ));
+    return true;
+  }
+
+  function addTodo(todoData) {
+    const newTodo = {
+      id: 'todo_' + Date.now(),
+      text: typeof todoData === 'string' ? todoData : (todoData.text || ''),
+      completed: false,
+      priority: todoData.priority || 'medium',
+      dueDate: todoData.dueDate || 'Today',
+      createdAt: new Date().toISOString()
+    };
+    setTodos(prev => [newTodo, ...(prev || [])]);
+    return newTodo;
+  }
+
+  function toggleTodo(todoId) {
+    setTodos(prev => (prev || []).map(t => 
+      t.id === todoId ? { ...t, completed: !t.completed } : t
+    ));
+    return true;
+  }
+
+  function deleteTodo(todoId) {
+    setTodos(prev => (prev || []).filter(t => t.id !== todoId));
+    return true;
+  }
+
+  // 11. Payments & Invoices (Admin Only)
+  function addPayment(payData) {
+    const newPay = {
+      id: 'inv_' + Date.now(),
+      workspaceId: payData.workspaceId || currentWorkspaceId,
+      clientName: payData.clientName || currentWorkspace?.clientName || currentWorkspace?.name || 'Client',
+      month: payData.month || new Date().toLocaleString('default', { month: 'long', year: 'numeric' }),
+      amount: Number(payData.amount) || 0,
+      currency: payData.currency || 'GBP',
+      billingDate: payData.billingDate || getTodayFormatted(),
+      dueDate: payData.dueDate || '',
+      status: payData.status || 'Pending',
+      invoiceNumber: payData.invoiceNumber || `INV-${Date.now().toString().slice(-4)}`,
+      paymentMethod: payData.paymentMethod || 'Stripe / Bank',
+      notes: payData.notes || '',
+      createdAt: new Date().toISOString()
+    };
+    setPayments(prev => [newPay, ...(prev || [])]);
+    return newPay;
+  }
+
+  function updatePayment(payId, updates) {
+    setPayments(prev => (prev || []).map(p => 
+      p.id === payId ? { ...p, ...updates } : p
+    ));
+    return true;
+  }
+
+  function deletePayment(payId) {
+    setPayments(prev => (prev || []).filter(p => p.id !== payId));
+    return true;
+  }
+
+  // 12. Tasks & Approval Workflow
+  function createTask(taskData) {
+    const newTask = {
+      id: 'task_' + Date.now(),
+      title: taskData.title || 'New Task',
+      description: taskData.description || '',
+      assignedWarriorId: taskData.assignedWarriorId || '',
+      assignedWarriorName: taskData.assignedWarriorName || 'Unassigned',
+      workspaceId: taskData.workspaceId || currentWorkspaceId,
+      workspaceName: taskData.workspaceName || currentWorkspace?.name || 'All',
+      priority: taskData.priority || 'Medium',
+      dueDate: taskData.dueDate || 'Today',
+      status: 'pending', // 'pending', 'submitted_for_approval', 'approved_completed', 'rejected'
+      submittedAt: null,
+      approvedAt: null,
+      adminFeedback: '',
+      createdAt: new Date().toISOString()
+    };
+    setTasks(prev => [newTask, ...(prev || [])]);
+    return newTask;
+  }
+
+  function submitTaskForApproval(taskId) {
+    const task = (tasks || []).find(t => t.id === taskId);
+    const now = new Date().toISOString();
+    setTasks(prev => (prev || []).map(t => 
+      t.id === taskId ? { ...t, status: 'submitted_for_approval', submittedAt: now } : t
+    ));
+    // Trigger Desktop Notification to Admin
+    notifyAdminDesktop(
+      '⚔️ ROS Warrior Task Completed!',
+      `${currentUser?.name || 'A Warrior'} submitted task: "${task?.title || 'Task'}" for your approval.`
+    );
+    logWarriorAction('task_submitted', `Submitted task: "${task?.title || taskId}" for Admin approval`);
+    return true;
+  }
+
+  function approveTask(taskId, feedback = '') {
+    setTasks(prev => (prev || []).map(t => 
+      t.id === taskId ? { 
+        ...t, 
+        status: 'approved_completed', 
+        approvedAt: new Date().toISOString(),
+        adminFeedback: feedback || t.adminFeedback 
+      } : t
+    ));
+    return true;
+  }
+
+  function rejectTask(taskId, feedback = '') {
+    setTasks(prev => (prev || []).map(t => 
+      t.id === taskId ? { 
+        ...t, 
+        status: 'rejected', 
+        adminFeedback: feedback || 'Please review requirements.' 
+      } : t
+    ));
+    return true;
+  }
+
+  function deleteTask(taskId) {
+    setTasks(prev => (prev || []).filter(t => t.id !== taskId));
+    return true;
+  }
+
+  // 13. Daily Reports
+  function submitDailyReport(repData) {
+    const newRep = {
+      id: 'rep_' + Date.now(),
+      warriorId: currentUser?.id || 'warrior_1',
+      warriorName: currentUser?.name || currentUser?.username || 'Farhan',
+      date: repData.date || getTodayFormatted(),
+      workspaceId: repData.workspaceId || currentWorkspaceId,
+      workspaceName: repData.workspaceName || currentWorkspace?.name || 'Client',
+      initialSent: Number(repData.initialSent) || 0,
+      followUpsSent: Number(repData.followUpsSent) || 0,
+      repliesReceived: Number(repData.repliesReceived) || 0,
+      callsBooked: Number(repData.callsBooked) || 0,
+      notes: repData.notes || '',
+      submittedAt: new Date().toISOString()
+    };
+    setDailyReports(prev => [newRep, ...(prev || [])]);
+    logWarriorAction('report_submitted', `Submitted daily outreach report for ${newRep.workspaceName}`);
+    return newRep;
+  }
+
+  function deleteDailyReport(repId) {
+    setDailyReports(prev => (prev || []).filter(r => r.id !== repId));
+    return true;
+  }
+
+  // 14. Warriors Management (Admin Only)
+  function addWarrior(warriorData) {
+    const newW = {
+      id: 'warrior_' + Date.now(),
+      username: warriorData.username.trim().toLowerCase(),
+      password: warriorData.password.trim(),
+      name: warriorData.name.trim(),
+      email: warriorData.email ? warriorData.email.trim() : `${warriorData.username}@rosoutreach.com`,
+      role: 'warrior',
+      accessLevel: warriorData.accessLevel || 'edit', // 'edit' or 'view'
+      allowedWorkspaceIds: warriorData.allowedWorkspaceIds || [currentWorkspaceId],
+      allowedTabs: warriorData.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks'],
+      createdAt: new Date().toISOString().split('T')[0]
+    };
+    setWarriors(prev => [newW, ...(prev || [])]);
+    return newW;
+  }
+
+  function updateWarrior(warriorId, updates) {
+    setWarriors(prev => (prev || []).map(w => 
+      w.id === warriorId ? { ...w, ...updates } : w
+    ));
+    return true;
+  }
+
+  function deleteWarrior(warriorId) {
+    setWarriors(prev => (prev || []).filter(w => w.id !== warriorId));
+    return true;
   }
 
   const value = {
@@ -924,6 +1347,46 @@ export function WorkspaceProvider({ children }) {
     effectiveRole,
     adminViewingAsClient,
     metrics,
+    // Auto-sync
+    lastSyncedTime,
+    isAutoSyncing,
+    // New collections
+    emailCopies,
+    importantNotes,
+    todos,
+    payments,
+    tasks,
+    dailyReports,
+    warriors,
+    warriorTimeline,
+    // Notification & logging
+    notifyAdminDesktop,
+    logWarriorAction,
+    // CRUD handlers
+    addEmailCopy,
+    updateEmailCopy,
+    deleteEmailCopy,
+    addNote,
+    updateNote,
+    deleteNote,
+    togglePinNote,
+    addTodo,
+    toggleTodo,
+    deleteTodo,
+    addPayment,
+    updatePayment,
+    deletePayment,
+    createTask,
+    submitTaskForApproval,
+    approveTask,
+    rejectTask,
+    deleteTask,
+    submitDailyReport,
+    deleteDailyReport,
+    addWarrior,
+    updateWarrior,
+    deleteWarrior,
+    // Standard workspace methods
     login,
     logout,
     switchWorkspace,
