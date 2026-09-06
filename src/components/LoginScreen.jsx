@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import RosLogo from './RosLogo';
-import { Lock, User, ArrowRight, KeyRound, AlertCircle, Loader2, ShieldCheck, Users, Briefcase } from 'lucide-react';
+import { Lock, User, ArrowRight, KeyRound, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function LoginScreen() {
   const { login } = useWorkspace();
@@ -28,12 +28,6 @@ export default function LoginScreen() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickFill = (u, p) => {
-    setUsername(u);
-    setPassword(p);
-    setError('');
   };
 
   return (
@@ -64,8 +58,8 @@ export default function LoginScreen() {
           
           <div className="flex items-center justify-between pb-5 mb-5 border-b border-[#1E3A5F]">
             <div>
-              <h2 className="text-base font-bold text-white">Universal Authentication</h2>
-              <p className="text-xs text-[#7B7B7B]">Admin, ROS Warrior Manager, or Client Portal</p>
+              <h2 className="text-base font-bold text-white">Secure Portal Login</h2>
+              <p className="text-xs text-[#7B7B7B]">Enter your credentials to access campaign telemetry</p>
             </div>
             <span className="p-2 rounded-lg bg-[#1E3A5F]/50 text-[#00E5A0]">
               <KeyRound className="w-4 h-4" />
@@ -134,50 +128,6 @@ export default function LoginScreen() {
               )}
             </button>
           </form>
-
-          {/* Quick Login Role Selectors */}
-          <div className="mt-6 pt-5 border-t border-[#1E3A5F]">
-            <span className="text-[11px] font-semibold text-gray-400 block mb-2.5">
-              Quick Role Preview & Login:
-            </span>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('ruhit', 'ruhit2026')}
-                className="p-2 rounded-xl bg-[#0A0A0A] border border-[#1E3A5F] hover:border-[#00C2FF] text-left transition group"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-white group-hover:text-[#00C2FF]">
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#00C2FF]" />
-                  Admin
-                </div>
-                <div className="text-[10px] text-gray-500 font-mono mt-0.5">ruhit</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill('farhan', 'warrior2026')}
-                className="p-2 rounded-xl bg-[#0A0A0A] border border-[#1E3A5F] hover:border-sky-400 text-left transition group"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-white group-hover:text-sky-400">
-                  <Users className="w-3.5 h-3.5 text-sky-400" />
-                  Warrior
-                </div>
-                <div className="text-[10px] text-gray-500 font-mono mt-0.5">farhan</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill('crewlix', 'crewlix2026')}
-                className="p-2 rounded-xl bg-[#0A0A0A] border border-[#1E3A5F] hover:border-[#00E5A0] text-left transition group"
-              >
-                <div className="flex items-center gap-1.5 text-xs font-bold text-white group-hover:text-[#00E5A0]">
-                  <Briefcase className="w-3.5 h-3.5 text-[#00E5A0]" />
-                  Client
-                </div>
-                <div className="text-[10px] text-gray-500 font-mono mt-0.5">crewlix</div>
-              </button>
-            </div>
-          </div>
 
         </div>
 
