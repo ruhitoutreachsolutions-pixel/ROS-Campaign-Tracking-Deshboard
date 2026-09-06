@@ -49,18 +49,43 @@ export default function App() {
   const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
   const [selectedLeadForModal, setSelectedLeadForModal] = useState(null);
 
-  // If user is not logged in, show Login Screen
-  if (!currentUser) {
-    return <LoginScreen />;
-  }
-
+  // Unconditional Hooks (Must be called before any return statements)
   const isAdmin = effectiveRole === 'admin';
   const isWarrior = effectiveRole === 'warrior';
 
-  // Count pending approvals for badge
   const pendingApprovalsCount = useMemo(() => {
-    return (tasks || []).filter(t => t.status === 'submitted_for_approval').length;
+    return (tasks || []).filter(t => t && t.status === 'submitted_for_approval').length;
   }, [tasks]);
+
+  const safeMetrics = useMemo(() => {
+    return metrics || { interestedCount: 0, totalLeads: 0 };
+  }, [metrics]);
+
+  const availableTabs = useMemo(() => {
+    const tabs = [
+      { id: 'dispatcher', label: 'Mail Merge Dispatcher', icon: Send, badge: 'Fast', role: 'both' },
+      { id: 'pipeline', label: 'Interested Pipeline', icon: Target, badge: `${safeMetrics.interestedCount || 0}`, role: 'both' },
+      { id: 'telemetry', label: 'Campaign Analytics', icon: BarChart3, role: 'both' },
+      { id: 'leads', label: 'All Leads Sheet', icon: Table, badge: `${safeMetrics.totalLeads || 0}`, role: 'both' },
+      { id: 'email-copies', label: 'Email Copies & Notes', icon: Mail, role: 'both' },
+      { id: 'payments', label: 'Payments & Invoices', icon: CreditCard, role: 'admin' },
+      { 
+        id: 'tasks', 
+        label: 'Tasks & Approvals', 
+        icon: CheckSquare, 
+        badge: pendingApprovalsCount > 0 ? `${pendingApprovalsCount}` : null,
+        badgeColor: 'amber',
+        role: 'both' 
+      }
+    ];
+
+    if (isAdmin) return tabs;
+    if (isWarrior) {
+      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks'];
+      return tabs.filter(t => t.id !== 'payments' && allowed.includes(t.id));
+    }
+    return tabs;
+  }, [isAdmin, isWarrior, currentUser, safeMetrics, pendingApprovalsCount]);
 
   // Handle lead click from any subcomponent
   const handleOpenLeadDetail = (lead) => {
@@ -77,34 +102,10 @@ export default function App() {
     setWorkspaceModalOpen(true);
   };
 
-  // Define tab navigation based on role
-  const allTabs = [
-    { id: 'dispatcher', label: 'Mail Merge Dispatcher', icon: Send, badge: 'Fast', role: 'both' },
-    { id: 'pipeline', label: 'Interested Pipeline', icon: Target, badge: `${metrics.interestedCount}`, role: 'both' },
-    { id: 'telemetry', label: 'Campaign Analytics', icon: BarChart3, role: 'both' },
-    { id: 'leads', label: 'All Leads Sheet', icon: Table, badge: `${metrics.totalLeads}`, role: 'both' },
-    { id: 'email-copies', label: 'Email Copies & Notes', icon: Mail, role: 'both' },
-    { id: 'payments', label: 'Payments & Invoices', icon: CreditCard, role: 'admin' }, // Strictly Admin only!
-    { 
-      id: 'tasks', 
-      label: 'Tasks & Approvals', 
-      icon: CheckSquare, 
-      badge: pendingApprovalsCount > 0 ? `${pendingApprovalsCount}` : null,
-      badgeColor: 'amber',
-      role: 'both' 
-    }
-  ];
-
-  // Filter tabs for ROS Warriors
-  const availableTabs = allTabs.filter(tab => {
-    if (isAdmin) return true;
-    if (isWarrior) {
-      if (tab.id === 'payments') return false; // Strictly hidden from warriors
-      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks'];
-      return allowed.includes(tab.id);
-    }
-    return false;
-  });
+  // If user is not logged in, show Login Screen
+  if (!currentUser) {
+    return <LoginScreen />;
+  }
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col font-['Space_Grotesk'] selection:bg-[#00C2FF] selection:text-[#0A0A0A]">

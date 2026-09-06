@@ -38,14 +38,17 @@ export function WorkspaceProvider({ children }) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
           const merged = [...parsed];
-          initialWorkspaces.forEach(initWs => {
+          (initialWorkspaces || []).forEach(initWs => {
+            if (!initWs) return;
             const index = merged.findIndex(w => 
-              (w.id && w.id === initWs.id) || 
-              (w.clientCredentials?.username && initWs.clientCredentials?.username && w.clientCredentials.username.toLowerCase() === initWs.clientCredentials.username.toLowerCase())
+              w && (
+                (w.id && w.id === initWs.id) || 
+                (w.clientCredentials?.username && initWs.clientCredentials?.username && String(w.clientCredentials.username).toLowerCase() === String(initWs.clientCredentials.username).toLowerCase())
+              )
             );
             if (index === -1) {
               merged.push(initWs);
-            } else {
+            } else if (merged[index]) {
               merged[index] = { ...initWs, ...merged[index] };
             }
           });
@@ -55,7 +58,7 @@ export function WorkspaceProvider({ children }) {
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
     }
-    return initialWorkspaces;
+    return initialWorkspaces || [];
   });
 
   // 2. Load active workspace ID
@@ -83,64 +86,72 @@ export function WorkspaceProvider({ children }) {
   const [emailCopies, setEmailCopies] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_EMAIL_COPIES);
-      return s ? JSON.parse(s) : initialEmailCopies;
-    } catch (e) { return initialEmailCopies; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialEmailCopies || []);
+    } catch (e) { return initialEmailCopies || []; }
   });
 
   // 6. IMPORTANT NOTES & GUIDELINES STATE
   const [importantNotes, setImportantNotes] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_NOTES);
-      return s ? JSON.parse(s) : initialImportantNotes;
-    } catch (e) { return initialImportantNotes; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialImportantNotes || []);
+    } catch (e) { return initialImportantNotes || []; }
   });
 
   // 7. TO-DO CHECKLIST STATE
   const [todos, setTodos] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_TODOS);
-      return s ? JSON.parse(s) : initialTodos;
-    } catch (e) { return initialTodos; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialTodos || []);
+    } catch (e) { return initialTodos || []; }
   });
 
   // 8. CLIENT PAYMENTS & RETAINER INVOICES STATE
   const [payments, setPayments] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_PAYMENTS);
-      return s ? JSON.parse(s) : initialPayments;
-    } catch (e) { return initialPayments; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialPayments || []);
+    } catch (e) { return initialPayments || []; }
   });
 
   // 9. TASKS & APPROVAL WORKFLOW STATE
   const [tasks, setTasks] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_TASKS);
-      return s ? JSON.parse(s) : initialTasks;
-    } catch (e) { return initialTasks; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialTasks || []);
+    } catch (e) { return initialTasks || []; }
   });
 
   // 10. DAILY OUTREACH REPORTS STATE
   const [dailyReports, setDailyReports] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_REPORTS);
-      return s ? JSON.parse(s) : initialDailyReports;
-    } catch (e) { return initialDailyReports; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialDailyReports || []);
+    } catch (e) { return initialDailyReports || []; }
   });
 
   // 11. ROS WARRIORS (MANAGERS) CREDENTIALS & PERMISSIONS
   const [warriors, setWarriors] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_WARRIORS);
-      return s ? JSON.parse(s) : initialWarriors;
-    } catch (e) { return initialWarriors; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialWarriors || []);
+    } catch (e) { return initialWarriors || []; }
   });
 
   // 12. WARRIOR ACTION AUDIT TIMELINE (LIVE ACTION SPY)
   const [warriorTimeline, setWarriorTimeline] = useState(() => {
     try {
       const s = localStorage.getItem(STORAGE_KEY_TIMELINE);
-      return s ? JSON.parse(s) : initialWarriorTimeline;
-    } catch (e) { return initialWarriorTimeline; }
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialWarriorTimeline || []);
+    } catch (e) { return initialWarriorTimeline || []; }
   });
 
   // 13. AUTO-SYNC STATUS & HEARTBEAT
