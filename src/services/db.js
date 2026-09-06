@@ -80,7 +80,8 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
           : (typeof item.sequence_config === 'string' ? JSON.parse(item.sequence_config) : {}),
         activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
         leads: Array.isArray(item.leads) ? item.leads : (typeof item.leads === 'string' ? JSON.parse(item.leads) : []),
-        createdAt: item.created_at || new Date().toISOString().split('T')[0]
+        createdAt: item.created_at || new Date().toISOString().split('T')[0],
+        updatedAt: item.updated_at || item.created_at || new Date().toISOString()
       }));
     }
   } catch (err) {
@@ -98,6 +99,9 @@ export async function saveWorkspacesToCloud(workspaces) {
   if (!supabase) return false;
 
   try {
+    let hasError = false;
+    let lastError = null;
+
     for (const ws of workspaces) {
       const payload = {
         id: ws.id,
@@ -111,7 +115,7 @@ export async function saveWorkspacesToCloud(workspaces) {
         sequence_config: ws.sequenceConfig || {},
         activity_log: ws.activityLog || [],
         leads: ws.leads || [],
-        updated_at: new Date().toISOString()
+        updated_at: ws.updatedAt || new Date().toISOString()
       };
 
       const { error } = await supabase
@@ -120,9 +124,11 @@ export async function saveWorkspacesToCloud(workspaces) {
 
       if (error) {
         console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
+        hasError = true;
+        lastError = error;
       }
     }
-    return true;
+    return !hasError;
   } catch (err) {
     console.warn('Supabase save failed:', err);
     return false;

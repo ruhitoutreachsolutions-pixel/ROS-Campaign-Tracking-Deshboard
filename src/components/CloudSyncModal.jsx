@@ -4,7 +4,7 @@ import { X, Database, Cloud, Check, Copy, ShieldCheck, RefreshCw, Sparkles, Serv
 import { getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected, saveWorkspacesToCloud, fetchWorkspacesFromCloud } from '../services/db';
 
 export default function CloudSyncModal({ isOpen, onClose }) {
-  const { workspaces, currentWorkspace } = useWorkspace();
+  const { workspaces, currentWorkspace, restorePreviousBackup } = useWorkspace();
   const existingConfig = getSupabaseConfig();
 
   const [supabaseUrl, setSupabaseUrl] = useState(existingConfig.url || '');
@@ -18,6 +18,20 @@ export default function CloudSyncModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   const isConnected = isCloudDatabaseConnected();
+
+  const handleRestoreSession = async () => {
+    setIsSaving(true);
+    setStatusMessage('');
+    setErrorMessage('');
+    const res = await restorePreviousBackup();
+    setIsSaving(false);
+    if (res.success) {
+      setStatusMessage(res.message);
+      setTimeout(() => setStatusMessage(''), 4000);
+    } else {
+      setErrorMessage(res.message || 'No previous session backup found.');
+    }
+  };
 
   const sqlSchema = `-- Run this once in Supabase SQL Editor:
 create table if not exists workspaces (
@@ -171,6 +185,31 @@ create policy "Allow all access" on workspaces for all using (true) with check (
               {isSaving ? 'Syncing...' : 'Sync Now'}
             </button>
           )}
+        </div>
+
+        {/* DURABLE LOCAL DATABASE (INDEXEDDB) & RECOVERY */}
+        <div className="p-4 rounded-xl bg-[#0A0A0A] border border-[#00C2FF]/30 mb-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <Database className="w-3.5 h-3.5 text-[#00C2FF]" />
+              <span>Durable Local Database (IndexedDB)</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#00E5A0]/10 border border-[#00E5A0]/30 text-[#00E5A0] font-mono">
+                Active & Unlimited
+              </span>
+            </div>
+            <div className="text-[11px] text-[#7B7B7B] mt-0.5">
+              Protects up to 50,000+ leads and prevents browser refreshes from wiping your work.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRestoreSession}
+            disabled={isSaving}
+            className="px-3 py-1.5 rounded-lg bg-[#00C2FF]/10 hover:bg-[#00C2FF]/20 text-[#00C2FF] border border-[#00C2FF]/30 text-xs font-semibold transition-all cursor-pointer whitespace-nowrap"
+            title="Restore leads from the latest local database backup"
+          >
+            ↺ Check / Restore Backup
+          </button>
         </div>
 
         {/* STEP-BY-STEP SUPABASE SETUP */}

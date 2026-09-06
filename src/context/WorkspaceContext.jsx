@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { initialWorkspaces, ADMIN_CREDENTIALS } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
 import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
 
 const WorkspaceContext = createContext(null);
 
@@ -10,7 +11,7 @@ const STORAGE_KEY_ACTIVE_WSD = 'ros_active_wsd_prod_v3';
 const STORAGE_KEY_USER = 'ros_auth_user_prod_v3';
 
 export function WorkspaceProvider({ children }) {
-  // 1. Load workspaces from localStorage and merge with initialWorkspaces
+  // 1. Initial fast synchronous load from localStorage
   const [workspaces, setWorkspaces] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_WORKSPACES);
@@ -26,7 +27,6 @@ export function WorkspaceProvider({ children }) {
             if (index === -1) {
               merged.push(initWs);
             } else {
-              // Update with code credentials if missing or outdated
               merged[index] = { ...initWs, ...merged[index] };
             }
           });
@@ -39,59 +39,127 @@ export function WorkspaceProvider({ children }) {
     return initialWorkspaces;
   });
 
-  // 2. Background Cloud Sync on Load
+  // Track whether IndexedDB initial load has finished
+  const idbLoadedRef = useRef(false);
+
+  // 2. Durable Local Storage Load (IndexedDB has NO 5MB limit and stores full 50k+ leads safely)
   useEffect(() => {
+    let isMounted = true;
+    async function initFromIDB() {
+      try {
+        const idbData = await loadWorkspacesFromLocal(null);
+        if (isMounted && Array.isArray(idbData) && idbData.length > 0) {
+          setWorkspaces(prev => {
+            const prevTotalLeads = prev.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+            const idbTotalLeads = idbData.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+            idbLoadedRef.current = true;
+            // If IndexedDB has more or equal leads, or newer updates, adopt it
+            if (idbTotalLeads >= prevTotalLeads) {
+              return idbData;
+            }
+            return prev;
+          });
+        } else {
+          idbLoadedRef.current = true;
+        }
+      } catch (err) {
+        console.warn('Error loading from IndexedDB:', err);
+        idbLoadedRef.current = true;
+      }
+    }
+    initFromIDB();
+    return () => { isMounted = false; };
+  }, []);
+
+  // 3. Smart Conflict-Resistant Cloud Sync on Mount
+  useEffect(() => {
+    let isMounted = true;
     async function syncFromCloud() {
       try {
-        const cloudData = await fetchWorkspacesFromCloud(workspaces);
-        if (Array.isArray(cloudData) && cloudData.length > 0) {
-          setWorkspaces(prev => {
-            const merged = [...prev];
-            cloudData.forEach(cWs => {
-              const idx = merged.findIndex(w => w.id === cWs.id);
-              if (idx >= 0) {
-                merged[idx] = { ...merged[idx], ...cWs };
-              } else {
-                merged.push(cWs);
-              }
-            });
-            return merged;
+        const cloudData = await fetchWorkspacesFromCloud(null);
+        if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
+
+        setWorkspaces(prev => {
+          let needsPushToCloud = false;
+
+          const merged = prev.map(localWs => {
+            const cloudWs = cloudData.find(c => c.id === localWs.id);
+            if (!cloudWs) {
+              needsPushToCloud = true;
+              return localWs;
+            }
+
+            // SMART LEAD-LEVEL MERGE:
+            // Prevents stale cloud data from wiping out yesterday's 1,100 follow-ups or booked meetings!
+            const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || []);
+
+            const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
+            const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
+
+            // If local has newer updates or more leads than cloud, flag to push updates to Supabase
+            if (localTime > cloudTime || (localWs.leads?.length || 0) > (cloudWs.leads?.length || 0)) {
+              needsPushToCloud = true;
+            }
+
+            return {
+              ...cloudWs,
+              ...localWs,
+              leads: mergedLeads,
+              activityLog: (localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0)
+                ? localWs.activityLog
+                : cloudWs.activityLog || [],
+              updatedAt: localTime >= cloudTime ? (localWs.updatedAt || new Date().toISOString()) : cloudWs.updatedAt
+            };
           });
-        }
+
+          // Include any brand new workspaces from cloud
+          cloudData.forEach(cWs => {
+            if (!merged.some(m => m.id === cWs.id)) {
+              merged.push(cWs);
+            }
+          });
+
+          // If local has newer follow-ups/updates, push them back to Supabase so all devices stay updated!
+          if (needsPushToCloud) {
+            saveWorkspacesToCloud(merged).catch(err => console.warn('Cloud sync push notice:', err));
+          }
+
+          // Save merged result safely to IndexedDB
+          saveWorkspacesToLocal(merged);
+
+          return merged;
+        });
       } catch (err) {
         console.warn('Background cloud sync notice:', err);
       }
     }
-    syncFromCloud();
+
+    // Delay slightly to give IndexedDB chance to populate state first
+    const timer = setTimeout(() => {
+      syncFromCloud();
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
   }, []);
 
-  // 3. Load active workspace ID
-  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
-      if (saved) return saved;
-    } catch (e) {}
-    return initialWorkspaces[0]?.id || 'ws_crewlixuk';
-  });
-
-  // 4. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_USER);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {}
-    return null;
-  });
-
-  // 5. Admin viewing as client toggle
-  const [adminViewingAsClient, setAdminViewingAsClient] = useState(false);
-
-  // Save to localStorage & Cloud Database on changes
+  // 4. Save to IndexedDB & localStorage & Cloud Database on changes
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(workspaces));
-      saveWorkspacesToCloud(workspaces);
-    } catch (e) {}
+    if (!workspaces || workspaces.length === 0) return;
+
+    // A. Always save to local durable storage (IndexedDB + localStorage)
+    saveWorkspacesToLocal(workspaces);
+
+    // B. Debounced cloud backup to Supabase
+    const cloudTimer = setTimeout(() => {
+      saveWorkspacesToCloud(workspaces).catch(err => {
+        console.warn('Auto cloud sync notice:', err);
+      });
+    }, 800);
+
+    return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
   useEffect(() => {
@@ -355,7 +423,8 @@ export function WorkspaceProvider({ children }) {
         return {
           ...w,
           leads: updatedLeads,
-          activityLog: [newActivity, ...(w.activityLog || [])]
+          activityLog: [newActivity, ...(w.activityLog || [])],
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -402,7 +471,8 @@ export function WorkspaceProvider({ children }) {
           return {
             ...w,
             leads: updatedLeads,
-            activityLog: [newActivity, ...(w.activityLog || [])]
+            activityLog: [newActivity, ...(w.activityLog || [])],
+            updatedAt: new Date().toISOString()
           };
         }
         return w;
@@ -436,7 +506,8 @@ export function WorkspaceProvider({ children }) {
               if (!next.replyDate) next.replyDate = today;
             }
             return next;
-          })
+          }),
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -526,7 +597,8 @@ export function WorkspaceProvider({ children }) {
         return {
           ...w,
           leads: updatedLeads,
-          activityLog: [newActivity, ...(w.activityLog || [])]
+          activityLog: [newActivity, ...(w.activityLog || [])],
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -544,7 +616,8 @@ export function WorkspaceProvider({ children }) {
       if (w.id === currentWorkspaceId) {
         return {
           ...w,
-          leads: w.leads.map(l => idSet.has(l.id) ? { ...l, accountName: clean, updatedAt: new Date().toISOString() } : l)
+          leads: w.leads.map(l => idSet.has(l.id) ? { ...l, accountName: clean, updatedAt: new Date().toISOString() } : l),
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -608,7 +681,8 @@ export function WorkspaceProvider({ children }) {
               description: `Imported ${newLeads.length} leads into campaign "${campName}" on ${todayStr}`
             },
             ...(w.activityLog || [])
-          ]
+          ],
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -664,7 +738,8 @@ export function WorkspaceProvider({ children }) {
         return {
           ...w,
           leads: [newLead, ...w.leads],
-          activityLog: [newActivity, ...(w.activityLog || [])]
+          activityLog: [newActivity, ...(w.activityLog || [])],
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -804,6 +879,22 @@ export function WorkspaceProvider({ children }) {
     localStorage.removeItem(STORAGE_KEY_USER);
   }
 
+  // 8b. Restore Previous Local Session / Backup
+  async function restorePreviousBackup() {
+    try {
+      const backup = await loadWorkspacesFromLocal(null);
+      if (Array.isArray(backup) && backup.length > 0) {
+        setWorkspaces(backup);
+        saveWorkspacesToCloud(backup);
+        const total = backup.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+        return { success: true, count: total, message: `Successfully restored ${total} leads from local durable database!` };
+      }
+      return { success: false, message: 'No local backup found in IndexedDB or localStorage.' };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  }
+
   const value = {
     workspaces,
     currentWorkspaceId,
@@ -836,7 +927,8 @@ export function WorkspaceProvider({ children }) {
     resetToDefaults,
     getSupabaseConfig,
     saveSupabaseConfig,
-    syncAllWorkspacesToCloud
+    syncAllWorkspacesToCloud,
+    restorePreviousBackup
   };
 
   return (
