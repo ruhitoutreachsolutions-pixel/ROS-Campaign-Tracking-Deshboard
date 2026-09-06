@@ -1,0 +1,30 @@
+{
+  "dailyReports": [
+    {
+      "id": "rep_nahidul_01",
+      "warriorId": "warrior_nahidul",
+      "warriorName": "MD NAHIDUL ALOM AL KAWSAR",
+      "date": "07/09/2026",
+      "workspaceId": "ws_crewlixuk",
+      "workspaceName": "Crewlix UK Ltd",
+      "initialSent": 200,
+      "followUpsSent": 100,
+      "repliesReceived": 0,
+      "callsBooked": 0,
+      "notes": "",
+      "submittedAt": "2026-09-07T03:00:00.000Z"
+    }
+  ],
+  "warriorTimeline": [
+    {
+      "id": "tl_nahidul_01",
+      "warriorId": "warrior_nahidul",
+      "warriorName": "MD NAHIDUL ALOM AL KAWSAR",
+      "actionType": "report_submitted",
+      "workspaceName": "Crewlix UK Ltd",
+      "details": "Submitted daily outreach report for Crewlix UK Ltd (200 initial, 100 follow-ups)",
+      "timestamp": "2026-09-07T03:00:00.000Z"
+    }
+  ],
+  "updatedAt": "2026-09-07T03:13:00.000Z"
+}
