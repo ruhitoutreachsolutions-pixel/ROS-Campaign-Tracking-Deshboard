@@ -13,6 +13,7 @@ import {
 } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
 import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
 import { 
   saveGlobalMetaToCloud, 
   fetchGlobalMetaFromCloud, 
