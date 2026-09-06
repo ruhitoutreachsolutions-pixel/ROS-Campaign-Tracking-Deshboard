@@ -27,8 +27,10 @@ import {
   Zap,
   Search,
   ChevronDown,
-  X
+  X,
+  ClipboardList
 } from 'lucide-react';
+import BatchTagModal from './BatchTagModal';
 
 // Helper to reliably get a lead's sender account
 function getLeadSenderAccount(lead, workspace) {
@@ -77,6 +79,7 @@ export default function MailMergeDispatcher() {
   const [appliedCount, setAppliedCount] = useState(0);
   const [manualSelection, setManualSelection] = useState([]);
   const [reassignSuccessMsg, setReassignSuccessMsg] = useState(null);
+  const [batchTagModalOpen, setBatchTagModalOpen] = useState(false);
 
   // Searchable Sender Account Dropdown State
   const [accountSearchQuery, setAccountSearchQuery] = useState('');
@@ -336,6 +339,18 @@ export default function MailMergeDispatcher() {
             <p className="text-xs text-[#7B7B7B] mt-1 max-w-2xl leading-relaxed">
               1) Select sequence & campaign → 2) Target by <strong>Sending Account</strong> & <strong>Sent Date</strong> for follow-ups → 3) Click <strong>"Copy 4 Columns for Mail Merge"</strong> and paste into row 2 of Google Sheets → 4) Click <strong>"Auto-Apply Sent Status"</strong>.
             </p>
+
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setBatchTagModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-[#00E5A0]/15 hover:bg-[#00E5A0]/25 text-[#00E5A0] border border-[#00E5A0]/40 text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-[#00E5A0]/10 cursor-pointer"
+                title="Paste sent emails from your Google Sheet to quickly re-apply sent status"
+              >
+                <ClipboardList className="w-3.5 h-3.5" />
+                <span>📋 Re-Tag Yesterday's Sent Follow-ups from Google Sheet</span>
+              </button>
+            </div>
           </div>
 
           {/* Quick Stats Pill */}
@@ -1041,6 +1056,12 @@ export default function MailMergeDispatcher() {
         </div>
 
       </div>
+
+      {/* QUICK BATCH RE-TAG MODAL (FROM GOOGLE SHEETS) */}
+      <BatchTagModal
+        isOpen={batchTagModalOpen}
+        onClose={() => setBatchTagModalOpen(false)}
+      />
 
     </div>
   );
