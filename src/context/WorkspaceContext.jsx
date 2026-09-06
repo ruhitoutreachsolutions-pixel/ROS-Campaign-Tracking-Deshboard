@@ -1350,6 +1350,22 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
+  // 15. Restore Previous Local Session / Backup
+  async function restorePreviousBackup() {
+    try {
+      const backup = await loadWorkspacesFromLocal(null);
+      if (Array.isArray(backup) && backup.length > 0) {
+        setWorkspaces(backup);
+        saveWorkspacesToCloud(backup);
+        const total = backup.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+        return { success: true, count: total, message: `Successfully restored ${total} leads from local durable database!` };
+      }
+      return { success: false, message: 'No local backup found in IndexedDB or localStorage.' };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  }
+
   const value = {
     workspaces,
     currentWorkspaceId,
