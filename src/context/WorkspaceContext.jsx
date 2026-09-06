@@ -39,6 +39,27 @@ export function WorkspaceProvider({ children }) {
     return initialWorkspaces;
   });
 
+  // 2. Load active workspace ID
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
+      if (saved) return saved;
+    } catch (e) {}
+    return initialWorkspaces[0]?.id || 'ws_crewlixuk';
+  });
+
+  // 3. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_USER);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  // 4. Admin viewing as client toggle
+  const [adminViewingAsClient, setAdminViewingAsClient] = useState(false);
+
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
 
