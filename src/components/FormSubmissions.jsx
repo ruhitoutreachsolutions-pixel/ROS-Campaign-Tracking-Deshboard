@@ -19,7 +19,11 @@ import {
   Building2, 
   X, 
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Zap,
+  CheckCheck,
+  AlertTriangle,
+  RotateCcw
 } from 'lucide-react';
 import { copyToClipboard, getTodayFormatted } from '../utils/helpers';
 
@@ -34,6 +38,8 @@ export default function FormSubmissions() {
     toggleFormSubmissionStatus, 
     updateFormSubmission, 
     deleteFormSubmission,
+    markBatchFormSubmissions,
+    deleteBatchFormSubmissions,
     currentUser,
     effectiveRole,
     isAutoSyncing,
@@ -63,6 +69,15 @@ export default function FormSubmissions() {
   // Bulk import input state
   const [bulkUrlsText, setBulkUrlsText] = useState('');
   const [bulkWsId, setBulkWsId] = useState(currentWorkspaceId || (workspaces[0]?.id || ''));
+
+  // Batch Opener State
+  const [batchSize, setBatchSize] = useState(5);
+  const [activeBatchIds, setActiveBatchIds] = useState([]);
+  const [openedItemIds, setOpenedItemIds] = useState(() => new Set());
+  const [popupBlockedAlert, setPopupBlockedAlert] = useState(false);
+
+  // Row Multi-Select State
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   // Filtered submissions
   const filteredSubmissions = useMemo(() => {
@@ -115,6 +130,120 @@ export default function FormSubmissions() {
     copyToClipboard(url);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 1800);
+  };
+
+  // Open next batch in new browser tabs
+  const handleOpenNextBatch = () => {
+    // Prioritize unsubmitted and not yet opened in this session
+    let candidates = filteredSubmissions.filter(item => !item.submitted && !openedItemIds.has(item.id));
+    
+    // If all pending items have been opened once in session, fall back to any unsubmitted items
+    if (candidates.length === 0) {
+      candidates = filteredSubmissions.filter(item => !item.submitted);
+    }
+
+    if (candidates.length === 0) {
+      alert('No pending contact forms available to open in current view!');
+      return;
+    }
+
+    const batch = candidates.slice(0, batchSize);
+    let popupBlocked = false;
+
+    batch.forEach(item => {
+      try {
+        const newTab = window.open(item.formUrl, '_blank');
+        if (!newTab || newTab.closed || typeof newTab.closed === 'undefined') {
+          popupBlocked = true;
+        }
+      } catch (e) {
+        popupBlocked = true;
+      }
+    });
+
+    if (popupBlocked) {
+      setPopupBlockedAlert(true);
+    } else {
+      setPopupBlockedAlert(false);
+    }
+
+    const newOpenedSet = new Set(openedItemIds);
+    batch.forEach(item => newOpenedSet.add(item.id));
+    setOpenedItemIds(newOpenedSet);
+
+    const batchIds = batch.map(item => item.id);
+    setActiveBatchIds(batchIds);
+  };
+
+  // 1-Click Mark Active Batch as Submitted
+  const handleMarkActiveBatchSubmitted = () => {
+    if (!activeBatchIds || activeBatchIds.length === 0) return;
+    markBatchFormSubmissions(activeBatchIds, true);
+    setActiveBatchIds([]);
+  };
+
+  // Reset session opened history
+  const handleResetOpenedHistory = () => {
+    setOpenedItemIds(new Set());
+    setActiveBatchIds([]);
+  };
+
+  // Multi-Selection handlers
+  const handleToggleSelectAll = () => {
+    if (selectedIds.size >= filteredSubmissions.length && filteredSubmissions.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredSubmissions.map(i => i.id)));
+    }
+  };
+
+  const handleToggleSelectRow = (id) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const handleOpenSelectedInTabs = () => {
+    if (selectedIds.size === 0) return;
+    const selectedItems = filteredSubmissions.filter(item => selectedIds.has(item.id));
+    let popupBlocked = false;
+
+    selectedItems.forEach(item => {
+      try {
+        const newTab = window.open(item.formUrl, '_blank');
+        if (!newTab || newTab.closed || typeof newTab.closed === 'undefined') {
+          popupBlocked = true;
+        }
+      } catch (e) {
+        popupBlocked = true;
+      }
+    });
+
+    if (popupBlocked) {
+      setPopupBlockedAlert(true);
+    }
+
+    const nextOpened = new Set(openedItemIds);
+    selectedItems.forEach(item => nextOpened.add(item.id));
+    setOpenedItemIds(nextOpened);
+  };
+
+  const handleMarkSelected = (submitted = true) => {
+    if (selectedIds.size === 0) return;
+    markBatchFormSubmissions(Array.from(selectedIds), submitted);
+    setSelectedIds(new Set());
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.size === 0) return;
+    if (window.confirm(`Permanently delete ${selectedIds.size} selected contact form submissions?`)) {
+      deleteBatchFormSubmissions(Array.from(selectedIds));
+      setSelectedIds(new Set());
+    }
   };
 
   // Add single form submission
@@ -311,6 +440,99 @@ export default function FormSubmissions() {
         </div>
       </div>
 
+      {/* 2b. Batch URL Opener Outreach Command Bar */}
+      <div className="bg-gradient-to-r from-[#0F1B2B] via-[#111827] to-[#0A1624] border-2 border-[#00C2FF]/30 p-4 rounded-2xl shadow-xl space-y-3">
+        {/* Main Action Bar */}
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+          {/* Left: Preset Selector & Open Button */}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-[#00C2FF]/15 border border-[#00C2FF]/30 flex items-center justify-center text-[#00C2FF]">
+                <Zap className="w-4 h-4" />
+              </div>
+              <span className="text-xs font-black tracking-wide text-white uppercase font-mono">
+                Batch Opener:
+              </span>
+            </div>
+
+            {/* Batch Size Presets */}
+            <div className="flex items-center gap-1 bg-[#0A0A0A] border border-[#1E3A5F] p-1 rounded-xl">
+              <span className="text-[11px] text-gray-500 px-2 font-mono">Size:</span>
+              {[3, 5, 10, 15, 20].map(sz => (
+                <button
+                  key={sz}
+                  onClick={() => setBatchSize(sz)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition cursor-pointer ${
+                    batchSize === sz
+                      ? 'bg-[#00C2FF] text-[#0A0A0A] shadow-md shadow-[#00C2FF]/20'
+                      : 'text-gray-400 hover:text-white hover:bg-[#1E3A5F]/50'
+                  }`}
+                >
+                  {sz}
+                </button>
+              ))}
+            </div>
+
+            {/* Open Next Batch Button */}
+            <button
+              onClick={handleOpenNextBatch}
+              disabled={isReadOnly || metrics.pending === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#00C2FF] to-[#0099FF] hover:brightness-110 disabled:opacity-40 text-[#0A0A0A] rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-[#00C2FF]/25 transition transform hover:-translate-y-0.5 cursor-pointer font-mono"
+            >
+              <Zap className="w-4 h-4 fill-current" />
+              <span>⚡ Open Next Batch ({batchSize})</span>
+            </button>
+          </div>
+
+          {/* Right: Active Batch 1-Click Mark & Reset */}
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-start lg:justify-end">
+            {activeBatchIds.length > 0 && (
+              <button
+                onClick={handleMarkActiveBatchSubmitted}
+                disabled={isReadOnly}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-emerald-500/20 transition transform hover:-translate-y-0.5 cursor-pointer font-mono animate-pulse"
+                title="Mark all URLs opened in this batch as submitted with today's date"
+              >
+                <CheckCheck className="w-4 h-4" />
+                <span>✓ Mark Active Batch ({activeBatchIds.length}) as Submitted</span>
+              </button>
+            )}
+
+            {/* Session Stats & Reset */}
+            <div className="flex items-center gap-2 text-xs font-mono text-gray-400 bg-[#0A0A0A] border border-[#1E3A5F] px-3 py-1.5 rounded-xl">
+              <span>{openedItemIds.size} opened this session</span>
+              {openedItemIds.size > 0 && (
+                <button
+                  onClick={handleResetOpenedHistory}
+                  className="p-1 rounded text-gray-500 hover:text-white transition cursor-pointer"
+                  title="Reset opened session history"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Popup blocker warning */}
+        {popupBlockedAlert && (
+          <div className="flex items-center justify-between p-3 bg-amber-500/15 border border-amber-500/30 rounded-xl text-amber-300 text-xs">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+              <span>
+                <strong>Browser Popups Blocked!</strong> Your browser prevented opening multiple tabs at once. Please click the popup icon in your browser's address bar, choose <em>"Always allow popups from this site"</em>, then click Open Next Batch again.
+              </span>
+            </div>
+            <button
+              onClick={() => setPopupBlockedAlert(false)}
+              className="p-1 text-amber-400 hover:text-white text-xs font-bold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* 3. Controls & Filter Bar */}
       <div className="bg-[#111827] border border-[#1E3A5F] p-4 rounded-2xl flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 shadow-md">
         
@@ -398,6 +620,17 @@ export default function FormSubmissions() {
             {/* Table Header */}
             <thead>
               <tr className="bg-[#0A0A0A] border-b border-[#1E3A5F] text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                {/* Select All Checkbox */}
+                <th className="py-3 px-3 border-r border-[#1E3A5F]/60 text-center w-12">
+                  <input
+                    type="checkbox"
+                    checked={filteredSubmissions.length > 0 && selectedIds.size === filteredSubmissions.length}
+                    onChange={handleToggleSelectAll}
+                    className="w-4 h-4 rounded border-[#1E3A5F] bg-[#0A0A0A] text-[#00C2FF] focus:ring-[#00C2FF] cursor-pointer accent-[#00C2FF]"
+                    title="Select / Deselect all visible rows"
+                  />
+                </th>
+
                 {/* Column A */}
                 <th className="py-3 px-4 border-r border-[#1E3A5F]/60 min-w-[280px]">
                   <div className="flex items-center gap-2">
@@ -441,7 +674,7 @@ export default function FormSubmissions() {
             <tbody className="divide-y divide-[#1E3A5F]/40 text-xs font-mono">
               {filteredSubmissions.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-16 text-center text-gray-500 font-sans">
+                  <td colSpan={6} className="py-16 text-center text-gray-500 font-sans">
                     <Globe className="w-12 h-12 mx-auto mb-3 text-[#1E3A5F] animate-pulse" />
                     <h3 className="text-sm font-bold text-gray-300">No Contact Forms Found</h3>
                     <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
@@ -455,17 +688,32 @@ export default function FormSubmissions() {
                 filteredSubmissions.map((item, idx) => {
                   const isSubmitted = Boolean(item.submitted);
                   const isCopied = copiedId === item.id;
+                  const isSelected = selectedIds.has(item.id);
 
                   return (
                     <tr 
                       key={item.id || idx}
                       className={`transition group ${
-                        isSubmitted ? 'bg-[#111827]/40 hover:bg-[#111827]' : 'hover:bg-[#111827]/80'
+                        isSelected 
+                          ? 'bg-[#00C2FF]/10 hover:bg-[#00C2FF]/15' 
+                          : isSubmitted 
+                            ? 'bg-[#111827]/40 hover:bg-[#111827]' 
+                            : 'hover:bg-[#111827]/80'
                       }`}
                     >
+                      {/* Selection Checkbox */}
+                      <td className="py-3 px-3 border-r border-[#1E3A5F]/50 text-center w-12">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectRow(item.id)}
+                          className="w-4 h-4 rounded border-[#1E3A5F] bg-[#0A0A0A] text-[#00C2FF] focus:ring-[#00C2FF] cursor-pointer accent-[#00C2FF]"
+                        />
+                      </td>
+
                       {/* Column A: Contact Form URL */}
                       <td className="py-3 px-4 border-r border-[#1E3A5F]/50 font-sans">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <a
                             href={item.formUrl}
                             target="_blank"
@@ -476,6 +724,20 @@ export default function FormSubmissions() {
                             <span className="truncate max-w-xs sm:max-w-md lg:max-w-lg">{item.formUrl}</span>
                             <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-70 group-hover:opacity-100" />
                           </a>
+
+                          {/* Active Batch Badge */}
+                          {activeBatchIds.includes(item.id) && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#00C2FF]/20 text-[#00C2FF] border border-[#00C2FF]/40 animate-pulse">
+                              ⚡ Active Batch
+                            </span>
+                          )}
+
+                          {/* Opened in Session Badge */}
+                          {!activeBatchIds.includes(item.id) && openedItemIds.has(item.id) && !isSubmitted && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                              ⚡ Opened
+                            </span>
+                          )}
 
                           <button
                             onClick={() => handleCopyUrl(item.formUrl, item.id)}
@@ -855,6 +1117,62 @@ export default function FormSubmissions() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* 8. Floating Multi-Select Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 bg-[#111827] border-2 border-[#00C2FF] shadow-2xl shadow-[#00C2FF]/20 px-5 py-3 rounded-2xl flex flex-wrap items-center gap-3 animate-slideUp text-white">
+          <div className="flex items-center gap-2 border-r border-[#1E3A5F] pr-3">
+            <span className="w-6 h-6 rounded-full bg-[#00C2FF] text-[#0A0A0A] font-bold text-xs flex items-center justify-center font-mono">
+              {selectedIds.size}
+            </span>
+            <span className="text-xs font-bold text-gray-200">Selected</span>
+          </div>
+
+          <button
+            onClick={handleOpenSelectedInTabs}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#00C2FF]/15 hover:bg-[#00C2FF]/30 border border-[#00C2FF]/40 text-[#00C2FF] rounded-xl text-xs font-bold transition cursor-pointer"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>Open in Tabs ({selectedIds.size})</span>
+          </button>
+
+          <button
+            onClick={() => handleMarkSelected(true)}
+            disabled={isReadOnly}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-400 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-40"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Mark Submitted</span>
+          </button>
+
+          <button
+            onClick={() => handleMarkSelected(false)}
+            disabled={isReadOnly}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-40"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>Mark Pending</span>
+          </button>
+
+          {(isAdmin || !isReadOnly) && (
+            <button
+              onClick={handleDeleteSelected}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-400 rounded-xl text-xs font-bold transition cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="p-1 rounded text-gray-400 hover:text-white transition ml-2"
+            title="Clear selection"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

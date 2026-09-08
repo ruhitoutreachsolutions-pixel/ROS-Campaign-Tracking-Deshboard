@@ -64,6 +64,7 @@ const STORAGE_KEY_WARRIORS = 'ros_warriors_v1';
 const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
 const STORAGE_KEY_DELETED_WORKSPACES = 'ros_deleted_workspaces_v1';
 const STORAGE_KEY_FORM_SUBMISSIONS = 'ros_form_submissions_v1';
+const STORAGE_KEY_DELETED_FORM_IDS = 'ros_deleted_form_submissions_v1';
 
 export function getDeletedWorkspaceIds() {
   try {
@@ -72,6 +73,65 @@ export function getDeletedWorkspaceIds() {
   } catch (e) {
     return [];
   }
+}
+
+export function getDeletedFormSubmissionIds() {
+  try {
+    const s = localStorage.getItem(STORAGE_KEY_DELETED_FORM_IDS);
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function saveDeletedFormSubmissionId(id) {
+  if (!id) return;
+  try {
+    const ids = getDeletedFormSubmissionIds();
+    if (!ids.includes(id)) {
+      ids.push(id);
+      localStorage.setItem(STORAGE_KEY_DELETED_FORM_IDS, JSON.stringify(ids));
+    }
+  } catch (e) {}
+}
+
+export function mergeFormSubmissions(localList = [], cloudList = [], deletedIds = []) {
+  const deletedSet = new Set(deletedIds || []);
+  const map = new Map();
+
+  // 1. Add all valid local items
+  (Array.isArray(localList) ? localList : []).forEach(item => {
+    if (item && item.id && !deletedSet.has(item.id)) {
+      map.set(item.id, item);
+    }
+  });
+
+  // 2. Merge cloud items
+  (Array.isArray(cloudList) ? cloudList : []).forEach(cloudItem => {
+    if (!cloudItem || !cloudItem.id || deletedSet.has(cloudItem.id)) return;
+
+    if (!map.has(cloudItem.id)) {
+      // New item from cloud
+      map.set(cloudItem.id, cloudItem);
+    } else {
+      // Existing item: reconcile by updatedAt or submitted status
+      const localItem = map.get(cloudItem.id);
+      const localTime = new Date(localItem.updatedAt || localItem.createdAt || 0).getTime();
+      const cloudTime = new Date(cloudItem.updatedAt || cloudItem.createdAt || 0).getTime();
+
+      // If local has newer timestamp or local is submitted while cloud is not, keep local updates
+      if (cloudTime > localTime && (!localItem.submitted || cloudItem.submitted)) {
+        map.set(cloudItem.id, { ...localItem, ...cloudItem });
+      } else {
+        // Keep local, but preserve any non-overlapping fields from cloud
+        map.set(cloudItem.id, { ...cloudItem, ...localItem });
+      }
+    }
+  });
+
+  return Array.from(map.values()).sort((a, b) => {
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
 }
 
 export function WorkspaceProvider({ children }) {
@@ -193,12 +253,19 @@ export function WorkspaceProvider({ children }) {
 
   // 12a-2. CONTACT FORM SUBMISSIONS STATE
   const [formSubmissions, setFormSubmissions] = useState(() => {
+    const deletedIds = getDeletedFormSubmissionIds();
+    const deletedSet = new Set(deletedIds || []);
     try {
       const s = localStorage.getItem(STORAGE_KEY_FORM_SUBMISSIONS);
       const parsed = s ? JSON.parse(s) : null;
-      return Array.isArray(parsed) ? parsed : (initialFormSubmissions || []);
-    } catch (e) { return initialFormSubmissions || []; }
+      const list = Array.isArray(parsed) ? parsed : (initialFormSubmissions || []);
+      return list.filter(item => item && item.id && !deletedSet.has(item.id));
+    } catch (e) {
+      return (initialFormSubmissions || []).filter(item => item && item.id && !deletedSet.has(item.id));
+    }
   });
+
+  const lastFormMutationTimeRef = useRef(0);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(formSubmissions)); } catch (e) {}
@@ -484,8 +551,16 @@ export function WorkspaceProvider({ children }) {
           try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(cloudMeta.warriorTimeline)); } catch (e) {}
         }
         if (Array.isArray(cloudMeta.formSubmissions)) {
-          setFormSubmissions(cloudMeta.formSubmissions);
-          try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(cloudMeta.formSubmissions)); } catch (e) {}
+          const deletedIds = getDeletedFormSubmissionIds();
+          setFormSubmissions(prev => {
+            const merged = mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds);
+            try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(merged)); } catch (e) {}
+            // If local has items not in cloud, push merged back to cloud
+            if (merged.length > cloudMeta.formSubmissions.length) {
+              saveGlobalMetaToCloud({ formSubmissions: merged }).catch(() => {});
+            }
+            return merged;
+          });
         }
       } catch (err) {
         console.warn('Initial cloud meta sync notice:', err);
@@ -781,8 +856,22 @@ export function WorkspaceProvider({ children }) {
 
       // 10. Form Submissions Updated
       if (event.type === 'FORM_SUBMISSIONS_UPDATED' && Array.isArray(event.formSubmissions)) {
-        setFormSubmissions(event.formSubmissions);
-        try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(event.formSubmissions)); } catch (e) {}
+        const deletedIds = getDeletedFormSubmissionIds();
+        setFormSubmissions(prev => {
+          const merged = mergeFormSubmissions(prev, event.formSubmissions, deletedIds);
+          try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(merged)); } catch (e) {}
+          return merged;
+        });
+      }
+
+      // 10b. Form Submission Deleted
+      if (event.type === 'FORM_SUBMISSION_DELETED' && event.submissionId) {
+        saveDeletedFormSubmissionId(event.submissionId);
+        setFormSubmissions(prev => {
+          const updated = (prev || []).filter(item => item.id !== event.submissionId);
+          try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(updated)); } catch (e) {}
+          return updated;
+        });
       }
     }
 
@@ -881,13 +970,17 @@ export function WorkspaceProvider({ children }) {
         }
 
         if (Array.isArray(cloudMeta.formSubmissions)) {
-          setFormSubmissions(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.formSubmissions)) {
-              try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(cloudMeta.formSubmissions)); } catch (e) {}
-              return cloudMeta.formSubmissions;
-            }
-            return prev;
-          });
+          if (Date.now() - lastFormMutationTimeRef.current > 8000) {
+            const deletedIds = getDeletedFormSubmissionIds();
+            setFormSubmissions(prev => {
+              const merged = mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds);
+              if (JSON.stringify(prev) !== JSON.stringify(merged)) {
+                try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(merged)); } catch (e) {}
+                return merged;
+              }
+              return prev;
+            });
+          }
         }
       } catch (e) {}
     }, 4000);
@@ -2058,6 +2151,7 @@ export function WorkspaceProvider({ children }) {
 
   // 10b. Contact Form Submissions Module Handlers
   function syncFormSubmissionsUpdate(nextForms) {
+    lastFormMutationTimeRef.current = Date.now();
     setFormSubmissions(nextForms);
     try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(nextForms)); } catch (e) {}
     saveGlobalMetaToCloud({ formSubmissions: nextForms }).catch(() => {});
@@ -2151,6 +2245,40 @@ export function WorkspaceProvider({ children }) {
     return toggledItem;
   }
 
+  function markBatchFormSubmissions(submissionIds, submitted = true) {
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) return 0;
+    const targetSet = new Set(submissionIds);
+    const today = getTodayFormatted();
+    const by = currentUser?.name || currentUser?.username || 'Team';
+    let updatedCount = 0;
+
+    const next = (formSubmissions || []).map(item => {
+      if (targetSet.has(item.id)) {
+        updatedCount++;
+        return {
+          ...item,
+          submitted: !!submitted,
+          submissionDate: submitted ? today : '',
+          submittedBy: submitted ? by : '',
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return item;
+    });
+
+    syncFormSubmissionsUpdate(next);
+
+    if (submitted && updatedCount > 0 && currentUser?.role === 'warrior') {
+      logWarriorAction(
+        currentUser?.name || 'Warrior',
+        'FORM_BATCH_SUBMITTED',
+        `Marked batch of ${updatedCount} contact forms as submitted`,
+        currentWorkspace?.clientName || 'Workspace'
+      );
+    }
+    return updatedCount;
+  }
+
   function updateFormSubmission(submissionId, updates) {
     const next = (formSubmissions || []).map(item => {
       if (item.id === submissionId) {
@@ -2167,9 +2295,24 @@ export function WorkspaceProvider({ children }) {
   }
 
   function deleteFormSubmission(submissionId) {
+    if (!submissionId) return false;
+    saveDeletedFormSubmissionId(submissionId);
     const next = (formSubmissions || []).filter(item => item.id !== submissionId);
     syncFormSubmissionsUpdate(next);
+    broadcastRealtimeEvent('FORM_SUBMISSION_DELETED', { submissionId }).catch(() => {});
     return true;
+  }
+
+  function deleteBatchFormSubmissions(submissionIds) {
+    if (!Array.isArray(submissionIds) || submissionIds.length === 0) return 0;
+    submissionIds.forEach(id => saveDeletedFormSubmissionId(id));
+    const targetSet = new Set(submissionIds);
+    const next = (formSubmissions || []).filter(item => !targetSet.has(item.id));
+    syncFormSubmissionsUpdate(next);
+    submissionIds.forEach(id => {
+      broadcastRealtimeEvent('FORM_SUBMISSION_DELETED', { submissionId: id }).catch(() => {});
+    });
+    return submissionIds.length;
   }
 
   function addTodo(todoData) {
@@ -2871,6 +3014,8 @@ export function WorkspaceProvider({ children }) {
     toggleFormSubmissionStatus,
     updateFormSubmission,
     deleteFormSubmission,
+    markBatchFormSubmissions,
+    deleteBatchFormSubmissions,
     // Real-Time Chat V1
     effectiveUser,
     effectiveUserId,

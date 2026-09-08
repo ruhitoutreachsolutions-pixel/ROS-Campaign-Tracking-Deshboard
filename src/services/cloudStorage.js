@@ -173,7 +173,13 @@ export async function fetchGlobalMetaFromCloud() {
         ...devData,
         warriors: (localData?.warriors && localData.warriors.length > 0) ? localData.warriors : (devData.warriors || []),
         dailyReports: [...(localData?.dailyReports || []), ...(devData.dailyReports || []).filter(r => !(localData?.dailyReports || []).some(x => x.id === r.id))],
-        warriorTimeline: [...(localData?.warriorTimeline || []), ...(devData.warriorTimeline || []).filter(t => !(localData?.warriorTimeline || []).some(x => x.id === t.id))]
+        warriorTimeline: [...(localData?.warriorTimeline || []), ...(devData.warriorTimeline || []).filter(t => !(localData?.warriorTimeline || []).some(x => x.id === t.id))],
+        formSubmissions: (Array.isArray(localData?.formSubmissions) && localData.formSubmissions.length > 0) 
+          ? localData.formSubmissions 
+          : (Array.isArray(devData?.formSubmissions) && devData.formSubmissions.length > 0 ? devData.formSubmissions : (localData?.formSubmissions || [])),
+        importantNotes: (Array.isArray(localData?.importantNotes) && localData.importantNotes.length > 0) 
+          ? localData.importantNotes 
+          : (Array.isArray(devData?.importantNotes) && devData.importantNotes.length > 0 ? devData.importantNotes : (localData?.importantNotes || []))
       };
     }
   } catch (e) {}
