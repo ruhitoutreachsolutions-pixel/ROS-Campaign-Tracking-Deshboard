@@ -52,6 +52,19 @@ export function isCloudDatabaseConnected() {
   return !!getSupabaseClient();
 }
 
+// Permanently purged demo workspaces that must NEVER be loaded or re-saved
+export const PERMANENTLY_PURGED_WS_IDS = ['ws_crewlix', 'ws_crewlixuk'];
+
+function getLocalDeletedIds() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const s = localStorage.getItem('ros_deleted_workspaces_v1');
+      return s ? JSON.parse(s) : [];
+    }
+  } catch (e) {}
+  return [];
+}
+
 // 2. Fetch all workspaces and their thousands of leads from Supabase Cloud Database
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
   const supabase = getSupabaseClient();
@@ -71,8 +84,14 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
     }
 
     if (Array.isArray(data) && data.length > 0) {
-      // Filter out internal system metadata rows
-      const clientWorkspaces = data.filter(item => item && item.id && !item.id.startsWith('__ros_'));
+      const deletedIds = getLocalDeletedIds();
+      // Filter out internal system metadata rows and purged/deleted workspaces
+      const clientWorkspaces = data.filter(item => 
+        item && item.id && 
+        !item.id.startsWith('__ros_') && 
+        !PERMANENTLY_PURGED_WS_IDS.includes(item.id) &&
+        !deletedIds.includes(item.id)
+      );
 
       return clientWorkspaces.map(item => ({
         id: item.id,
@@ -108,12 +127,14 @@ export async function saveWorkspacesToCloud(workspaces) {
   const supabase = getSupabaseClient();
   if (!supabase) return false;
 
+  const deletedIds = getLocalDeletedIds();
+
   try {
     let hasError = false;
     let lastError = null;
 
     for (const ws of workspaces) {
-      if (!ws || !ws.id || ws.id.startsWith('__ros_')) continue;
+      if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
 
       const payload = {
         id: ws.id,
@@ -188,7 +209,8 @@ export async function fetchSystemMetaFromSupabase() {
     const seq = data.sequence_config || {};
     const dailyReports = Array.isArray(seq.dailyReports) ? seq.dailyReports : [];
     const tasks = Array.isArray(seq.tasks) ? seq.tasks : [];
-    const payments = Array.isArray(seq.payments) ? seq.payments : [];
+    const rawPayments = Array.isArray(seq.payments) ? seq.payments : [];
+    const payments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && p.id !== 'inv_101' && p.id !== 'inv_103');
     const emailCopies = Array.isArray(seq.emailCopies) ? seq.emailCopies : [];
     const importantNotes = Array.isArray(seq.importantNotes) ? seq.importantNotes : [];
     const todos = Array.isArray(seq.todos) ? seq.todos : [];
@@ -236,7 +258,8 @@ export async function saveSystemMetaToSupabase(meta) {
 
     const mergedReports = meta.dailyReports !== undefined ? meta.dailyReports : (Array.isArray(existingSeq.dailyReports) ? existingSeq.dailyReports : []);
     const mergedTasks = meta.tasks !== undefined ? meta.tasks : (Array.isArray(existingSeq.tasks) ? existingSeq.tasks : []);
-    const mergedPayments = meta.payments !== undefined ? meta.payments : (Array.isArray(existingSeq.payments) ? existingSeq.payments : []);
+    const rawPayments = meta.payments !== undefined ? meta.payments : (Array.isArray(existingSeq.payments) ? existingSeq.payments : []);
+    const mergedPayments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && p.id !== 'inv_101' && p.id !== 'inv_103');
     const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (Array.isArray(existingSeq.emailCopies) ? existingSeq.emailCopies : []);
     const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (Array.isArray(existingSeq.importantNotes) ? existingSeq.importantNotes : []);
     const mergedTodos = meta.todos !== undefined ? meta.todos : (Array.isArray(existingSeq.todos) ? existingSeq.todos : []);
