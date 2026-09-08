@@ -54,6 +54,7 @@ export function isCloudDatabaseConnected() {
 
 // Permanently purged demo workspaces that must NEVER be loaded or re-saved
 export const PERMANENTLY_PURGED_WS_IDS = ['ws_crewlix', 'ws_crewlixuk'];
+export const DEMO_INVOICE_IDS = ['inv_101', 'inv_102', 'inv_103'];
 
 function getLocalDeletedIds() {
   try {
@@ -210,7 +211,7 @@ export async function fetchSystemMetaFromSupabase() {
     const dailyReports = Array.isArray(seq.dailyReports) ? seq.dailyReports : [];
     const tasks = Array.isArray(seq.tasks) ? seq.tasks : [];
     const rawPayments = Array.isArray(seq.payments) ? seq.payments : [];
-    const payments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && p.id !== 'inv_101' && p.id !== 'inv_103');
+    const payments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && !DEMO_INVOICE_IDS.includes(p.id));
     const emailCopies = Array.isArray(seq.emailCopies) ? seq.emailCopies : [];
     const importantNotes = Array.isArray(seq.importantNotes) ? seq.importantNotes : [];
     const todos = Array.isArray(seq.todos) ? seq.todos : [];
@@ -259,7 +260,7 @@ export async function saveSystemMetaToSupabase(meta) {
     const mergedReports = meta.dailyReports !== undefined ? meta.dailyReports : (Array.isArray(existingSeq.dailyReports) ? existingSeq.dailyReports : []);
     const mergedTasks = meta.tasks !== undefined ? meta.tasks : (Array.isArray(existingSeq.tasks) ? existingSeq.tasks : []);
     const rawPayments = meta.payments !== undefined ? meta.payments : (Array.isArray(existingSeq.payments) ? existingSeq.payments : []);
-    const mergedPayments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && p.id !== 'inv_101' && p.id !== 'inv_103');
+    const mergedPayments = rawPayments.filter(p => p && !PERMANENTLY_PURGED_WS_IDS.includes(p.workspaceId) && !DEMO_INVOICE_IDS.includes(p.id));
     const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (Array.isArray(existingSeq.emailCopies) ? existingSeq.emailCopies : []);
     const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (Array.isArray(existingSeq.importantNotes) ? existingSeq.importantNotes : []);
     const mergedTodos = meta.todos !== undefined ? meta.todos : (Array.isArray(existingSeq.todos) ? existingSeq.todos : []);

@@ -144,8 +144,11 @@ export function WorkspaceProvider({ children }) {
     try {
       const s = localStorage.getItem(STORAGE_KEY_PAYMENTS);
       const parsed = s ? JSON.parse(s) : null;
-      return Array.isArray(parsed) ? parsed : (initialPayments || []);
-    } catch (e) { return initialPayments || []; }
+      if (Array.isArray(parsed)) {
+        return parsed.filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id) && !['ws_crewlix', 'ws_crewlixuk'].includes(p.workspaceId));
+      }
+      return (initialPayments || []).filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id));
+    } catch (e) { return []; }
   });
 
   // 9. TASKS & APPROVAL WORKFLOW STATE
@@ -350,8 +353,9 @@ export function WorkspaceProvider({ children }) {
           try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
         }
         if (Array.isArray(cloudMeta.payments)) {
-          setPayments(cloudMeta.payments);
-          try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cloudMeta.payments)); } catch (e) {}
+          const cleanPayments = cloudMeta.payments.filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id) && !['ws_crewlix', 'ws_crewlixuk'].includes(p.workspaceId));
+          setPayments(cleanPayments);
+          try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cleanPayments)); } catch (e) {}
         }
         if (Array.isArray(cloudMeta.emailCopies) && cloudMeta.emailCopies.length > 0) {
           setEmailCopies(cloudMeta.emailCopies);
@@ -733,10 +737,11 @@ export function WorkspaceProvider({ children }) {
         }
 
         if (Array.isArray(cloudMeta.payments)) {
+          const cleanPayments = cloudMeta.payments.filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id) && !['ws_crewlix', 'ws_crewlixuk'].includes(p.workspaceId));
           setPayments(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.payments)) {
-              try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cloudMeta.payments)); } catch (e) {}
-              return cloudMeta.payments;
+            if (JSON.stringify(prev) !== JSON.stringify(cleanPayments)) {
+              try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cleanPayments)); } catch (e) {}
+              return cleanPayments;
             }
             return prev;
           });
