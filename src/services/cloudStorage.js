@@ -147,15 +147,34 @@ export async function fetchHistoricalEvents(since = '24h') {
   return events;
 }
 
-// 4. Fetch Global Metadata (Warriors, Reports, Tasks, Timeline) from Local API & Cloud
+import { fetchSystemMetaFromSupabase, saveSystemMetaToSupabase } from './db';
+
+// 4. Fetch Global Metadata (Warriors, Reports, Tasks, Timeline) from Supabase & Cloud
 export async function fetchGlobalMetaFromCloud() {
   let localData = null;
 
-  // A. Check Local Server API
+  // A. Primary: Query Supabase Cloud Database directly (Zero-delay, works on all devices worldwide)
+  try {
+    const supabaseMeta = await fetchSystemMetaFromSupabase();
+    if (supabaseMeta) {
+      localData = supabaseMeta;
+    }
+  } catch (e) {
+    console.warn('Supabase fetchGlobalMeta notice:', e);
+  }
+
+  // B. Secondary: Check Local Server API (if running Vite dev server on localhost)
   try {
     const res = await fetch('/api/sync');
     if (res.ok) {
-      localData = await res.json();
+      const devData = await res.json();
+      localData = {
+        ...(localData || {}),
+        ...devData,
+        warriors: (localData?.warriors && localData.warriors.length > 0) ? localData.warriors : (devData.warriors || []),
+        dailyReports: [...(localData?.dailyReports || []), ...(devData.dailyReports || []).filter(r => !(localData?.dailyReports || []).some(x => x.id === r.id))],
+        warriorTimeline: [...(localData?.warriorTimeline || []), ...(devData.warriorTimeline || []).filter(t => !(localData?.warriorTimeline || []).some(x => x.id === t.id))]
+      };
     }
   } catch (e) {}
 
@@ -208,16 +227,21 @@ export async function fetchGlobalMetaFromCloud() {
 export async function saveGlobalMetaToCloud(meta) {
   if (!meta || typeof meta !== 'object') return false;
 
-  // A. Save to Local Server API
+  // A. Primary: Save to Supabase Cloud Database (Permanent, global multi-device persistence)
   try {
-    await fetch('/api/sync', {
+    saveSystemMetaToSupabase(meta).catch(err => console.warn('Supabase saveGlobalMeta notice:', err));
+  } catch (e) {}
+
+  // B. Secondary: Save to Local Server API (if running Vite dev server)
+  try {
+    fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(meta)
-    });
+    }).catch(() => {});
   } catch (e) {}
 
-  // B. Broadcast State Sync
+  // C. Broadcast State Sync across tabs and devices
   broadcastRealtimeEvent({
     type: 'STATE_SYNC',
     meta

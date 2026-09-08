@@ -16,6 +16,8 @@ export default function TasksAndReports() {
     deleteTask,
     dailyReports,
     submitDailyReport,
+    approveDailyReport,
+    rejectDailyReport,
     deleteDailyReport,
     warriors,
     addWarrior,
@@ -57,6 +59,7 @@ export default function TasksAndReports() {
 
   // Daily Report Modal
   const [showReportModal, setShowReportModal] = useState(false);
+  const [reportSuccessMessage, setReportSuccessMessage] = useState('');
   const [reportFormData, setReportFormData] = useState({
     workspaceId: currentWorkspaceId,
     date: new Date().toLocaleDateString('en-GB'),
@@ -97,6 +100,11 @@ export default function TasksAndReports() {
   const pendingApprovalCount = useMemo(() => {
     return (tasks || []).filter(t => t.status === 'submitted_for_approval').length;
   }, [tasks]);
+
+  // Pending approval daily reports count (for Admin badge)
+  const pendingReportsCount = useMemo(() => {
+    return (dailyReports || []).filter(r => !r.status || r.status === 'pending_approval').length;
+  }, [dailyReports]);
 
   // Handle Save Task
   const handleSaveTask = (e) => {
@@ -162,7 +170,12 @@ export default function TasksAndReports() {
       workspaceName: ws ? ws.name : 'Workspace'
     });
 
-    setShowReportModal(false);
+    setReportSuccessMessage('✅ Report submitted! Sent to Admin portal for review & approval.');
+    setTimeout(() => {
+      setReportSuccessMessage('');
+      setShowReportModal(false);
+    }, 1500);
+
     setReportFormData({
       workspaceId: currentWorkspaceId,
       date: new Date().toLocaleDateString('en-GB'),
@@ -290,9 +303,15 @@ export default function TasksAndReports() {
         >
           <FileText className="w-4 h-4" />
           Daily Outreach Reports
-          <span className="text-xs bg-[#0A0A0A] text-gray-300 border border-[#1E3A5F] px-2 py-0.5 rounded-full font-semibold">
-            {dailyReports?.length || 0}
-          </span>
+          {pendingReportsCount > 0 && isAdmin ? (
+            <span className="ml-1 px-2 py-0.5 bg-amber-500 text-[#0A0A0A] text-xs font-black rounded-full animate-pulse">
+              {pendingReportsCount} Pending
+            </span>
+          ) : (
+            <span className="text-xs bg-[#0A0A0A] text-gray-300 border border-[#1E3A5F] px-2 py-0.5 rounded-full font-semibold">
+              {dailyReports?.length || 0}
+            </span>
+          )}
         </button>
 
         {isAdmin && (
@@ -566,43 +585,105 @@ export default function TasksAndReports() {
                     <th className="py-3 px-4 text-center">Replies</th>
                     <th className="py-3 px-4 text-center">Calls Booked</th>
                     <th className="py-3 px-4">Notes & Observations</th>
-                    {isAdmin && <th className="py-3 px-4 text-right">Action</th>}
+                    <th className="py-3 px-4 text-center">Status</th>
+                    {isAdmin && <th className="py-3 px-4 text-right">Actions</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1E3A5F]/40">
                   {(dailyReports || []).length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-10 text-center text-gray-500">
+                      <td colSpan={isAdmin ? 10 : 9} className="py-10 text-center text-gray-500">
                         No daily reports submitted yet.
                       </td>
                     </tr>
                   ) : (
-                    dailyReports.map(rep => (
-                      <tr key={rep.id} className="hover:bg-[#0A0A0A]/60 transition">
-                        <td className="py-3 px-4 font-mono font-semibold text-gray-300 text-xs">{rep.date}</td>
-                        <td className="py-3 px-4 font-bold text-white text-xs">{rep.warriorName}</td>
-                        <td className="py-3 px-4 text-xs font-medium text-[#00C2FF]">{rep.workspaceName}</td>
-                        <td className="py-3 px-4 text-center font-bold text-white font-mono">{rep.initialSent}</td>
-                        <td className="py-3 px-4 text-center font-bold text-[#00C2FF] font-mono">{rep.followUpsSent}</td>
-                        <td className="py-3 px-4 text-center font-bold text-amber-400 font-mono">{rep.repliesReceived}</td>
-                        <td className="py-3 px-4 text-center font-black text-[#00E5A0] font-mono">
-                          {rep.callsBooked > 0 ? `🎯 ${rep.callsBooked}` : 0}
-                        </td>
-                        <td className="py-3 px-4 text-xs text-gray-400 max-w-xs">{rep.notes || '—'}</td>
-                        {isAdmin && (
-                          <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => {
-                                if (window.confirm('Delete this report?')) deleteDailyReport(rep.id);
-                              }}
-                              className="p-1 text-gray-400 hover:text-rose-400 rounded transition"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                    dailyReports.map(rep => {
+                      const isApproved = rep.status === 'approved';
+                      const isRevision = rep.status === 'revision_needed';
+                      const isPending = !rep.status || rep.status === 'pending_approval';
+
+                      return (
+                        <tr key={rep.id} className="hover:bg-[#0A0A0A]/60 transition">
+                          <td className="py-3 px-4 font-mono font-semibold text-gray-300 text-xs">{rep.date}</td>
+                          <td className="py-3 px-4 font-bold text-white text-xs">{rep.warriorName}</td>
+                          <td className="py-3 px-4 text-xs font-medium text-[#00C2FF]">{rep.workspaceName}</td>
+                          <td className="py-3 px-4 text-center font-bold text-white font-mono">{rep.initialSent}</td>
+                          <td className="py-3 px-4 text-center font-bold text-[#00C2FF] font-mono">{rep.followUpsSent}</td>
+                          <td className="py-3 px-4 text-center font-bold text-amber-400 font-mono">{rep.repliesReceived}</td>
+                          <td className="py-3 px-4 text-center font-black text-[#00E5A0] font-mono">
+                            {rep.callsBooked > 0 ? `🎯 ${rep.callsBooked}` : 0}
                           </td>
-                        )}
-                      </tr>
-                    ))
+                          <td className="py-3 px-4 text-xs text-gray-400 max-w-xs">
+                            <div>{rep.notes || '—'}</div>
+                            {rep.adminFeedback && (
+                              <div className="text-[11px] text-amber-300/80 mt-1 font-sans">
+                                💬 Admin: "{rep.adminFeedback}"
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center whitespace-nowrap">
+                            {isApproved ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-[#00E5A0]/15 text-[#00E5A0] border border-[#00E5A0]/30">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Approved
+                              </span>
+                            ) : isRevision ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30" title={rep.adminFeedback || 'Revision requested'}>
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                Revision Needed
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 animate-pulse">
+                                <Clock className="w-3.5 h-3.5" />
+                                Pending Approval
+                              </span>
+                            )}
+                          </td>
+                          {isAdmin && (
+                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {!isApproved && (
+                                  <button
+                                    onClick={() => approveDailyReport(rep.id, 'Report verified and signed off.')}
+                                    className="flex items-center gap-1 px-2.5 py-1 bg-[#00E5A0]/20 hover:bg-[#00E5A0] text-[#00E5A0] hover:text-[#0A0A0A] border border-[#00E5A0]/40 rounded-lg text-xs font-bold transition shadow-sm"
+                                    title="Approve Report"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Approve
+                                  </button>
+                                )}
+
+                                {!isRevision && (
+                                  <button
+                                    onClick={() => {
+                                      const reason = window.prompt('Provide revision notes for warrior:', 'Please verify follow-ups and resubmit.');
+                                      if (reason !== null) {
+                                        rejectDailyReport(rep.id, reason);
+                                      }
+                                    }}
+                                    className="flex items-center gap-1 px-2.5 py-1 bg-amber-500/15 hover:bg-amber-500 text-amber-300 hover:text-[#0A0A0A] border border-amber-500/40 rounded-lg text-xs font-bold transition"
+                                    title="Request Revision"
+                                  >
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    Revision
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => {
+                                    if (window.confirm('Delete this report permanently?')) deleteDailyReport(rep.id);
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition"
+                                  title="Delete Report"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -920,7 +1001,14 @@ export default function TasksAndReports() {
               <button onClick={() => setShowReportModal(false)} className="text-gray-400 hover:text-white text-xl font-bold">✕</button>
             </div>
 
-            <form onSubmit={handleSaveReport} className="mt-4 space-y-3">
+            {reportSuccessMessage ? (
+              <div className="my-6 p-6 bg-[#00E5A0]/15 border border-[#00E5A0]/40 rounded-xl text-center text-sm font-bold text-[#00E5A0] flex flex-col items-center gap-3">
+                <CheckCircle2 className="w-10 h-10 text-[#00E5A0]" />
+                <div className="text-base text-white">{reportSuccessMessage}</div>
+                <p className="text-xs text-gray-400 font-normal">Your metrics are now awaiting Admin review and approval in the Admin portal.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleSaveReport} className="mt-4 space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-gray-300 mb-1">Target Client Workspace</label>
                 <select
@@ -1007,6 +1095,7 @@ export default function TasksAndReports() {
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

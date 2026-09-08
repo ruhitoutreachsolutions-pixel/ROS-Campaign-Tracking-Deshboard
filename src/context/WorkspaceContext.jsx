@@ -12,7 +12,18 @@ import {
   initialWarriorTimeline
 } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
-import { fetchWorkspacesFromCloud, saveWorkspacesToCloud, getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected } from '../services/db';
+import { 
+  fetchWorkspacesFromCloud, 
+  saveWorkspacesToCloud, 
+  getSupabaseConfig, 
+  saveSupabaseConfig, 
+  getSupabaseClient, 
+  isCloudDatabaseConnected,
+  fetchSystemMetaFromSupabase,
+  saveSystemMetaToSupabase,
+  fetchWarriorsFromSupabase,
+  saveWarriorsToSupabase
+} from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
 import { 
   saveGlobalMetaToCloud, 
@@ -425,6 +436,7 @@ export function WorkspaceProvider({ children }) {
           return next;
         });
 
+        // NOTIFICATIONS STRICTLY ONLY FOR ADMIN PORTAL
         if (isLive && currentUser?.role === 'admin') {
           playNotificationChime();
           setLiveToast({
@@ -436,6 +448,34 @@ export function WorkspaceProvider({ children }) {
             '📊 ROS Warrior Daily Report Submitted!',
             `${rep.warriorName} submitted report for ${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups.`
           );
+        }
+      }
+
+      // 1b. Daily Report Status Changed (Approved or Revision Needed by Admin)
+      if (event.type === 'DAILY_REPORT_STATUS_CHANGED' && event.report) {
+        const rep = event.report;
+        setDailyReports(prev => {
+          const next = (prev || []).map(r => r.id === rep.id ? { ...r, ...rep } : r);
+          try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(next)); } catch (e) {}
+          return next;
+        });
+
+        // Notify Warrior when Admin Approves or Rejects their report
+        if (isLive && currentUser?.role === 'warrior') {
+          const isMyReport = 
+            (rep.warriorId && currentUser.id && rep.warriorId === currentUser.id) ||
+            (rep.warriorName && currentUser.name && rep.warriorName.toLowerCase() === currentUser.name.toLowerCase());
+
+          if (isMyReport) {
+            playNotificationChime();
+            setLiveToast({
+              type: rep.status === 'approved' ? 'success' : 'warning',
+              title: rep.status === 'approved' ? '✅ Daily Report Approved!' : '⚠️ Report Revision Requested',
+              message: rep.status === 'approved' 
+                ? `Admin approved your outreach report for ${rep.workspaceName}` 
+                : `Admin requested revision: ${rep.adminFeedback || 'Please check and resubmit.'}`
+            });
+          }
         }
       }
 
@@ -793,44 +833,59 @@ export function WorkspaceProvider({ children }) {
     }
 
     // 2. ROS Warrior (Manager) Authentication Check
-    let warriorMatch = (warriors || []).find(w => 
+    let warriorCandidate = (warriors || []).find(w => 
       w && (
         (w.username && w.username.toLowerCase() === usernameClean) || 
         (w.email && w.email.toLowerCase() === usernameClean)
-      ) &&
-      (pwdClean === w.password || pwdClean === 'warrior2026' || pwdClean === 'ros2026')
+      )
     );
 
-    // If not matched in local cache, query the Cloud in real time!
-    if (!warriorMatch) {
-      try {
-        const cloudMeta = await fetchGlobalMetaFromCloud();
-        if (cloudMeta && Array.isArray(cloudMeta.warriors) && cloudMeta.warriors.length > 0) {
-          setWarriors(cloudMeta.warriors);
-          try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(cloudMeta.warriors)); } catch (e) {}
+    let isPwdCorrect = warriorCandidate && (
+      pwdClean === warriorCandidate.password || 
+      pwdClean === 'warrior2026' || 
+      pwdClean === 'ros2026'
+    );
 
-          warriorMatch = cloudMeta.warriors.find(w => 
+    // If warrior candidate is not found locally OR password doesn't match local cached version,
+    // query Supabase Cloud Database directly in real time to fetch the latest credentials!
+    if (!warriorCandidate || !isPwdCorrect) {
+      try {
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve([]), 3500));
+        const cloudWarriors = await Promise.race([fetchWarriorsFromSupabase(), timeoutPromise]);
+
+        if (Array.isArray(cloudWarriors) && cloudWarriors.length > 0) {
+          setWarriors(cloudWarriors);
+          try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(cloudWarriors)); } catch (e) {}
+
+          const freshWarrior = cloudWarriors.find(w => 
             w && (
               (w.username && w.username.toLowerCase() === usernameClean) || 
               (w.email && w.email.toLowerCase() === usernameClean)
-            ) &&
-            (pwdClean === w.password || pwdClean === 'warrior2026' || pwdClean === 'ros2026')
+            )
           );
+          if (freshWarrior) {
+            warriorCandidate = freshWarrior;
+            isPwdCorrect = pwdClean === freshWarrior.password || pwdClean === 'warrior2026' || pwdClean === 'ros2026';
+          }
         }
       } catch (err) {
-        console.warn('Real-time warrior cloud login notice:', err);
+        console.warn('Real-time Supabase warrior login lookup notice:', err);
       }
     }
 
-    if (warriorMatch) {
+    if (warriorCandidate) {
+      if (!isPwdCorrect) {
+        return { success: false, message: 'Incorrect password for warrior account.' };
+      }
+
       const warriorUser = {
-        ...warriorMatch,
+        ...warriorCandidate,
         role: 'warrior'
       };
       setCurrentUser(warriorUser);
       setAdminViewingAsClient(false);
-      if (warriorMatch.allowedWorkspaceIds && warriorMatch.allowedWorkspaceIds.length > 0) {
-        setCurrentWorkspaceId(warriorMatch.allowedWorkspaceIds[0]);
+      if (warriorCandidate.allowedWorkspaceIds && warriorCandidate.allowedWorkspaceIds.length > 0) {
+        setCurrentWorkspaceId(warriorCandidate.allowedWorkspaceIds[0]);
       }
       logWarriorAction('login', `Logged in to ROS Warrior portal`);
       return { success: true, role: 'warrior', user: warriorUser };
@@ -1776,6 +1831,8 @@ export function WorkspaceProvider({ children }) {
       repliesReceived: Number(repData.repliesReceived) || 0,
       callsBooked: Number(repData.callsBooked) || 0,
       notes: repData.notes || '',
+      status: 'pending_approval',
+      adminFeedback: '',
       submittedAt: new Date().toISOString()
     };
     const nextReports = [newRep, ...(dailyReports || [])];
@@ -1783,15 +1840,69 @@ export function WorkspaceProvider({ children }) {
     try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(nextReports)); } catch (e) {}
     saveGlobalMetaToCloud({ dailyReports: nextReports }).catch(() => {});
 
-    // INSTANT REALTIME BROADCAST ACROSS ALL BROWSERS & CLOUD
+    // INSTANT REALTIME BROADCAST TO ADMIN ACROSS ALL BROWSERS & CLOUD
     broadcastRealtimeEvent({
       type: 'DAILY_REPORT_SUBMITTED',
       report: newRep
     });
 
     logWarriorAction('report_submitted', `Submitted daily report for ${newRep.workspaceName} (${newRep.initialSent} initial, ${newRep.followUpsSent} follow-ups, ${newRep.callsBooked} booked)`);
-    notifyAdminDesktop('📊 ROS Warrior Daily Report Submitted!', `${warriorName} submitted report for ${newRep.workspaceName}`);
+    // Note: notifyAdminDesktop is strictly fired only on Admin portal via REALTIME event!
     return newRep;
+  }
+
+  function approveDailyReport(repId, feedback = '') {
+    let updatedReport = null;
+    const nextReports = (dailyReports || []).map(r => {
+      if (r.id === repId) {
+        updatedReport = {
+          ...r,
+          status: 'approved',
+          adminFeedback: feedback || r.adminFeedback || 'Approved by Admin',
+          approvedAt: new Date().toISOString()
+        };
+        return updatedReport;
+      }
+      return r;
+    });
+    setDailyReports(nextReports);
+    try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(nextReports)); } catch (e) {}
+    saveGlobalMetaToCloud({ dailyReports: nextReports }).catch(() => {});
+
+    if (updatedReport) {
+      broadcastRealtimeEvent({
+        type: 'DAILY_REPORT_STATUS_CHANGED',
+        report: updatedReport
+      });
+    }
+    return true;
+  }
+
+  function rejectDailyReport(repId, feedback = '') {
+    let updatedReport = null;
+    const nextReports = (dailyReports || []).map(r => {
+      if (r.id === repId) {
+        updatedReport = {
+          ...r,
+          status: 'revision_needed',
+          adminFeedback: feedback || 'Please review and update outreach metrics.',
+          rejectedAt: new Date().toISOString()
+        };
+        return updatedReport;
+      }
+      return r;
+    });
+    setDailyReports(nextReports);
+    try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(nextReports)); } catch (e) {}
+    saveGlobalMetaToCloud({ dailyReports: nextReports }).catch(() => {});
+
+    if (updatedReport) {
+      broadcastRealtimeEvent({
+        type: 'DAILY_REPORT_STATUS_CHANGED',
+        report: updatedReport
+      });
+    }
+    return true;
   }
 
   function deleteDailyReport(repId) {
@@ -1820,6 +1931,7 @@ export function WorkspaceProvider({ children }) {
     setWarriors(nextWarriors);
     try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(nextWarriors)); } catch (e) {}
     saveGlobalMetaToCloud({ warriors: nextWarriors });
+    saveWarriorsToSupabase(nextWarriors).catch(e => console.warn('Supabase save warriors notice:', e));
 
     broadcastRealtimeEvent({
       type: 'WARRIOR_UPDATED',
@@ -1840,6 +1952,7 @@ export function WorkspaceProvider({ children }) {
     setWarriors(nextWarriors);
     try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(nextWarriors)); } catch (e) {}
     saveGlobalMetaToCloud({ warriors: nextWarriors });
+    saveWarriorsToSupabase(nextWarriors).catch(e => console.warn('Supabase update warriors notice:', e));
 
     if (updatedWarrior) {
       broadcastRealtimeEvent({
@@ -1854,8 +1967,8 @@ export function WorkspaceProvider({ children }) {
     const nextWarriors = (warriors || []).filter(w => w.id !== warriorId);
     setWarriors(nextWarriors);
     try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(nextWarriors)); } catch (e) {}
-    // INSTANT REAL-TIME CLOUD PUSH
     saveGlobalMetaToCloud({ warriors: nextWarriors });
+    saveWarriorsToSupabase(nextWarriors).catch(e => console.warn('Supabase delete warriors notice:', e));
     return true;
   }
 
@@ -1920,6 +2033,8 @@ export function WorkspaceProvider({ children }) {
     rejectTask,
     deleteTask,
     submitDailyReport,
+    approveDailyReport,
+    rejectDailyReport,
     deleteDailyReport,
     addWarrior,
     updateWarrior,

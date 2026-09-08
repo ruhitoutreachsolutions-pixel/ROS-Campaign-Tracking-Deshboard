@@ -2,16 +2,21 @@ import { createClient } from '@supabase/supabase-js';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
-const ENV_SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-const ENV_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5cWN0aGJldHdlbnZjdGp2ZmltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3MTUzMTMsImV4cCI6MjEwMzI5MTMxM30.JVjBtbXU8evmFx9ORHtVsf3cr8F7_yqhFrcm-NvtvKU';
+
+const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
+const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
 
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
+const SYSTEM_META_ID = '__ros_system_metadata__';
 
 // 1. Get active Supabase client
 export function getSupabaseClient() {
-  const url = localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-  const key = localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY;
+  const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
+  const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
+  const url = savedUrl || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const key = savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
   if (url && key && url.startsWith('http')) {
     try {
@@ -26,7 +31,7 @@ export function getSupabaseClient() {
 }
 
 export function saveSupabaseConfig(url, key) {
-  if (url && key) {
+  if (url && key && typeof localStorage !== 'undefined') {
     localStorage.setItem(STORAGE_KEY_SUPABASE_URL, url.trim());
     localStorage.setItem(STORAGE_KEY_SUPABASE_KEY, key.trim());
     return true;
@@ -35,9 +40,11 @@ export function saveSupabaseConfig(url, key) {
 }
 
 export function getSupabaseConfig() {
+  const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
+  const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
   return {
-    url: localStorage.getItem(STORAGE_KEY_SUPABASE_URL) || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL,
-    key: localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) || ENV_SUPABASE_ANON_KEY || ''
+    url: savedUrl || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL,
+    key: savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY
   };
 }
 
@@ -64,7 +71,10 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
     }
 
     if (Array.isArray(data) && data.length > 0) {
-      return data.map(item => ({
+      // Filter out internal system metadata rows
+      const clientWorkspaces = data.filter(item => item && item.id && !item.id.startsWith('__ros_'));
+
+      return clientWorkspaces.map(item => ({
         id: item.id,
         name: item.name,
         clientName: item.client_name || item.name,
@@ -103,6 +113,8 @@ export async function saveWorkspacesToCloud(workspaces) {
     let lastError = null;
 
     for (const ws of workspaces) {
+      if (!ws || !ws.id || ws.id.startsWith('__ros_')) continue;
+
       const payload = {
         id: ws.id,
         name: ws.name,
@@ -134,3 +146,112 @@ export async function saveWorkspacesToCloud(workspaces) {
     return false;
   }
 }
+
+// 4. Fetch System Metadata (Warriors, Daily Reports, Tasks, Timeline) from Supabase
+export async function fetchSystemMetaFromSupabase() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('*')
+      .eq('id', SYSTEM_META_ID)
+      .maybeSingle();
+
+    if (error || !data) return null;
+
+    const warriors = Array.isArray(data.client_credentials?.warriors) ? data.client_credentials.warriors : [];
+    const seq = data.sequence_config || {};
+    const dailyReports = Array.isArray(seq.dailyReports) ? seq.dailyReports : [];
+    const tasks = Array.isArray(seq.tasks) ? seq.tasks : [];
+    const payments = Array.isArray(seq.payments) ? seq.payments : [];
+    const emailCopies = Array.isArray(seq.emailCopies) ? seq.emailCopies : [];
+    const importantNotes = Array.isArray(seq.importantNotes) ? seq.importantNotes : [];
+    const todos = Array.isArray(seq.todos) ? seq.todos : [];
+    const warriorTimeline = Array.isArray(data.activity_log) ? data.activity_log : [];
+
+    return {
+      warriors,
+      dailyReports,
+      tasks,
+      payments,
+      emailCopies,
+      importantNotes,
+      todos,
+      warriorTimeline,
+      updatedAt: data.updated_at
+    };
+  } catch (err) {
+    console.warn('Failed to fetch system meta from Supabase:', err);
+    return null;
+  }
+}
+
+// 5. Save System Metadata (Warriors, Daily Reports, Tasks, Timeline) to Supabase
+export async function saveSystemMetaToSupabase(meta) {
+  const supabase = getSupabaseClient();
+  if (!supabase || !meta) return false;
+
+  try {
+    // Merge with existing meta in Supabase to preserve other categories
+    const existing = await fetchSystemMetaFromSupabase();
+
+    const mergedWarriors = meta.warriors !== undefined ? meta.warriors : (existing?.warriors || []);
+    const mergedReports = meta.dailyReports !== undefined ? meta.dailyReports : (existing?.dailyReports || []);
+    const mergedTasks = meta.tasks !== undefined ? meta.tasks : (existing?.tasks || []);
+    const mergedPayments = meta.payments !== undefined ? meta.payments : (existing?.payments || []);
+    const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (existing?.emailCopies || []);
+    const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (existing?.importantNotes || []);
+    const mergedTodos = meta.todos !== undefined ? meta.todos : (existing?.todos || []);
+    const mergedTimeline = meta.warriorTimeline !== undefined ? meta.warriorTimeline : (existing?.warriorTimeline || []);
+
+    const payload = {
+      id: SYSTEM_META_ID,
+      name: 'ROS System Cloud Database',
+      client_name: 'ROS Internal Mission Control',
+      client_email: 'admin@rosoutreach.com',
+      campaign_name: 'Global System State',
+      active_sending_account: 'system',
+      sending_accounts: ['system'],
+      client_credentials: {
+        warriors: mergedWarriors
+      },
+      sequence_config: {
+        dailyReports: mergedReports,
+        tasks: mergedTasks,
+        payments: mergedPayments,
+        emailCopies: mergedCopies,
+        importantNotes: mergedNotes,
+        todos: mergedTodos
+      },
+      activity_log: mergedTimeline.slice(0, 300),
+      leads: [],
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('workspaces')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('Failed to save system meta to Supabase:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase system meta save failed:', err);
+    return false;
+  }
+}
+
+// 6. Direct Warrior Fetch & Save
+export async function fetchWarriorsFromSupabase() {
+  const meta = await fetchSystemMetaFromSupabase();
+  return meta?.warriors || [];
+}
+
+export async function saveWarriorsToSupabase(warriors) {
+  return saveSystemMetaToSupabase({ warriors });
+}
+
