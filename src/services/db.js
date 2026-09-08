@@ -147,6 +147,29 @@ export async function saveWorkspacesToCloud(workspaces) {
   }
 }
 
+// 3b. Delete Workspace from Supabase Cloud Database
+export async function deleteWorkspaceFromCloud(wsId) {
+  if (!wsId || wsId.startsWith('__ros_')) return false;
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  try {
+    const { error } = await supabase
+      .from('workspaces')
+      .delete()
+      .eq('id', wsId);
+
+    if (error) {
+      console.warn(`Error deleting workspace ${wsId} from Supabase:`, error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase delete workspace failed:', err);
+    return false;
+  }
+}
+
 // 4. Fetch System Metadata (Warriors, Daily Reports, Tasks, Timeline) from Supabase
 export async function fetchSystemMetaFromSupabase() {
   const supabase = getSupabaseClient();
@@ -194,17 +217,30 @@ export async function saveSystemMetaToSupabase(meta) {
   if (!supabase || !meta) return false;
 
   try {
-    // Merge with existing meta in Supabase to preserve other categories
-    const existing = await fetchSystemMetaFromSupabase();
+    // Fetch raw existing row to preserve client_credentials (chat, etc.) and sequence_config
+    const { data: rawData } = await supabase
+      .from('workspaces')
+      .select('*')
+      .eq('id', SYSTEM_META_ID)
+      .maybeSingle();
 
-    const mergedWarriors = meta.warriors !== undefined ? meta.warriors : (existing?.warriors || []);
-    const mergedReports = meta.dailyReports !== undefined ? meta.dailyReports : (existing?.dailyReports || []);
-    const mergedTasks = meta.tasks !== undefined ? meta.tasks : (existing?.tasks || []);
-    const mergedPayments = meta.payments !== undefined ? meta.payments : (existing?.payments || []);
-    const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (existing?.emailCopies || []);
-    const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (existing?.importantNotes || []);
-    const mergedTodos = meta.todos !== undefined ? meta.todos : (existing?.todos || []);
-    const mergedTimeline = meta.warriorTimeline !== undefined ? meta.warriorTimeline : (existing?.warriorTimeline || []);
+    const existingCreds = (rawData && typeof rawData.client_credentials === 'object' && rawData.client_credentials !== null)
+      ? rawData.client_credentials
+      : {};
+    const existingSeq = (rawData && typeof rawData.sequence_config === 'object' && rawData.sequence_config !== null)
+      ? rawData.sequence_config
+      : {};
+
+    const existingWarriors = Array.isArray(existingCreds.warriors) ? existingCreds.warriors : [];
+    const mergedWarriors = meta.warriors !== undefined ? meta.warriors : existingWarriors;
+
+    const mergedReports = meta.dailyReports !== undefined ? meta.dailyReports : (Array.isArray(existingSeq.dailyReports) ? existingSeq.dailyReports : []);
+    const mergedTasks = meta.tasks !== undefined ? meta.tasks : (Array.isArray(existingSeq.tasks) ? existingSeq.tasks : []);
+    const mergedPayments = meta.payments !== undefined ? meta.payments : (Array.isArray(existingSeq.payments) ? existingSeq.payments : []);
+    const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (Array.isArray(existingSeq.emailCopies) ? existingSeq.emailCopies : []);
+    const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (Array.isArray(existingSeq.importantNotes) ? existingSeq.importantNotes : []);
+    const mergedTodos = meta.todos !== undefined ? meta.todos : (Array.isArray(existingSeq.todos) ? existingSeq.todos : []);
+    const mergedTimeline = meta.warriorTimeline !== undefined ? meta.warriorTimeline : (Array.isArray(rawData?.activity_log) ? rawData.activity_log : []);
 
     const payload = {
       id: SYSTEM_META_ID,
@@ -215,9 +251,11 @@ export async function saveSystemMetaToSupabase(meta) {
       active_sending_account: 'system',
       sending_accounts: ['system'],
       client_credentials: {
+        ...existingCreds,
         warriors: mergedWarriors
       },
       sequence_config: {
+        ...existingSeq,
         dailyReports: mergedReports,
         tasks: mergedTasks,
         payments: mergedPayments,

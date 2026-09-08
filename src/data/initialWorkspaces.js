@@ -1,51 +1,5 @@
 export const initialWorkspaces = [
   {
-    id: 'ws_crewlixuk',
-    name: 'Crewlix UK',
-    clientName: 'Crewlix UK',
-    clientEmail: 'contact@crewlixuk.com',
-    campaignName: 'Care Campaign',
-    sendingAccounts: ['hello@crewlixuk.com'],
-    activeSendingAccount: 'hello@crewlixuk.com',
-    clientCredentials: {
-      username: 'crewlixuk',
-      password: 'crewlix2026'
-    },
-    createdAt: new Date().toISOString().split('T')[0],
-    sequenceConfig: {
-      email1Name: 'Initial Outreach',
-      email2Name: 'Follow-up 1 (Value Add)',
-      email3Name: 'Follow-up 2 (Breakup / Case Study)',
-      daysBetween1and2: 3,
-      daysBetween2and3: 4
-    },
-    activityLog: [],
-    leads: []
-  },
-  {
-    id: 'ws_crewlix',
-    name: 'Crewlix Global',
-    clientName: 'Crewlix Global Recruitment',
-    clientEmail: 'contact@crewlixglobal.com',
-    campaignName: 'Care Campaign',
-    sendingAccounts: ['hello@crewlixglobal.com'],
-    activeSendingAccount: 'hello@crewlixglobal.com',
-    clientCredentials: {
-      username: 'crewlix',
-      password: 'crewlix2026'
-    },
-    createdAt: new Date().toISOString().split('T')[0],
-    sequenceConfig: {
-      email1Name: 'Initial Outreach',
-      email2Name: 'Follow-up 1 (Value Add)',
-      email3Name: 'Follow-up 2 (Breakup / Case Study)',
-      daysBetween1and2: 3,
-      daysBetween2and3: 4
-    },
-    activityLog: [],
-    leads: []
-  },
-  {
     id: 'ws_crewlixukltd',
     name: 'Crewlix UK Ltd',
     clientName: 'Crewlix UK Ltd',
@@ -91,11 +45,11 @@ export const PIPELINE_STAGES = [
 export const initialEmailCopies = [
   {
     id: 'copy_1',
-    workspaceId: 'ws_crewlixuk',
-    brandName: 'Crewlix UK',
+    workspaceId: 'ws_crewlixukltd',
+    brandName: 'Crewlix UK Ltd',
     sequenceStep: 'email1',
     sequenceLabel: 'Email 1 (Initial Cold Touch)',
-    assignedAccount: 'juned@crewlixglobal.com',
+    assignedAccount: 'hello@crewlixukltd.com',
     subjectA: 'Quick inquiry regarding qualified care staff for {companyName}',
     subjectB: 'Reliable healthcare staffing solution for {city} care homes',
     body: `Hi {firstName},
@@ -107,16 +61,16 @@ I noticed {companyName} has been delivering exceptional care services across {ci
 Are you open to reviewing our rate card or having a brief 5-minute chat this week?
 
 Best regards,
-Outreach Team · Crewlix UK`,
+Outreach Team · Crewlix UK Ltd`,
     updatedAt: new Date().toISOString()
   },
   {
     id: 'copy_2',
-    workspaceId: 'ws_crewlixuk',
-    brandName: 'Crewlix UK',
+    workspaceId: 'ws_crewlixukltd',
+    brandName: 'Crewlix UK Ltd',
     sequenceStep: 'email2',
     sequenceLabel: 'Email 2 (Follow-up 1 - Value Add)',
-    assignedAccount: 'juned@crewlixglobal.com',
+    assignedAccount: 'hello@crewlixukltd.com',
     subjectA: 'Quick follow-up: staffing support for {companyName}',
     subjectB: 'Sharing our care home case study ({city})',
     body: `Hi {firstName},
@@ -126,16 +80,16 @@ Following up on my previous note. We recently helped a fellow care provider in {
 Would it be worth sending over a quick 2-page overview of how we achieve this?
 
 Kind regards,
-Crewlix UK Outreach`,
+Crewlix UK Ltd Outreach`,
     updatedAt: new Date().toISOString()
   },
   {
     id: 'copy_3',
-    workspaceId: 'ws_crewlixuk',
-    brandName: 'Crewlix UK',
+    workspaceId: 'ws_crewlixukltd',
+    brandName: 'Crewlix UK Ltd',
     sequenceStep: 'email3',
     sequenceLabel: 'Email 3 (Follow-up 2 - Breakup / Case Study)',
-    assignedAccount: 'juned@crewlixglobal.com',
+    assignedAccount: 'hello@crewlixukltd.com',
     subjectA: 'Permission to close your file, {firstName}?',
     subjectB: 'Final check-in regarding {companyName} staffing',
     body: `Hi {firstName},
@@ -147,7 +101,7 @@ I will assume staffing is completely sorted for now. If requirements come up in 
 Wishing you and the team all the best!
 
 Warm regards,
-Crewlix UK`,
+Crewlix UK Ltd`,
     updatedAt: new Date().toISOString()
   }
 ];
@@ -174,55 +128,12 @@ export const initialImportantNotes = [
 
 export const initialTodos = [
   { id: 'todo_1', text: 'Dispatch 250 follow-ups for Crewlix UK Ltd', completed: false, priority: 'high', dueDate: 'Today' },
-  { id: 'todo_2', text: 'Check bounce rates across juned@ and amit@ accounts', completed: true, priority: 'medium', dueDate: 'Yesterday' },
-  { id: 'todo_3', text: 'Update monthly invoice status for Crewlix Global', completed: false, priority: 'medium', dueDate: '10/09/26' }
+  { id: 'todo_2', text: 'Check bounce rates across active sending accounts', completed: true, priority: 'medium', dueDate: 'Yesterday' },
+  { id: 'todo_3', text: 'Update monthly invoice status for active clients', completed: false, priority: 'medium', dueDate: '10/09/26' }
 ];
 
-// 3. Initial Client Payments & Retainer Invoices (Admin Only)
-export const initialPayments = [
-  {
-    id: 'inv_101',
-    workspaceId: 'ws_crewlixuk',
-    clientName: 'Crewlix UK',
-    month: 'September 2026',
-    amount: 1500,
-    currency: 'GBP',
-    billingDate: '01/09/2026',
-    dueDate: '15/09/2026',
-    status: 'Paid',
-    invoiceNumber: 'INV-ROS-2026-091',
-    paymentMethod: 'Wise Bank Transfer',
-    notes: 'Monthly cold outbound lead generation retainer paid in full.'
-  },
-  {
-    id: 'inv_102',
-    workspaceId: 'ws_crewlixukltd',
-    clientName: 'Crewlix UK Ltd',
-    month: 'September 2026',
-    amount: 1750,
-    currency: 'GBP',
-    billingDate: '05/09/2026',
-    dueDate: '20/09/2026',
-    status: 'Pending',
-    invoiceNumber: 'INV-ROS-2026-092',
-    paymentMethod: 'Direct Debit / Stripe',
-    notes: 'Includes Mail Merge dedicated warmups and 3,000 monthly verified prospects.'
-  },
-  {
-    id: 'inv_103',
-    workspaceId: 'ws_crewlix',
-    clientName: 'Crewlix Global',
-    month: 'August 2026',
-    amount: 2000,
-    currency: 'USD',
-    billingDate: '01/08/2026',
-    dueDate: '15/08/2026',
-    status: 'Paid',
-    invoiceNumber: 'INV-ROS-2026-085',
-    paymentMethod: 'Stripe Card',
-    notes: 'Full payment received with positive ROI.'
-  }
-];
+// 3. Initial Client Payments & Retainer Invoices (Admin Only) - Empty by default, no demo data
+export const initialPayments = [];
 
 // 4. Initial Tasks & Real-Time Approval Workflows (Empty by default)
 export const initialTasks = [];

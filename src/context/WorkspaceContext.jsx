@@ -15,6 +15,7 @@ import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, cop
 import { 
   fetchWorkspacesFromCloud, 
   saveWorkspacesToCloud, 
+  deleteWorkspaceFromCloud,
   getSupabaseConfig, 
   saveSupabaseConfig, 
   getSupabaseClient, 
@@ -58,38 +59,36 @@ const STORAGE_KEY_TASKS = 'ros_tasks_v1';
 const STORAGE_KEY_REPORTS = 'ros_reports_v1';
 const STORAGE_KEY_WARRIORS = 'ros_warriors_v1';
 const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
+const STORAGE_KEY_DELETED_WORKSPACES = 'ros_deleted_workspaces_v1';
+
+export function getDeletedWorkspaceIds() {
+  try {
+    const s = localStorage.getItem(STORAGE_KEY_DELETED_WORKSPACES);
+    return s ? JSON.parse(s) : [];
+  } catch (e) {
+    return [];
+  }
+}
 
 export function WorkspaceProvider({ children }) {
-  // 1. Initial fast synchronous load from localStorage (Strictly excluding internal system metadata)
+  // 1. Initial fast synchronous load from localStorage (Strictly excluding internal system metadata and deleted workspaces)
   const [workspaces, setWorkspaces] = useState(() => {
+    const deletedIds = getDeletedWorkspaceIds();
     try {
       const saved = localStorage.getItem(STORAGE_KEY_WORKSPACES);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const validParsed = parsed.filter(w => w && w.id && !w.id.startsWith('__ros_'));
-          const merged = [...validParsed];
-          (initialWorkspaces || []).forEach(initWs => {
-            if (!initWs || (initWs.id && initWs.id.startsWith('__ros_'))) return;
-            const index = merged.findIndex(w => 
-              w && (
-                (w.id && w.id === initWs.id) || 
-                (w.clientCredentials?.username && initWs.clientCredentials?.username && String(w.clientCredentials.username).toLowerCase() === String(initWs.clientCredentials.username).toLowerCase())
-              )
-            );
-            if (index === -1) {
-              merged.push(initWs);
-            } else if (merged[index]) {
-              merged[index] = { ...initWs, ...merged[index] };
-            }
-          });
-          return merged.filter(w => w && w.id && !w.id.startsWith('__ros_'));
+          const validParsed = parsed.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
+          if (validParsed.length > 0) {
+            return validParsed;
+          }
         }
       }
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
     }
-    return (initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_'));
+    return (initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
   });
 
   // 2. Load active workspace ID
@@ -235,7 +234,8 @@ export function WorkspaceProvider({ children }) {
             idbLoadedRef.current = true;
             // If IndexedDB has more or equal leads, or newer updates, adopt it
             if (idbTotalLeads >= prevTotalLeads) {
-              return idbData;
+              const deletedIds = getDeletedWorkspaceIds();
+              return idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
             }
             return prev;
           });
@@ -259,48 +259,53 @@ export function WorkspaceProvider({ children }) {
         const cloudData = await fetchWorkspacesFromCloud(null);
         if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
 
+        const deletedIds = getDeletedWorkspaceIds();
+        const validCloudData = cloudData.filter(c => c && c.id && !c.id.startsWith('__ros_') && !deletedIds.includes(c.id));
+
         setWorkspaces(prev => {
           let needsPushToCloud = false;
 
-          const merged = prev.map(localWs => {
-            const cloudWs = cloudData.find(c => c.id === localWs.id);
-            if (!cloudWs) {
-              needsPushToCloud = true;
-              return localWs;
-            }
+          const merged = prev
+            .filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
+            .map(localWs => {
+              const cloudWs = validCloudData.find(c => c.id === localWs.id);
+              if (!cloudWs) {
+                needsPushToCloud = true;
+                return localWs;
+              }
 
-            // SMART LEAD-LEVEL MERGE:
-            // Prevents stale cloud data from wiping out yesterday's 1,100 follow-ups or booked meetings!
-            const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || []);
+              // SMART LEAD-LEVEL MERGE:
+              // Prevents stale cloud data from wiping out yesterday's 1,100 follow-ups or booked meetings!
+              const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || []);
 
-            const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
-            const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
+              const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
+              const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
 
-            // If local has newer updates or more leads than cloud, flag to push updates to Supabase
-            if (localTime > cloudTime || (localWs.leads?.length || 0) > (cloudWs.leads?.length || 0)) {
-              needsPushToCloud = true;
-            }
+              // If local has newer updates or more leads than cloud, flag to push updates to Supabase
+              if (localTime > cloudTime || (localWs.leads?.length || 0) > (cloudWs.leads?.length || 0)) {
+                needsPushToCloud = true;
+              }
 
-            return {
-              ...cloudWs,
-              ...localWs,
-              leads: mergedLeads,
-              activityLog: (localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0)
-                ? localWs.activityLog
-                : cloudWs.activityLog || [],
-              updatedAt: localTime >= cloudTime ? (localWs.updatedAt || new Date().toISOString()) : cloudWs.updatedAt
-            };
-          });
+              return {
+                ...cloudWs,
+                ...localWs,
+                leads: mergedLeads,
+                activityLog: (localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0)
+                  ? localWs.activityLog
+                  : cloudWs.activityLog || [],
+                updatedAt: localTime >= cloudTime ? (localWs.updatedAt || new Date().toISOString()) : cloudWs.updatedAt
+              };
+            });
 
-          // Include any brand new workspaces from cloud
-          cloudData.forEach(cWs => {
-            if (!merged.some(m => m.id === cWs.id)) {
+          // Include any brand new workspaces from cloud (excluding deleted ones)
+          validCloudData.forEach(cWs => {
+            if (!merged.some(m => m.id === cWs.id) && !deletedIds.includes(cWs.id)) {
               merged.push(cWs);
             }
           });
 
-          // Filter out internal system metadata from workspaces
-          const cleanMerged = merged.filter(w => w && w.id && !w.id.startsWith('__ros_'));
+          // Filter out internal system metadata and deleted workspaces
+          const cleanMerged = merged.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
 
           // If local has newer follow-ups/updates, push them back to Supabase so all devices stay updated!
           if (needsPushToCloud) {
@@ -340,11 +345,11 @@ export function WorkspaceProvider({ children }) {
           setWarriors(cloudMeta.warriors);
           try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(cloudMeta.warriors)); } catch (e) {}
         }
-        if (Array.isArray(cloudMeta.tasks) && cloudMeta.tasks.length > 0) {
+        if (Array.isArray(cloudMeta.tasks)) {
           setTasks(cloudMeta.tasks);
           try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
         }
-        if (Array.isArray(cloudMeta.payments) && cloudMeta.payments.length > 0) {
+        if (Array.isArray(cloudMeta.payments)) {
           setPayments(cloudMeta.payments);
           try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cloudMeta.payments)); } catch (e) {}
         }
@@ -360,11 +365,11 @@ export function WorkspaceProvider({ children }) {
           setTodos(cloudMeta.todos);
           try { localStorage.setItem(STORAGE_KEY_TODOS, JSON.stringify(cloudMeta.todos)); } catch (e) {}
         }
-        if (Array.isArray(cloudMeta.dailyReports) && cloudMeta.dailyReports.length > 0) {
+        if (Array.isArray(cloudMeta.dailyReports)) {
           setDailyReports(cloudMeta.dailyReports);
           try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(cloudMeta.dailyReports)); } catch (e) {}
         }
-        if (Array.isArray(cloudMeta.warriorTimeline) && cloudMeta.warriorTimeline.length > 0) {
+        if (Array.isArray(cloudMeta.warriorTimeline)) {
           setWarriorTimeline(cloudMeta.warriorTimeline);
           try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(cloudMeta.warriorTimeline)); } catch (e) {}
         }
@@ -641,6 +646,17 @@ export function WorkspaceProvider({ children }) {
       if (event.type === 'CHAT_PERMISSIONS_UPDATED' && event.permissions) {
         setChatPermissions(event.permissions);
       }
+
+      // 8. Workspace Deleted
+      if (event.type === 'WORKSPACE_DELETED' && event.workspaceId) {
+        const targetId = event.workspaceId;
+        const deleted = getDeletedWorkspaceIds();
+        if (!deleted.includes(targetId)) {
+          deleted.push(targetId);
+          try { localStorage.setItem(STORAGE_KEY_DELETED_WORKSPACES, JSON.stringify(deleted)); } catch (e) {}
+        }
+        setWorkspaces(prev => prev.filter(w => w.id !== targetId));
+      }
     }
 
     // C. 5-Second Active Polling Backup (Local Server API /api/sync)
@@ -696,7 +712,7 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
-        if (Array.isArray(cloudMeta.tasks) && cloudMeta.tasks.length > 0) {
+        if (Array.isArray(cloudMeta.tasks)) {
           setTasks(prev => {
             if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.tasks)) {
               try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
@@ -716,7 +732,7 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
-        if (Array.isArray(cloudMeta.payments) && cloudMeta.payments.length > 0) {
+        if (Array.isArray(cloudMeta.payments)) {
           setPayments(prev => {
             if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.payments)) {
               try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cloudMeta.payments)); } catch (e) {}
@@ -1680,27 +1696,77 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
-  function deleteWorkspace(wsId) {
+  async function deleteWorkspace(wsId) {
+    if (!wsId) return false;
     if (workspaces.length <= 1) {
       alert('Cannot delete the last workspace.');
       return false;
     }
+
+    // 1. Calculate remaining workspaces
     const remaining = workspaces.filter(w => w.id !== wsId);
     setWorkspaces(remaining);
-    if (currentWorkspaceId === wsId) {
-      setCurrentWorkspaceId(remaining[0].id);
+
+    // 2. Persist to localStorage and track tombstone deleted set
+    try {
+      localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(remaining));
+      const deleted = getDeletedWorkspaceIds();
+      if (!deleted.includes(wsId)) {
+        deleted.push(wsId);
+        localStorage.setItem(STORAGE_KEY_DELETED_WORKSPACES, JSON.stringify(deleted));
+      }
+    } catch (e) {}
+
+    // 3. Persist to local durable IndexedDB
+    saveWorkspacesToLocal(remaining);
+
+    // 4. Delete row from Supabase Cloud Database
+    try {
+      await deleteWorkspaceFromCloud(wsId);
+    } catch (e) {
+      console.warn('Error deleting workspace from Supabase:', e);
     }
+
+    // 5. Clean up associated payments and persist
+    const nextPayments = (payments || []).filter(p => p.workspaceId !== wsId);
+    setPayments(nextPayments);
+    try {
+      localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(nextPayments));
+    } catch (e) {}
+    saveGlobalMetaToCloud({ payments: nextPayments }).catch(() => {});
+
+    // 6. Clean up associated tasks and persist
+    const nextTasks = (tasks || []).filter(t => t.workspaceId !== wsId);
+    setTasks(nextTasks);
+    try {
+      localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks));
+    } catch (e) {}
+    saveGlobalMetaToCloud({ tasks: nextTasks }).catch(() => {});
+
+    // 7. If currently selected workspace was deleted, switch to first remaining
+    if (currentWorkspaceId === wsId) {
+      const nextId = remaining[0]?.id || '';
+      setCurrentWorkspaceId(nextId);
+      try {
+        localStorage.setItem(STORAGE_KEY_ACTIVE_WSD, nextId);
+      } catch (e) {}
+    }
+
+    // 8. Broadcast realtime event to all clients/tabs
+    broadcastRealtimeEvent('WORKSPACE_DELETED', { workspaceId: wsId }).catch(() => {});
+
     return true;
   }
 
   function resetToDefaults() {
     setWorkspaces(initialWorkspaces);
-    setCurrentWorkspaceId('ws_crewlixuk');
+    setCurrentWorkspaceId(initialWorkspaces[0]?.id || 'ws_crewlixukltd');
     setAdminViewingAsClient(false);
     setCurrentUser(null);
     localStorage.removeItem(STORAGE_KEY_WORKSPACES);
     localStorage.removeItem(STORAGE_KEY_ACTIVE_WSD);
     localStorage.removeItem(STORAGE_KEY_USER);
+    localStorage.removeItem(STORAGE_KEY_DELETED_WORKSPACES);
   }
 
   // Desktop notification helper
