@@ -60,16 +60,17 @@ const STORAGE_KEY_WARRIORS = 'ros_warriors_v1';
 const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
 
 export function WorkspaceProvider({ children }) {
-  // 1. Initial fast synchronous load from localStorage
+  // 1. Initial fast synchronous load from localStorage (Strictly excluding internal system metadata)
   const [workspaces, setWorkspaces] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_WORKSPACES);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const merged = [...parsed];
+          const validParsed = parsed.filter(w => w && w.id && !w.id.startsWith('__ros_'));
+          const merged = [...validParsed];
           (initialWorkspaces || []).forEach(initWs => {
-            if (!initWs) return;
+            if (!initWs || (initWs.id && initWs.id.startsWith('__ros_'))) return;
             const index = merged.findIndex(w => 
               w && (
                 (w.id && w.id === initWs.id) || 
@@ -82,13 +83,13 @@ export function WorkspaceProvider({ children }) {
               merged[index] = { ...initWs, ...merged[index] };
             }
           });
-          return merged;
+          return merged.filter(w => w && w.id && !w.id.startsWith('__ros_'));
         }
       }
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
     }
-    return initialWorkspaces || [];
+    return (initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_'));
   });
 
   // 2. Load active workspace ID
@@ -298,15 +299,18 @@ export function WorkspaceProvider({ children }) {
             }
           });
 
+          // Filter out internal system metadata from workspaces
+          const cleanMerged = merged.filter(w => w && w.id && !w.id.startsWith('__ros_'));
+
           // If local has newer follow-ups/updates, push them back to Supabase so all devices stay updated!
           if (needsPushToCloud) {
-            saveWorkspacesToCloud(merged).catch(err => console.warn('Cloud sync push notice:', err));
+            saveWorkspacesToCloud(cleanMerged).catch(err => console.warn('Cloud sync push notice:', err));
           }
 
           // Save merged result safely to IndexedDB
-          saveWorkspacesToLocal(merged);
+          saveWorkspacesToLocal(cleanMerged);
 
-          return merged;
+          return cleanMerged;
         });
       } catch (err) {
         console.warn('Background cloud sync notice:', err);
@@ -780,18 +784,49 @@ export function WorkspaceProvider({ children }) {
     } catch (e) {}
   }, [currentUser]);
 
-  // Resolve unified current user ID
-  const currentUserId = useMemo(() => {
-    if (!currentUser) return null;
-    if (currentUser.id) return String(currentUser.id);
-    if (currentUser.role === 'admin') return 'admin';
-    if (currentUser.role === 'client') return String(currentUser.workspaceId || currentUser.username);
-    return String(currentUser.username);
-  }, [currentUser]);
+  // Computed Active Workspace (Cleanly excluding any internal system metadata)
+  const currentWorkspace = useMemo(() => {
+    const validWorkspaces = (workspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_'));
+    return validWorkspaces.find(w => w.id === currentWorkspaceId) || validWorkspaces[0] || initialWorkspaces[0] || null;
+  }, [workspaces, currentWorkspaceId]);
 
-  // Real-Time Chat V1 Initialization & Realtime Subscription
+  // Computed metrics for current workspace
+  const metrics = useMemo(() => {
+    return calculateWorkspaceMetrics(currentWorkspace);
+  }, [currentWorkspace]);
+
+  // Unified Effective Identity Model
+  // When Admin enters Client View, effectiveUser acts as that specific client workspace!
+  const effectiveUser = useMemo(() => {
+    if (!currentUser) return null;
+    if (currentUser.role === 'admin' && adminViewingAsClient && currentWorkspace) {
+      return {
+        id: String(currentWorkspace.id),
+        username: currentWorkspace.clientCredentials?.username || currentWorkspace.name,
+        name: currentWorkspace.clientName || currentWorkspace.name,
+        role: 'client',
+        workspaceId: currentWorkspace.id,
+        isImpersonated: true
+      };
+    }
+    return currentUser;
+  }, [currentUser, adminViewingAsClient, currentWorkspace]);
+
+  const effectiveUserId = useMemo(() => {
+    if (!effectiveUser) return null;
+    if (effectiveUser.role === 'admin') return 'admin';
+    if (effectiveUser.role === 'client') return String(effectiveUser.workspaceId || effectiveUser.id);
+    return String(effectiveUser.id || effectiveUser.username);
+  }, [effectiveUser]);
+
+  // Active Role (Considers Admin Preview Mode)
+  const effectiveRole = useMemo(() => {
+    return effectiveUser ? effectiveUser.role : 'guest';
+  }, [effectiveUser]);
+
+  // Real-Time Chat V1 Initialization & Scoped Realtime Subscription
   useEffect(() => {
-    if (!currentUserId) return;
+    if (!effectiveUserId) return;
 
     let cleanupRealtime = () => {};
 
@@ -804,12 +839,12 @@ export function WorkspaceProvider({ children }) {
         }
       } catch (e) {}
 
-      // 2. Fetch conversations & recent messages from cloud
+      // 2. Fetch conversations & recent messages from cloud (strictly for effectiveUserId)
       try {
-        const cloudConvs = await fetchConversationsFromCloud(currentUserId);
+        const cloudConvs = await fetchConversationsFromCloud(effectiveUserId);
         const allMsgs = [];
         for (const c of (cloudConvs || []).slice(0, 25)) {
-          const msgs = await fetchMessagesFromCloud(c.id);
+          const msgs = await fetchMessagesFromCloud(c.id, effectiveUserId);
           if (Array.isArray(msgs)) allMsgs.push(...msgs);
         }
 
@@ -818,7 +853,9 @@ export function WorkspaceProvider({ children }) {
             const map = new Map();
             (prev || []).forEach(m => map.set(m.id, m));
             allMsgs.forEach(m => map.set(m.id, m));
-            const merged = Array.from(map.values()).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            const merged = Array.from(map.values())
+              .filter(m => String(m.sender_id) === effectiveUserId || String(m.recipient_id) === effectiveUserId || effectiveUser?.role === 'admin')
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
             try { localStorage.setItem(STORAGE_KEY_CHAT_MSGS, JSON.stringify(merged.slice(-500))); } catch (e) {}
             return merged;
           });
@@ -827,15 +864,20 @@ export function WorkspaceProvider({ children }) {
         console.warn('Chat initial sync notice:', e);
       }
 
-      // 3. Setup Supabase Realtime (Broadcast + Presence across all devices)
+      // 3. Setup Supabase Realtime (Scoped User Broadcast + Presence)
       cleanupRealtime = setupChatRealtime({
-        currentUserId,
+        currentUserId: effectiveUserId,
         userMetadata: {
-          name: currentUser?.name || currentUserId,
-          role: currentUser?.role || 'warrior'
+          name: effectiveUser?.name || effectiveUserId,
+          role: effectiveUser?.role || 'client'
         },
         onMessage: (msg) => {
           if (!msg || !msg.id) return;
+
+          // Message must be addressed to or sent by effectiveUserId
+          if (String(msg.recipient_id) !== effectiveUserId && String(msg.sender_id) !== effectiveUserId) {
+            return;
+          }
 
           setChatMessages(prev => {
             if ((prev || []).some(m => m.id === msg.id)) return prev;
@@ -845,11 +887,11 @@ export function WorkspaceProvider({ children }) {
           });
 
           // Check if message is directed to me
-          if (msg.recipient_id === currentUserId) {
+          if (String(msg.recipient_id) === effectiveUserId) {
             const isLookingAtContact = activeChatContactRef.current === msg.sender_id;
             if (isLookingAtContact) {
-              markMessagesAsReadInCloud(msg.conversation_id, currentUserId);
-              broadcastMessagesRead(msg.conversation_id, currentUserId);
+              markMessagesAsReadInCloud(msg.conversation_id, effectiveUserId);
+              broadcastMessagesRead(msg.conversation_id, effectiveUserId, msg.sender_id);
               setChatMessages(prev => (prev || []).map(m => m.id === msg.id ? { ...m, status: 'read' } : m));
             } else {
               playNotificationChime();
@@ -867,7 +909,7 @@ export function WorkspaceProvider({ children }) {
           if (!conversationId) return;
           setChatMessages(prev => {
             const next = (prev || []).map(m => {
-              if (m.conversation_id === conversationId && m.sender_id === currentUserId && m.recipient_id === readerId) {
+              if (m.conversation_id === conversationId && String(m.sender_id) === effectiveUserId && String(m.recipient_id) === readerId) {
                 return { ...m, status: 'read', read_at: new Date().toISOString() };
               }
               return m;
@@ -889,20 +931,7 @@ export function WorkspaceProvider({ children }) {
     return () => {
       cleanupRealtime();
     };
-  }, [currentUserId, currentUser]);
-
-  // Computed Active Workspace
-  const currentWorkspace = useMemo(() => {
-    return workspaces.find(w => w.id === currentWorkspaceId) || workspaces[0] || initialWorkspaces[0] || null;
-  }, [workspaces, currentWorkspaceId]);
-
-  // Computed metrics for current workspace
-  const metrics = useMemo(() => {
-    return calculateWorkspaceMetrics(currentWorkspace);
-  }, [currentWorkspace]);
-
-  // Active Role (Considers Admin Preview Mode)
-  const effectiveRole = currentUser ? (currentUser.role === 'admin' && adminViewingAsClient ? 'client' : currentUser.role) : 'guest';
+  }, [effectiveUserId, effectiveUser]);
 
   // Manual 1-Click Sync to Cloud Function
   async function syncAllWorkspacesToCloud() {
@@ -2121,34 +2150,53 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
-  // 16. REAL-TIME CHAT V1 METHODS
-  function canUserAccessChat(user = currentUser) {
-    if (!user) return false;
-    if (user.role === 'admin') return true; // Admin ALWAYS has access
-    const uId = String(user.id || user.username || user.workspaceId);
-    if (chatPermissions[uId] !== undefined) {
+  // 16. REAL-TIME CHAT V1 METHODS (SECURITY & AUTHORIZATION REFACTORED)
+  function canUserAccessChat(targetUser = effectiveUser) {
+    if (!targetUser) return false;
+    // Agency Admin in Admin mode always has access
+    if (targetUser.role === 'admin' && !targetUser.isImpersonated) return true;
+
+    const uId = String(targetUser.workspaceId || targetUser.id || targetUser.username);
+
+    // Client role: must have explicit TRUE in chatPermissions (default false)
+    if (targetUser.role === 'client') {
       return Boolean(chatPermissions[uId]);
     }
-    // Default: Warriors have chat enabled, Clients default to disabled until Admin enables
-    if (user.role === 'warrior') return true;
+
+    // Warrior role: default true unless explicitly toggled false
+    if (targetUser.role === 'warrior') {
+      return chatPermissions[uId] !== undefined ? Boolean(chatPermissions[uId]) : true;
+    }
+
     return false;
   }
 
+  // Permissions directory for Admin Management Modal (clean list without system metadata)
+  const allWarriorsForPermissions = useMemo(() => warriors || [], [warriors]);
+  const allWorkspacesForPermissions = useMemo(() => {
+    return (workspaces || []).filter(ws => ws && ws.id && !ws.id.startsWith('__ros_'));
+  }, [workspaces]);
+
+  // Strict Authorized Chat Directory (Only authorized communication lines)
   const allowedChatContacts = useMemo(() => {
-    if (!currentUser) return [];
-    const myRole = currentUser.role;
-    const myId = currentUserId;
+    if (!effectiveUser || !effectiveUserId) return [];
+    const myRole = effectiveUser.role;
+    const myId = effectiveUserId;
+
+    // If effective entity has chat access OFF, they can communicate with NO ONE
+    if (!canUserAccessChat(effectiveUser)) return [];
 
     const contacts = [];
 
-    // 1. Admin is always a contact for everyone
+    // 1. Admin is always a direct line for authorized warriors and authorized clients
     if (myRole !== 'admin') {
       contacts.push({
         id: 'admin',
-        name: 'Ruhit (Agency Founder)',
+        name: 'Ruhit (Agency Founder / Admin)',
         username: 'admin',
         role: 'admin',
-        badge: '👑 Admin'
+        badge: '👑 Agency Support',
+        chatAccess: true
       });
     }
 
@@ -2156,9 +2204,9 @@ export function WorkspaceProvider({ children }) {
     (warriors || []).forEach(w => {
       const wId = String(w.id || w.username);
       if (wId === myId) return; // Don't list myself
-      
+
       const isEnabled = chatPermissions[wId] !== undefined ? Boolean(chatPermissions[wId]) : true;
-      if (!isEnabled && myRole !== 'admin') return; // Only admin can see disabled warriors to toggle them
+      if (!isEnabled) return; // Disabled warriors are NEVER in the active chat directory!
 
       if (myRole === 'admin') {
         contacts.push({
@@ -2167,23 +2215,21 @@ export function WorkspaceProvider({ children }) {
           username: w.username,
           role: 'warrior',
           badge: '⚔️ ROS Warrior',
-          chatAccess: isEnabled
+          chatAccess: true
         });
       } else if (myRole === 'warrior') {
-        if (isEnabled) {
-          contacts.push({
-            id: wId,
-            name: w.name,
-            username: w.username,
-            role: 'warrior',
-            badge: '⚔️ ROS Warrior',
-            chatAccess: true
-          });
-        }
+        contacts.push({
+          id: wId,
+          name: w.name,
+          username: w.username,
+          role: 'warrior',
+          badge: '⚔️ ROS Warrior',
+          chatAccess: true
+        });
       } else if (myRole === 'client') {
-        const clientWsId = String(currentUser.workspaceId || currentUser.id);
+        const clientWsId = String(effectiveUser.workspaceId || effectiveUser.id);
         const isAssigned = Array.isArray(w.allowedWorkspaceIds) && w.allowedWorkspaceIds.includes(clientWsId);
-        if (isAssigned && isEnabled) {
+        if (isAssigned) {
           contacts.push({
             id: wId,
             name: w.name,
@@ -2196,27 +2242,19 @@ export function WorkspaceProvider({ children }) {
       }
     });
 
-    // 3. Clients (Workspaces)
-    (workspaces || []).forEach(ws => {
-      const cId = String(ws.id);
-      if (cId === myId) return; // Don't list myself
+    // 3. Clients (Workspaces) - STRICT CLIENT ISOLATION
+    // ONLY Admin and Assigned Warriors can see Clients! Clients NEVER see other Clients!
+    if (myRole === 'admin' || myRole === 'warrior') {
+      const cleanWorkspaces = (workspaces || []).filter(ws => ws && ws.id && !ws.id.startsWith('__ros_'));
 
-      const isEnabled = Boolean(chatPermissions[cId]);
-      if (!isEnabled && myRole !== 'admin') return;
+      cleanWorkspaces.forEach(ws => {
+        const cId = String(ws.id);
+        if (cId === myId) return; // Don't list myself
 
-      if (myRole === 'admin') {
-        contacts.push({
-          id: cId,
-          name: ws.clientName || ws.name,
-          username: ws.clientCredentials?.username || ws.name,
-          role: 'client',
-          badge: '🏢 Client',
-          workspaceId: ws.id,
-          chatAccess: isEnabled
-        });
-      } else if (myRole === 'warrior') {
-        const isAssigned = Array.isArray(currentUser.allowedWorkspaceIds) && currentUser.allowedWorkspaceIds.includes(ws.id);
-        if (isAssigned && isEnabled) {
+        const isEnabled = Boolean(chatPermissions[cId]);
+        if (!isEnabled) return; // Disabled clients are NEVER in the active chat directory!
+
+        if (myRole === 'admin') {
           contacts.push({
             id: cId,
             name: ws.clientName || ws.name,
@@ -2226,42 +2264,73 @@ export function WorkspaceProvider({ children }) {
             workspaceId: ws.id,
             chatAccess: true
           });
+        } else if (myRole === 'warrior') {
+          const isAssigned = Array.isArray(currentUser?.allowedWorkspaceIds) && currentUser.allowedWorkspaceIds.includes(ws.id);
+          if (isAssigned) {
+            contacts.push({
+              id: cId,
+              name: ws.clientName || ws.name,
+              username: ws.clientCredentials?.username || ws.name,
+              role: 'client',
+              badge: '🏢 Client',
+              workspaceId: ws.id,
+              chatAccess: true
+            });
+          }
         }
-      }
-    });
+      });
+    }
 
     return contacts;
-  }, [currentUser, currentUserId, warriors, workspaces, chatPermissions]);
+  }, [effectiveUser, effectiveUserId, warriors, workspaces, chatPermissions]);
 
-  // Unread messages counts
+  // Unread messages counts (Scoped strictly to effectiveUserId and authorized contacts)
   const chatUnreadCount = useMemo(() => {
-    if (!currentUserId) return 0;
-    return (chatMessages || []).filter(m => String(m.recipient_id) === currentUserId && m.status !== 'read').length;
-  }, [chatMessages, currentUserId]);
+    if (!effectiveUserId) return 0;
+    const allowedIds = new Set(allowedChatContacts.map(c => c.id));
+    return (chatMessages || []).filter(m => 
+      String(m.recipient_id) === effectiveUserId && 
+      allowedIds.has(m.sender_id) && 
+      m.status !== 'read'
+    ).length;
+  }, [chatMessages, effectiveUserId, allowedChatContacts]);
 
   const unreadCountByContact = useMemo(() => {
-    if (!currentUserId) return {};
+    if (!effectiveUserId) return {};
+    const allowedIds = new Set(allowedChatContacts.map(c => c.id));
     const map = {};
     (chatMessages || []).forEach(m => {
-      if (String(m.recipient_id) === currentUserId && m.status !== 'read') {
+      if (String(m.recipient_id) === effectiveUserId && allowedIds.has(m.sender_id) && m.status !== 'read') {
         map[m.sender_id] = (map[m.sender_id] || 0) + 1;
       }
     });
     return map;
-  }, [chatMessages, currentUserId]);
+  }, [chatMessages, effectiveUserId, allowedChatContacts]);
 
   async function sendChatMessage(recipientId, content) {
-    if (!currentUserId || !recipientId || !content || !content.trim()) return false;
+    if (!effectiveUserId || !recipientId || !content || !content.trim()) return false;
 
-    const convId = getDirectConversationId(currentUserId, recipientId);
+    // Sender permission check
+    if (!canUserAccessChat(effectiveUser)) {
+      console.warn('Sender lacks chat access');
+      return false;
+    }
+
+    // Recipient authorization check
     const recipientContact = allowedChatContacts.find(c => c.id === recipientId);
+    if (!recipientContact) {
+      console.warn('Blocked attempt to message unauthorized contact:', recipientId);
+      return false;
+    }
+
+    const convId = getDirectConversationId(effectiveUserId, recipientId);
 
     const newMsg = {
       id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 7),
       conversation_id: convId,
-      sender_id: currentUserId,
-      sender_name: currentUser?.name || currentUserId,
-      sender_role: currentUser?.role || 'warrior',
+      sender_id: effectiveUserId,
+      sender_name: effectiveUser?.name || effectiveUserId,
+      sender_role: effectiveUser?.role || 'client',
       recipient_id: String(recipientId),
       recipient_name: recipientContact?.name || recipientId,
       content: content.trim(),
@@ -2280,20 +2349,20 @@ export function WorkspaceProvider({ children }) {
     // Cloud persistence
     saveMessageToCloud(newMsg).catch(err => console.warn('Cloud save message notice:', err));
 
-    // Real-time broadcast
+    // Real-time scoped broadcast
     broadcastChatMessage(newMsg).catch(err => console.warn('Broadcast chat message notice:', err));
 
     return newMsg;
   }
 
   function markConversationAsRead(contactId) {
-    if (!currentUserId || !contactId) return;
-    const convId = getDirectConversationId(currentUserId, contactId);
+    if (!effectiveUserId || !contactId) return;
+    const convId = getDirectConversationId(effectiveUserId, contactId);
 
     setChatMessages(prev => {
       let hasChange = false;
       const next = (prev || []).map(m => {
-        if (m.conversation_id === convId && String(m.recipient_id) === currentUserId && m.status !== 'read') {
+        if (m.conversation_id === convId && String(m.recipient_id) === effectiveUserId && m.status !== 'read') {
           hasChange = true;
           return { ...m, status: 'read', read_at: new Date().toISOString() };
         }
@@ -2305,17 +2374,26 @@ export function WorkspaceProvider({ children }) {
       return hasChange ? next : prev;
     });
 
-    markMessagesAsReadInCloud(convId, currentUserId).catch(() => {});
-    broadcastMessagesRead(convId, currentUserId).catch(() => {});
+    markMessagesAsReadInCloud(convId, effectiveUserId).catch(() => {});
+    broadcastMessagesRead(convId, effectiveUserId, contactId).catch(() => {});
   }
 
   function openChatWithContact(contactId) {
+    const isAuthorized = allowedChatContacts.some(c => c.id === contactId);
+    if (!isAuthorized) {
+      console.warn('Attempted to open unauthorized contact:', contactId);
+      return false;
+    }
     setActiveChatContactId(contactId);
     markConversationAsRead(contactId);
+    return true;
   }
 
   async function updateChatAccess(userId, enabled) {
-    const nextPerms = { ...chatPermissions, [String(userId)]: Boolean(enabled) };
+    const cleanId = String(userId).trim();
+    if (cleanId.startsWith('__ros_')) return false; // Never store system metadata as a permission
+
+    const nextPerms = { ...chatPermissions, [cleanId]: Boolean(enabled) };
     setChatPermissions(nextPerms);
     await saveChatPermissionsToCloud(nextPerms);
     broadcastRealtimeEvent({
@@ -2393,7 +2471,9 @@ export function WorkspaceProvider({ children }) {
     updateWarrior,
     deleteWarrior,
     // Real-Time Chat V1
-    currentUserId,
+    effectiveUser,
+    effectiveUserId,
+    currentUserId: effectiveUserId,
     chatMessages,
     activeChatContactId,
     setActiveChatContactId,
@@ -2405,6 +2485,8 @@ export function WorkspaceProvider({ children }) {
     chatUnreadCount,
     unreadCountByContact,
     allowedChatContacts,
+    allWarriorsForPermissions,
+    allWorkspacesForPermissions,
     sendChatMessage,
     markConversationAsRead,
     canUserAccessChat,

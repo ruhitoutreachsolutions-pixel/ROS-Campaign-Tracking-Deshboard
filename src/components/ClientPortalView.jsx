@@ -22,14 +22,15 @@ import {
   History,
   ArrowRight,
   Filter,
-  MessageSquare
+  MessageSquare,
+  Lock
 } from 'lucide-react';
 import ChatView from './ChatView';
 
 export default function ClientPortalView({ onOpenLeadDetail }) {
-  const { currentWorkspace, metrics, canUserAccessChat, chatUnreadCount, currentUser } = useWorkspace();
+  const { currentWorkspace, metrics, canUserAccessChat, chatUnreadCount, effectiveUser } = useWorkspace();
   const [activeTab, setActiveTab] = useState('pipeline'); // 'pipeline', 'sequences', 'campaigns', 'activity', 'leads', 'chat'
-  const hasChatAccess = canUserAccessChat(currentUser);
+  const hasChatAccess = canUserAccessChat(effectiveUser);
   const [searchLead, setSearchLead] = useState('');
   const [selectedCampaignFilter, setSelectedCampaignFilter] = useState('all');
 
@@ -280,6 +281,17 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
         {/* TAB 5: AGENCY CHAT */}
         {activeTab === 'chat' && hasChatAccess && (
           <ChatView />
+        )}
+        {activeTab === 'chat' && !hasChatAccess && (
+          <div className="p-8 rounded-3xl bg-[#111827] border border-[#1E3A5F] text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+              <Lock className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-white">Agency Chat Access Restricted</h3>
+            <p className="text-xs text-gray-400 max-w-md mx-auto">
+              Real-time agency chat has not been enabled for this workspace by your ROS outreach administrator. Contact your campaign manager to enable direct messaging.
+            </p>
+          </div>
         )}
 
         {/* TAB 1: INTERESTED PIPELINE (KANBAN & STAGES) */}

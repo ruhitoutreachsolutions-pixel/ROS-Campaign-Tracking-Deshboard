@@ -24,6 +24,8 @@ export default function ChatView() {
   const {
     currentUser,
     currentUserId,
+    effectiveUser,
+    effectiveUserId,
     chatMessages,
     activeChatContactId,
     setActiveChatContactId,
@@ -32,6 +34,8 @@ export default function ChatView() {
     chatPermissions,
     unreadCountByContact,
     allowedChatContacts,
+    allWarriorsForPermissions,
+    allWorkspacesForPermissions,
     sendChatMessage,
     markConversationAsRead,
     canUserAccessChat,
@@ -40,6 +44,8 @@ export default function ChatView() {
   } = useWorkspace();
 
   const isAdmin = effectiveRole === 'admin';
+  const hasAccess = canUserAccessChat(effectiveUser);
+
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -59,11 +65,11 @@ export default function ChatView() {
     return allowedChatContacts.find(c => c.id === activeChatContactId) || null;
   }, [allowedChatContacts, activeChatContactId]);
 
-  // Current conversation ID
+  // Current conversation ID (derived strictly from effectiveUserId)
   const activeConversationId = useMemo(() => {
-    if (!currentUserId || !activeChatContactId) return null;
-    return getDirectConversationId(currentUserId, activeChatContactId);
-  }, [currentUserId, activeChatContactId]);
+    if (!effectiveUserId || !activeChatContactId) return null;
+    return getDirectConversationId(effectiveUserId, activeChatContactId);
+  }, [effectiveUserId, activeChatContactId]);
 
   // Messages in active conversation
   const currentMessages = useMemo(() => {
@@ -124,6 +130,20 @@ export default function ChatView() {
   const isContactOnline = (contactId) => {
     return chatOnlineUsers.has(String(contactId));
   };
+
+  if (!hasAccess) {
+    return (
+      <div className="w-full h-[calc(100vh-14rem)] min-h-[500px] max-h-[850px] bg-[#111827] rounded-3xl border border-[#1E3A5F] shadow-2xl flex flex-col items-center justify-center p-8 text-center space-y-4">
+        <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+          <Lock className="w-7 h-7" />
+        </div>
+        <h3 className="text-lg font-bold text-white">Chat Access Restricted</h3>
+        <p className="text-xs text-gray-400 max-w-md">
+          Direct chat messaging is currently turned off for this workspace or account. Contact your ROS agency administrator to activate Chat access.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full h-[calc(100vh-14rem)] min-h-[500px] max-h-[850px] bg-[#111827] rounded-3xl border border-[#1E3A5F] shadow-2xl overflow-hidden flex flex-col md:flex-row relative selection:bg-[#00C2FF] selection:text-[#0A0A0A]">
@@ -484,14 +504,15 @@ export default function ChatView() {
                   ROS Warriors (Campaign Managers)
                 </h4>
                 <div className="space-y-2">
-                  {allowedChatContacts.filter(c => c.role === 'warrior').length === 0 ? (
+                  {(allWarriorsForPermissions || []).length === 0 ? (
                     <div className="text-xs text-gray-500 py-2">No warriors configured.</div>
                   ) : (
-                    allowedChatContacts.filter(c => c.role === 'warrior').map(w => {
-                      const isEnabled = chatPermissions[w.id] !== undefined ? Boolean(chatPermissions[w.id]) : true;
+                    (allWarriorsForPermissions || []).map(w => {
+                      const wId = String(w.id || w.username);
+                      const isEnabled = chatPermissions[wId] !== undefined ? Boolean(chatPermissions[wId]) : true;
 
                       return (
-                        <div key={w.id} className="p-3 bg-[#0A0A0A] border border-[#1E3A5F] rounded-2xl flex items-center justify-between">
+                        <div key={wId} className="p-3 bg-[#0A0A0A] border border-[#1E3A5F] rounded-2xl flex items-center justify-between">
                           <div>
                             <div className="text-xs font-bold text-white">{w.name}</div>
                             <div className="text-[10px] text-gray-400 font-mono">@{w.username}</div>
@@ -501,7 +522,7 @@ export default function ChatView() {
                             <input
                               type="checkbox"
                               checked={isEnabled}
-                              onChange={(e) => updateChatAccess(w.id, e.target.checked)}
+                              onChange={(e) => updateChatAccess(wId, e.target.checked)}
                               className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#00E5A0]"></div>
@@ -520,24 +541,25 @@ export default function ChatView() {
                   Client Workspaces
                 </h4>
                 <div className="space-y-2">
-                  {allowedChatContacts.filter(c => c.role === 'client').length === 0 ? (
+                  {(allWorkspacesForPermissions || []).length === 0 ? (
                     <div className="text-xs text-gray-500 py-2">No client workspaces configured.</div>
                   ) : (
-                    allowedChatContacts.filter(c => c.role === 'client').map(cl => {
-                      const isEnabled = Boolean(chatPermissions[cl.id]);
+                    (allWorkspacesForPermissions || []).map(cl => {
+                      const cId = String(cl.id);
+                      const isEnabled = Boolean(chatPermissions[cId]);
 
                       return (
-                        <div key={cl.id} className="p-3 bg-[#0A0A0A] border border-[#1E3A5F] rounded-2xl flex items-center justify-between">
+                        <div key={cId} className="p-3 bg-[#0A0A0A] border border-[#1E3A5F] rounded-2xl flex items-center justify-between">
                           <div>
-                            <div className="text-xs font-bold text-white">{cl.name}</div>
-                            <div className="text-[10px] text-gray-400 font-mono">Workspace ID: {cl.workspaceId}</div>
+                            <div className="text-xs font-bold text-white">{cl.clientName || cl.name}</div>
+                            <div className="text-[10px] text-gray-400 font-mono">Workspace ID: {cId}</div>
                           </div>
 
                           <label className="relative inline-flex items-center cursor-pointer">
                             <input
                               type="checkbox"
                               checked={isEnabled}
-                              onChange={(e) => updateChatAccess(cl.id, e.target.checked)}
+                              onChange={(e) => updateChatAccess(cId, e.target.checked)}
                               className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#00E5A0]"></div>
