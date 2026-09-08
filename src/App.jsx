@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useWorkspace } from './context/WorkspaceContext';
 import Navbar from './components/Navbar';
 import LoginScreen from './components/LoginScreen';
@@ -16,6 +16,7 @@ import CloudSyncModal from './components/CloudSyncModal';
 import EmailCopiesNotes from './components/EmailCopiesNotes';
 import PaymentsInvoices from './components/PaymentsInvoices';
 import TasksAndReports from './components/TasksAndReports';
+import FormSubmissions from './components/FormSubmissions';
 import ChatView from './components/ChatView';
 import { 
   BarChart3, 
@@ -33,7 +34,8 @@ import {
   X,
   Bell,
   MessageSquare,
-  ArrowRight
+  ArrowRight,
+  Globe
 } from 'lucide-react';
 
 export default function App() {
@@ -51,7 +53,9 @@ export default function App() {
     canUserAccessChat,
     chatInteractiveToast,
     setChatInteractiveToast,
-    openChatWithContact
+    openChatWithContact,
+    formSubmissions,
+    setActiveAdminTabRef
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');
@@ -69,6 +73,10 @@ export default function App() {
     return (tasks || []).filter(t => t && t.status === 'submitted_for_approval').length;
   }, [tasks]);
 
+  const pendingFormsCount = useMemo(() => {
+    return (formSubmissions || []).filter(f => f && !f.submitted).length;
+  }, [formSubmissions]);
+
   const safeMetrics = useMemo(() => {
     return metrics || { interestedCount: 0, totalLeads: 0 };
   }, [metrics]);
@@ -80,6 +88,14 @@ export default function App() {
       { id: 'telemetry', label: 'Campaign Analytics', icon: BarChart3, role: 'both' },
       { id: 'leads', label: 'All Leads Sheet', icon: Table, badge: `${safeMetrics.totalLeads || 0}`, role: 'both' },
       { id: 'email-copies', label: 'Email Copies & Notes', icon: Mail, role: 'both' },
+      { 
+        id: 'form-submissions', 
+        label: 'Form Submissions', 
+        icon: Globe, 
+        badge: pendingFormsCount > 0 ? `${pendingFormsCount}` : null,
+        badgeColor: 'amber',
+        role: 'both' 
+      },
       { id: 'payments', label: 'Payments & Invoices', icon: CreditCard, role: 'admin' },
       { 
         id: 'tasks', 
@@ -101,7 +117,7 @@ export default function App() {
 
     if (isAdmin) return tabs;
     if (isWarrior) {
-      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks', 'chat'];
+      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'telemetry', 'leads', 'email-copies', 'form-submissions', 'tasks', 'chat'];
       const hasChatAccess = canUserAccessChat(currentUser);
       return tabs.filter(t => {
         if (t.id === 'payments') return false;
@@ -110,7 +126,24 @@ export default function App() {
       });
     }
     return tabs;
-  }, [isAdmin, isWarrior, currentUser, safeMetrics, pendingApprovalsCount, chatUnreadCount, canUserAccessChat]);
+  }, [isAdmin, isWarrior, currentUser, safeMetrics, pendingApprovalsCount, pendingFormsCount, chatUnreadCount, canUserAccessChat]);
+
+  // Route Guard: Enforce Warrior Allowed Tabs & Auto-Redirect
+  useEffect(() => {
+    if (availableTabs.length > 0 && !availableTabs.some(t => t.id === activeAdminTab)) {
+      setActiveAdminTab(availableTabs[0].id);
+    }
+  }, [availableTabs, activeAdminTab]);
+
+  // Sync activeAdminTab to ref and global window for click-to-open from notifications
+  useEffect(() => {
+    if (typeof setActiveAdminTabRef === 'function') {
+      setActiveAdminTabRef(activeAdminTab);
+    }
+    if (typeof window !== 'undefined') {
+      window.__rosSetActiveTab = setActiveAdminTab;
+    }
+  }, [activeAdminTab, setActiveAdminTabRef]);
 
   // Handle lead click from any subcomponent
   const handleOpenLeadDetail = (lead) => {
@@ -334,6 +367,10 @@ export default function App() {
 
             {activeAdminTab === 'email-copies' && (
               <EmailCopiesNotes />
+            )}
+
+            {activeAdminTab === 'form-submissions' && (
+              <FormSubmissions />
             )}
 
             {activeAdminTab === 'payments' && isAdmin && (

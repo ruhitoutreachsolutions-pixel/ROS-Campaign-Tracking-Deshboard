@@ -213,7 +213,7 @@ export default function TasksAndReports() {
       email: '',
       accessLevel: 'edit',
       allowedWorkspaceIds: workspaces.map(w => w.id),
-      allowedTabs: ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks']
+      allowedTabs: ['dispatcher', 'pipeline', 'telemetry', 'leads', 'email-copies', 'form-submissions', 'tasks', 'chat']
     });
     setShowWarriorModal(true);
   };
@@ -227,7 +227,7 @@ export default function TasksAndReports() {
       email: w.email || '',
       accessLevel: w.accessLevel || 'edit',
       allowedWorkspaceIds: w.allowedWorkspaceIds || [],
-      allowedTabs: w.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks']
+      allowedTabs: w.allowedTabs || ['dispatcher', 'pipeline', 'telemetry', 'leads', 'email-copies', 'form-submissions', 'tasks', 'chat']
     });
     setShowWarriorModal(true);
   };
@@ -1215,6 +1215,68 @@ export default function TasksAndReports() {
                           className="rounded text-[#00C2FF] focus:ring-[#00C2FF]"
                         />
                         <span className="font-semibold text-white">{ws.name}</span> ({ws.clientName || 'Client'})
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Permitted Feature Modules / Tabs */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-300">
+                    Permitted Feature Modules & Tabs
+                  </label>
+                  <div className="flex items-center gap-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setWarriorFormData({ 
+                        ...warriorFormData, 
+                        allowedTabs: ['dispatcher', 'pipeline', 'telemetry', 'leads', 'email-copies', 'form-submissions', 'tasks', 'chat'] 
+                      })}
+                      className="text-[#00C2FF] hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-gray-600">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setWarriorFormData({ ...warriorFormData, allowedTabs: [] })}
+                      className="text-gray-400 hover:text-white cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 border border-[#1E3A5F] rounded-xl p-2.5 bg-[#0A0A0A] max-h-40 overflow-y-auto">
+                  {[
+                    { id: 'dispatcher', label: 'Mail Merge Dispatcher', icon: '🚀' },
+                    { id: 'pipeline', label: 'Interested Pipeline', icon: '🎯' },
+                    { id: 'telemetry', label: 'Campaign Analytics', icon: '📊' },
+                    { id: 'leads', label: 'All Leads Sheet', icon: '📋' },
+                    { id: 'email-copies', label: 'Email Copies & Notes', icon: '✉️' },
+                    { id: 'form-submissions', label: 'Form Submissions', icon: '🌐' },
+                    { id: 'tasks', label: 'Tasks & Approvals', icon: '✅' },
+                    { id: 'chat', label: 'Chat Direct Line', icon: '💬' }
+                  ].map(tab => {
+                    const isChecked = (warriorFormData.allowedTabs || []).includes(tab.id);
+                    return (
+                      <label key={tab.id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer hover:text-white p-1 rounded hover:bg-[#111827]">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const prevTabs = warriorFormData.allowedTabs || [];
+                            const nextTabs = e.target.checked
+                              ? [...prevTabs, tab.id]
+                              : prevTabs.filter(t => t !== tab.id);
+                            setWarriorFormData({ ...warriorFormData, allowedTabs: nextTabs });
+                          }}
+                          className="rounded text-[#00C2FF] focus:ring-[#00C2FF]"
+                        />
+                        <span className="text-xs">{tab.icon}</span>
+                        <span className="truncate">{tab.label}</span>
                       </label>
                     );
                   })}

@@ -16,7 +16,13 @@ import {
   Circle,
   Lock,
   Sparkles,
-  Users
+  Users,
+  Trash2,
+  Bell,
+  BellOff,
+  CheckSquare,
+  Square,
+  AlertTriangle
 } from 'lucide-react';
 import { getDirectConversationId } from '../services/chatService';
 
@@ -40,7 +46,12 @@ export default function ChatView() {
     markConversationAsRead,
     canUserAccessChat,
     updateChatAccess,
-    effectiveRole
+    effectiveRole,
+    notificationPermission,
+    desktopAlertsEnabled,
+    requestDesktopNotificationPermission,
+    toggleDesktopAlerts,
+    deleteChatMessagesPermanently
   } = useWorkspace();
 
   const isAdmin = effectiveRole === 'admin';
@@ -50,8 +61,21 @@ export default function ChatView() {
   const [isSending, setIsSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showAccessModal, setShowAccessModal] = useState(false);
+
+  // Message Management Mode (Admin Only)
+  const [isManageMode, setIsManageMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState(new Set());
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Reset manage mode on switching contacts
+  useEffect(() => {
+    setIsManageMode(false);
+    setSelectedMsgIds(new Set());
+  }, [activeChatContactId]);
 
   // Auto-select first contact if none selected and on desktop
   useEffect(() => {
@@ -129,6 +153,47 @@ export default function ChatView() {
   // Check if contact is online
   const isContactOnline = (contactId) => {
     return chatOnlineUsers.has(String(contactId));
+  };
+
+  // Selection toggle for message deletion
+  const toggleSelectMessage = (msgId) => {
+    setSelectedMsgIds(prev => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    const allIds = currentMessages.map(m => m.id);
+    setSelectedMsgIds(new Set(allIds));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedMsgIds(new Set());
+  };
+
+  const handleConfirmDelete = async () => {
+    if (selectedMsgIds.size === 0 || !activeConversationId || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await deleteChatMessagesPermanently(
+        Array.from(selectedMsgIds),
+        activeConversationId,
+        activeChatContactId
+      );
+      setSelectedMsgIds(new Set());
+      setIsManageMode(false);
+      setShowDeleteConfirmModal(false);
+    } catch (err) {
+      console.warn('Error deleting messages:', err);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   if (!hasAccess) {
@@ -341,12 +406,104 @@ export default function ChatView() {
                 </div>
               </div>
 
-              {/* Security Badge */}
-              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#0A0A0A] border border-[#1E3A5F] text-[11px] text-gray-400">
-                <Lock className="w-3 h-3 text-[#00E5A0]" />
-                <span>Authorized Direct Line</span>
+              {/* Right Header Actions */}
+              <div className="flex items-center gap-2">
+                {/* Desktop Alerts Status / Toggle */}
+                {notificationPermission !== 'granted' ? (
+                  <button
+                    onClick={requestDesktopNotificationPermission}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#00C2FF]/15 border border-[#00C2FF]/40 text-[#00C2FF] hover:bg-[#00C2FF]/25 text-xs font-bold transition cursor-pointer"
+                    title="Enable desktop notifications for incoming chat messages"
+                  >
+                    <Bell className="w-3.5 h-3.5 animate-bounce" />
+                    <span className="hidden sm:inline">Enable Alerts</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => toggleDesktopAlerts(!desktopAlertsEnabled)}
+                    className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                      desktopAlertsEnabled 
+                        ? 'bg-[#111827] text-[#00E5A0] border-[#00E5A0]/40 hover:bg-[#00E5A0]/10' 
+                        : 'bg-[#111827] text-gray-400 border-[#1E3A5F] hover:text-white'
+                    }`}
+                    title={desktopAlertsEnabled ? 'Desktop alerts enabled (Click to mute)' : 'Desktop alerts muted (Click to enable)'}
+                  >
+                    {desktopAlertsEnabled ? <Bell className="w-4 h-4" /> : <BellOff className="w-4 h-4" />}
+                  </button>
+                )}
+
+                {/* Admin Message Management Toggle */}
+                {isAdmin && (
+                  <button
+                    onClick={() => {
+                      setIsManageMode(!isManageMode);
+                      setSelectedMsgIds(new Set());
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                      isManageMode
+                        ? 'bg-red-500/20 text-red-400 border-red-500/40 shadow-sm'
+                        : 'bg-[#111827] text-gray-300 border-[#1E3A5F] hover:text-white hover:border-[#00C2FF]'
+                    }`}
+                    title="Toggle message deletion mode"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{isManageMode ? 'Exit Manage' : 'Manage'}</span>
+                  </button>
+                )}
+
+                {/* Security Badge */}
+                <div className="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#0A0A0A] border border-[#1E3A5F] text-[11px] text-gray-400">
+                  <Lock className="w-3 h-3 text-[#00E5A0]" />
+                  <span>Authorized Direct Line</span>
+                </div>
               </div>
             </div>
+
+            {/* Manage Mode Toolbar */}
+            {isAdmin && isManageMode && (
+              <div className="bg-red-950/30 border-b border-red-500/30 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs animate-fadeIn">
+                <div className="flex items-center gap-3">
+                  <span className="font-bold text-red-400 flex items-center gap-1.5">
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Manage Messages: <span className="font-mono text-white">{selectedMsgIds.size}</span> selected</span>
+                  </span>
+                  <button
+                    onClick={handleSelectAll}
+                    className="text-gray-300 hover:text-white underline text-[11px] cursor-pointer"
+                  >
+                    Select All ({currentMessages.length})
+                  </button>
+                  {selectedMsgIds.size > 0 && (
+                    <button
+                      onClick={handleDeselectAll}
+                      className="text-gray-400 hover:text-white underline text-[11px] cursor-pointer"
+                    >
+                      Deselect All
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowDeleteConfirmModal(true)}
+                    disabled={selectedMsgIds.size === 0}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white rounded-lg font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer disabled:cursor-not-allowed"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Delete Selected ({selectedMsgIds.size})</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsManageMode(false);
+                      setSelectedMsgIds(new Set());
+                    }}
+                    className="px-2.5 py-1 bg-[#111827] hover:bg-[#1E3A5F] text-gray-300 rounded-lg text-[11px] transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Messages Scroll Area */}
             <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4 bg-[#0A0A0A]/40">
@@ -364,13 +521,32 @@ export default function ChatView() {
                 currentMessages.map((msg, idx) => {
                   const isMe = String(msg.sender_id) === currentUserId;
                   const isRead = msg.status === 'read';
+                  const isSelected = selectedMsgIds.has(msg.id);
                   const formattedTime = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
                   return (
                     <div
                       key={msg.id || idx}
-                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full`}
+                      onClick={() => isManageMode && toggleSelectMessage(msg.id)}
+                      className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full relative transition ${
+                        isManageMode ? 'cursor-pointer select-none' : ''
+                      }`}
                     >
+                      {/* Manage Selection Checkbox */}
+                      {isManageMode && (
+                        <div className={`mb-1 flex items-center gap-1.5 ${isMe ? 'flex-row-reverse' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectMessage(msg.id)}
+                            className="w-4 h-4 rounded text-red-500 focus:ring-red-500 cursor-pointer"
+                          />
+                          <span className="text-[10px] text-gray-400 font-mono">
+                            {isSelected ? '✓ Selected' : 'Select'}
+                          </span>
+                        </div>
+                      )}
+
                       {/* Sender Name if Other */}
                       {!isMe && (
                         <span className="text-[11px] font-semibold text-gray-400 mb-1 ml-1 flex items-center gap-1.5">
@@ -383,10 +559,12 @@ export default function ChatView() {
 
                       {/* Bubble */}
                       <div
-                        className={`px-4 py-2.5 rounded-2xl max-w-[85%] sm:max-w-[70%] break-words text-sm shadow-md leading-relaxed ${
-                          isMe
-                            ? 'bg-gradient-to-r from-[#00C2FF]/20 to-[#00C2FF]/30 border border-[#00C2FF]/40 text-white rounded-tr-sm'
-                            : 'bg-[#111827] border border-[#1E3A5F] text-gray-200 rounded-tl-sm'
+                        className={`px-4 py-2.5 rounded-2xl max-w-[85%] sm:max-w-[70%] break-words text-sm shadow-md leading-relaxed transition ${
+                          isSelected
+                            ? 'ring-2 ring-red-500 bg-red-950/40 text-white'
+                            : isMe
+                              ? 'bg-gradient-to-r from-[#00C2FF]/20 to-[#00C2FF]/30 border border-[#00C2FF]/40 text-white rounded-tr-sm'
+                              : 'bg-[#111827] border border-[#1E3A5F] text-gray-200 rounded-tl-sm'
                         }`}
                       >
                         <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -582,6 +760,52 @@ export default function ChatView() {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* 4. ADMIN MODAL: CONFIRM PERMANENT DELETE MESSAGES */}
+      {isAdmin && showDeleteConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111827] rounded-3xl max-w-md w-full p-6 shadow-2xl border border-red-500/40 animate-scaleUp text-white">
+            <div className="flex items-center gap-3 pb-3 border-b border-[#1E3A5F]">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Permanently Delete Messages?</h3>
+                <p className="text-xs text-gray-400">This action cannot be undone</p>
+              </div>
+            </div>
+
+            <div className="py-4 text-sm text-gray-300 space-y-2">
+              <p>
+                You are about to permanently delete <strong className="text-red-400 font-mono font-bold">{selectedMsgIds.size}</strong> message(s) from this conversation.
+              </p>
+              <p className="text-xs text-gray-400">
+                These messages will be erased from Supabase Cloud Database and synced across all devices in real time.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1E3A5F]">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirmModal(false)}
+                disabled={isDeleting}
+                className="px-4 py-2 border border-[#1E3A5F] rounded-xl text-xs font-semibold text-gray-400 hover:text-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+                className="px-5 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-lg shadow-red-600/30 transition flex items-center gap-2 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeleting ? 'Deleting...' : 'Yes, Permanently Delete'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

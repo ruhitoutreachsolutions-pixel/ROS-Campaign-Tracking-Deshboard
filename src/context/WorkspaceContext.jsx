@@ -9,7 +9,8 @@ import {
   initialTasks,
   initialDailyReports,
   initialWarriors,
-  initialWarriorTimeline
+  initialWarriorTimeline,
+  initialFormSubmissions
 } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
 import { 
@@ -42,6 +43,8 @@ import {
   fetchMessagesFromCloud,
   saveMessageToCloud,
   markMessagesAsReadInCloud,
+  deleteMessagesFromCloud,
+  broadcastMessagesDeleted,
   fetchChatPermissionsFromCloud,
   saveChatPermissionsToCloud
 } from '../services/chatService';
@@ -60,6 +63,7 @@ const STORAGE_KEY_REPORTS = 'ros_reports_v1';
 const STORAGE_KEY_WARRIORS = 'ros_warriors_v1';
 const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
 const STORAGE_KEY_DELETED_WORKSPACES = 'ros_deleted_workspaces_v1';
+const STORAGE_KEY_FORM_SUBMISSIONS = 'ros_form_submissions_v1';
 
 export function getDeletedWorkspaceIds() {
   try {
@@ -187,6 +191,37 @@ export function WorkspaceProvider({ children }) {
     } catch (e) { return initialWarriorTimeline || []; }
   });
 
+  // 12a-2. CONTACT FORM SUBMISSIONS STATE
+  const [formSubmissions, setFormSubmissions] = useState(() => {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY_FORM_SUBMISSIONS);
+      const parsed = s ? JSON.parse(s) : null;
+      return Array.isArray(parsed) ? parsed : (initialFormSubmissions || []);
+    } catch (e) { return initialFormSubmissions || []; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(formSubmissions)); } catch (e) {}
+  }, [formSubmissions]);
+
+  // Desktop Notification Permission & Settings
+  const [notificationPermission, setNotificationPermission] = useState(() => {
+    return (typeof window !== 'undefined' && 'Notification' in window) ? Notification.permission : 'unsupported';
+  });
+
+  const [desktopAlertsEnabled, setDesktopAlertsEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('ros_desktop_notifications_enabled') !== 'false';
+    } catch (e) { return true; }
+  });
+
+  const activeAdminTabRef = useRef('dispatcher');
+  const seenNotificationMsgIdsRef = useRef(new Set());
+
+  const setActiveAdminTabRef = (tab) => {
+    activeAdminTabRef.current = tab;
+  };
+
   // 12b. LIVE FLOATING IN-APP NOTIFICATION TOAST
   const [liveToast, setLiveToast] = useState(null);
 
@@ -216,6 +251,77 @@ export function WorkspaceProvider({ children }) {
     const timer = setTimeout(() => setChatInteractiveToast(null), 7000);
     return () => clearTimeout(timer);
   }, [chatInteractiveToast]);
+
+  // Desktop notification helper for incoming chat messages
+  function triggerChatDesktopNotification(msg) {
+    if (!msg || !msg.id) return;
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    if (!desktopAlertsEnabled) return;
+
+    // Deduplication check
+    if (seenNotificationMsgIdsRef.current.has(msg.id)) return;
+    seenNotificationMsgIdsRef.current.add(msg.id);
+    if (seenNotificationMsgIdsRef.current.size > 200) {
+      const first = seenNotificationMsgIdsRef.current.values().next().value;
+      seenNotificationMsgIdsRef.current.delete(first);
+    }
+
+    // Suppress notification if user is actively viewing this specific conversation in the foreground right now
+    const isActivelyViewingConversation = 
+      document.hasFocus() && 
+      !document.hidden && 
+      activeAdminTabRef.current === 'chat' && 
+      activeChatContactRef.current === msg.sender_id;
+
+    if (isActivelyViewingConversation) return;
+
+    try {
+      const senderDisplay = msg.sender_name || 'Team Member';
+      const roleDisplay = msg.sender_role ? ` (${msg.sender_role})` : '';
+      const textPreview = msg.content 
+        ? (msg.content.length > 80 ? msg.content.substring(0, 80) + '...' : msg.content) 
+        : 'New message received';
+
+      const n = new Notification(`💬 ROS Chat · ${senderDisplay}${roleDisplay}`, {
+        body: `"${textPreview}"`,
+        icon: '/ros-logo.png',
+        tag: `ros_chat_${msg.conversation_id || msg.id}`,
+        silent: false
+      });
+
+      n.onclick = () => {
+        try { window.focus(); } catch (e) {}
+        openChatWithContact(msg.sender_id);
+        if (typeof window !== 'undefined' && window.__rosSetActiveTab) {
+          window.__rosSetActiveTab('chat');
+        }
+        n.close();
+      };
+    } catch (err) {
+      console.warn('Desktop notification error:', err);
+    }
+  }
+
+  async function requestDesktopNotificationPermission() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+    try {
+      const perm = await Notification.requestPermission();
+      setNotificationPermission(perm);
+      if (perm === 'granted') {
+        setDesktopAlertsEnabled(true);
+        try { localStorage.setItem('ros_desktop_notifications_enabled', 'true'); } catch (e) {}
+      }
+      return perm;
+    } catch (e) {
+      return 'denied';
+    }
+  }
+
+  function toggleDesktopAlerts(enabled) {
+    setDesktopAlertsEnabled(enabled);
+    try { localStorage.setItem('ros_desktop_notifications_enabled', enabled ? 'true' : 'false'); } catch (e) {}
+  }
 
   // 13. AUTO-SYNC STATUS & HEARTBEAT
   const [lastSyncedTime, setLastSyncedTime] = useState(new Date());
@@ -377,6 +483,10 @@ export function WorkspaceProvider({ children }) {
           setWarriorTimeline(cloudMeta.warriorTimeline);
           try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(cloudMeta.warriorTimeline)); } catch (e) {}
         }
+        if (Array.isArray(cloudMeta.formSubmissions)) {
+          setFormSubmissions(cloudMeta.formSubmissions);
+          try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(cloudMeta.formSubmissions)); } catch (e) {}
+        }
       } catch (err) {
         console.warn('Initial cloud meta sync notice:', err);
       }
@@ -420,7 +530,8 @@ export function WorkspaceProvider({ children }) {
           importantNotes,
           todos,
           dailyReports,
-          warriorTimeline
+          warriorTimeline,
+          formSubmissions
         });
         setLastSyncedTime(new Date());
       } catch (err) {
@@ -431,7 +542,7 @@ export function WorkspaceProvider({ children }) {
     }, 25000); // 25 seconds
 
     return () => clearInterval(autoSyncInterval);
-  }, [workspaces, warriors, tasks, payments, emailCopies, importantNotes, todos, dailyReports, warriorTimeline]);
+  }, [workspaces, warriors, tasks, payments, emailCopies, importantNotes, todos, dailyReports, warriorTimeline, formSubmissions]);
 
   // Audio Chime notification helper for instant audible feedback
   function playNotificationChime() {
@@ -661,6 +772,18 @@ export function WorkspaceProvider({ children }) {
         }
         setWorkspaces(prev => prev.filter(w => w.id !== targetId));
       }
+
+      // 9. Notes Updated
+      if (event.type === 'NOTES_UPDATED' && Array.isArray(event.importantNotes)) {
+        setImportantNotes(event.importantNotes);
+        try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(event.importantNotes)); } catch (e) {}
+      }
+
+      // 10. Form Submissions Updated
+      if (event.type === 'FORM_SUBMISSIONS_UPDATED' && Array.isArray(event.formSubmissions)) {
+        setFormSubmissions(event.formSubmissions);
+        try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(event.formSubmissions)); } catch (e) {}
+      }
     }
 
     // C. 5-Second Active Polling Backup (Local Server API /api/sync)
@@ -742,6 +865,26 @@ export function WorkspaceProvider({ children }) {
             if (JSON.stringify(prev) !== JSON.stringify(cleanPayments)) {
               try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cleanPayments)); } catch (e) {}
               return cleanPayments;
+            }
+            return prev;
+          });
+        }
+
+        if (Array.isArray(cloudMeta.importantNotes)) {
+          setImportantNotes(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.importantNotes)) {
+              try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(cloudMeta.importantNotes)); } catch (e) {}
+              return cloudMeta.importantNotes;
+            }
+            return prev;
+          });
+        }
+
+        if (Array.isArray(cloudMeta.formSubmissions)) {
+          setFormSubmissions(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.formSubmissions)) {
+              try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(cloudMeta.formSubmissions)); } catch (e) {}
+              return cloudMeta.formSubmissions;
             }
             return prev;
           });
@@ -909,7 +1052,12 @@ export function WorkspaceProvider({ children }) {
 
           // Check if message is directed to me
           if (String(msg.recipient_id) === effectiveUserId) {
-            const isLookingAtContact = activeChatContactRef.current === msg.sender_id;
+            const isLookingAtContact = 
+              activeChatContactRef.current === msg.sender_id && 
+              activeAdminTabRef.current === 'chat' && 
+              document.hasFocus() && 
+              !document.hidden;
+
             if (isLookingAtContact) {
               markMessagesAsReadInCloud(msg.conversation_id, effectiveUserId);
               broadcastMessagesRead(msg.conversation_id, effectiveUserId, msg.sender_id);
@@ -923,6 +1071,7 @@ export function WorkspaceProvider({ children }) {
                 content: msg.content,
                 conversationId: msg.conversation_id
               });
+              triggerChatDesktopNotification(msg);
             }
           }
         },
@@ -935,6 +1084,15 @@ export function WorkspaceProvider({ children }) {
               }
               return m;
             });
+            try { localStorage.setItem(STORAGE_KEY_CHAT_MSGS, JSON.stringify(next.slice(-500))); } catch (e) {}
+            return next;
+          });
+        },
+        onMessagesDeleted: ({ conversationId, messageIds }) => {
+          if (!Array.isArray(messageIds) || messageIds.length === 0) return;
+          const idSet = new Set(messageIds);
+          setChatMessages(prev => {
+            const next = (prev || []).filter(m => !idSet.has(m.id));
             try { localStorage.setItem(STORAGE_KEY_CHAT_MSGS, JSON.stringify(next.slice(-500))); } catch (e) {}
             return next;
           });
@@ -1852,7 +2010,14 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
-  // 10. Important Notes & Todos
+  // 10. Important Notes Realtime Sync & Handlers
+  function syncNotesUpdate(nextNotes) {
+    setImportantNotes(nextNotes);
+    try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(nextNotes)); } catch (e) {}
+    saveGlobalMetaToCloud({ importantNotes: nextNotes }).catch(() => {});
+    broadcastRealtimeEvent('NOTES_UPDATED', { importantNotes: nextNotes }).catch(() => {});
+  }
+
   function addNote(noteData) {
     const newNote = {
       id: 'note_' + Date.now(),
@@ -1860,28 +2025,150 @@ export function WorkspaceProvider({ children }) {
       content: noteData.content || '',
       category: noteData.category || 'General',
       pinned: noteData.pinned || false,
+      workspaceId: noteData.workspaceId || currentWorkspaceId || null,
+      author: currentUser?.name || currentUser?.username || 'Admin',
       updatedAt: new Date().toISOString()
     };
-    setImportantNotes(prev => [newNote, ...(prev || [])]);
+    const next = [newNote, ...(importantNotes || [])];
+    syncNotesUpdate(next);
     return newNote;
   }
 
   function updateNote(noteId, updates) {
-    setImportantNotes(prev => (prev || []).map(n => 
+    const next = (importantNotes || []).map(n => 
       n.id === noteId ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n
-    ));
+    );
+    syncNotesUpdate(next);
     return true;
   }
 
   function deleteNote(noteId) {
-    setImportantNotes(prev => (prev || []).filter(n => n.id !== noteId));
+    const next = (importantNotes || []).filter(n => n.id !== noteId);
+    syncNotesUpdate(next);
     return true;
   }
 
   function togglePinNote(noteId) {
-    setImportantNotes(prev => (prev || []).map(n => 
+    const next = (importantNotes || []).map(n => 
       n.id === noteId ? { ...n, pinned: !n.pinned, updatedAt: new Date().toISOString() } : n
-    ));
+    );
+    syncNotesUpdate(next);
+    return true;
+  }
+
+  // 10b. Contact Form Submissions Module Handlers
+  function syncFormSubmissionsUpdate(nextForms) {
+    setFormSubmissions(nextForms);
+    try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(nextForms)); } catch (e) {}
+    saveGlobalMetaToCloud({ formSubmissions: nextForms }).catch(() => {});
+    broadcastRealtimeEvent('FORM_SUBMISSIONS_UPDATED', { formSubmissions: nextForms }).catch(() => {});
+  }
+
+  function addFormSubmission(formData) {
+    const newSubmission = {
+      id: 'form_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+      workspaceId: formData.workspaceId || currentWorkspaceId || 'ws_crewlixukltd',
+      formUrl: (formData.formUrl || formData.url || '').trim(),
+      submitted: formData.submitted || false,
+      submissionDate: formData.submissionDate || (formData.submitted ? getTodayFormatted() : ''),
+      submittedBy: formData.submittedBy || (formData.submitted ? (currentUser?.name || currentUser?.username || 'Team') : ''),
+      notes: formData.notes || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const next = [newSubmission, ...(formSubmissions || [])];
+    syncFormSubmissionsUpdate(next);
+    return newSubmission;
+  }
+
+  function bulkAddFormSubmissions(urls, wsId) {
+    if (!Array.isArray(urls) || urls.length === 0) return 0;
+    const targetWsId = wsId || currentWorkspaceId || 'ws_crewlixukltd';
+    const cleanUrls = urls
+      .map(u => (typeof u === 'string' ? u.trim() : ''))
+      .filter(u => u.length > 0);
+    
+    if (cleanUrls.length === 0) return 0;
+
+    const newItems = cleanUrls.map((url, idx) => ({
+      id: 'form_' + (Date.now() + idx) + '_' + Math.random().toString(36).substr(2, 4),
+      workspaceId: targetWsId,
+      formUrl: url,
+      submitted: false,
+      submissionDate: '',
+      submittedBy: '',
+      notes: '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }));
+
+    const next = [...newItems, ...(formSubmissions || [])];
+    syncFormSubmissionsUpdate(next);
+    
+    // Log warrior action if warrior is doing bulk import
+    if (currentUser?.role === 'warrior') {
+      logWarriorAction(
+        currentUser?.name || 'Warrior',
+        'FORM_IMPORT',
+        `Imported ${cleanUrls.length} contact form URLs`,
+        currentWorkspace?.clientName || 'Workspace'
+      );
+    }
+
+    return newItems.length;
+  }
+
+  function toggleFormSubmissionStatus(submissionId) {
+    let toggledItem = null;
+    const next = (formSubmissions || []).map(item => {
+      if (item.id === submissionId) {
+        const nextSubmitted = !item.submitted;
+        const nextDate = nextSubmitted ? getTodayFormatted() : '';
+        const nextBy = nextSubmitted ? (currentUser?.name || currentUser?.username || 'Team') : '';
+        toggledItem = {
+          ...item,
+          submitted: nextSubmitted,
+          submissionDate: nextDate,
+          submittedBy: nextBy,
+          updatedAt: new Date().toISOString()
+        };
+        return toggledItem;
+      }
+      return item;
+    });
+
+    syncFormSubmissionsUpdate(next);
+
+    if (toggledItem && toggledItem.submitted && currentUser?.role === 'warrior') {
+      logWarriorAction(
+        currentUser?.name || 'Warrior',
+        'FORM_SUBMITTED',
+        `Submitted contact form: ${toggledItem.formUrl}`,
+        currentWorkspace?.clientName || 'Workspace'
+      );
+    }
+
+    return toggledItem;
+  }
+
+  function updateFormSubmission(submissionId, updates) {
+    const next = (formSubmissions || []).map(item => {
+      if (item.id === submissionId) {
+        return {
+          ...item,
+          ...updates,
+          updatedAt: new Date().toISOString()
+        };
+      }
+      return item;
+    });
+    syncFormSubmissionsUpdate(next);
+    return true;
+  }
+
+  function deleteFormSubmission(submissionId) {
+    const next = (formSubmissions || []).filter(item => item.id !== submissionId);
+    syncFormSubmissionsUpdate(next);
     return true;
   }
 
@@ -2474,6 +2761,36 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
+  async function deleteChatMessagesPermanently(messageIds, conversationId, recipientId) {
+    if (!Array.isArray(messageIds) || messageIds.length === 0) return false;
+    if (effectiveRole !== 'admin') {
+      alert('Unauthorized: Only administrators can delete chat messages.');
+      return false;
+    }
+
+    const idSet = new Set(messageIds);
+    // 1. Optimistically remove from local state and localStorage
+    setChatMessages(prev => {
+      const next = (prev || []).filter(m => !idSet.has(m.id));
+      try { localStorage.setItem(STORAGE_KEY_CHAT_MSGS, JSON.stringify(next.slice(-500))); } catch (e) {}
+      return next;
+    });
+
+    // 2. Broadcast deletion to all other tabs and participants
+    const participantIds = [effectiveUserId];
+    if (recipientId) participantIds.push(recipientId);
+    broadcastMessagesDeleted(conversationId, messageIds, participantIds);
+
+    // 3. Delete from Supabase cloud database & system metadata
+    try {
+      await deleteMessagesFromCloud(messageIds, currentUser);
+    } catch (err) {
+      console.warn('Error deleting messages from cloud:', err);
+    }
+
+    return true;
+  }
+
   // 15. Restore Previous Local Session / Backup
   async function restorePreviousBackup() {
     try {
@@ -2501,6 +2818,12 @@ export function WorkspaceProvider({ children }) {
     // Auto-sync
     lastSyncedTime,
     isAutoSyncing,
+    // Desktop Notifications & Tab tracking
+    notificationPermission,
+    desktopAlertsEnabled,
+    requestDesktopNotificationPermission,
+    toggleDesktopAlerts,
+    setActiveAdminTabRef,
     // New collections
     emailCopies,
     importantNotes,
@@ -2510,6 +2833,7 @@ export function WorkspaceProvider({ children }) {
     dailyReports,
     warriors,
     warriorTimeline,
+    formSubmissions,
     // Notification & logging
     notifyAdminDesktop,
     logWarriorAction,
@@ -2541,6 +2865,12 @@ export function WorkspaceProvider({ children }) {
     addWarrior,
     updateWarrior,
     deleteWarrior,
+    // Form Submissions Handlers
+    addFormSubmission,
+    bulkAddFormSubmissions,
+    toggleFormSubmissionStatus,
+    updateFormSubmission,
+    deleteFormSubmission,
     // Real-Time Chat V1
     effectiveUser,
     effectiveUserId,
@@ -2562,6 +2892,7 @@ export function WorkspaceProvider({ children }) {
     markConversationAsRead,
     canUserAccessChat,
     updateChatAccess,
+    deleteChatMessagesPermanently,
     // Standard workspace methods
     login,
     logout,

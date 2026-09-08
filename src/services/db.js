@@ -215,6 +215,7 @@ export async function fetchSystemMetaFromSupabase() {
     const emailCopies = Array.isArray(seq.emailCopies) ? seq.emailCopies : [];
     const importantNotes = Array.isArray(seq.importantNotes) ? seq.importantNotes : [];
     const todos = Array.isArray(seq.todos) ? seq.todos : [];
+    const formSubmissions = Array.isArray(seq.formSubmissions) ? seq.formSubmissions : [];
     const warriorTimeline = Array.isArray(data.activity_log) ? data.activity_log : [];
 
     return {
@@ -225,6 +226,7 @@ export async function fetchSystemMetaFromSupabase() {
       emailCopies,
       importantNotes,
       todos,
+      formSubmissions,
       warriorTimeline,
       updatedAt: data.updated_at
     };
@@ -264,6 +266,7 @@ export async function saveSystemMetaToSupabase(meta) {
     const mergedCopies = meta.emailCopies !== undefined ? meta.emailCopies : (Array.isArray(existingSeq.emailCopies) ? existingSeq.emailCopies : []);
     const mergedNotes = meta.importantNotes !== undefined ? meta.importantNotes : (Array.isArray(existingSeq.importantNotes) ? existingSeq.importantNotes : []);
     const mergedTodos = meta.todos !== undefined ? meta.todos : (Array.isArray(existingSeq.todos) ? existingSeq.todos : []);
+    const mergedForms = meta.formSubmissions !== undefined ? meta.formSubmissions : (Array.isArray(existingSeq.formSubmissions) ? existingSeq.formSubmissions : []);
     const mergedTimeline = meta.warriorTimeline !== undefined ? meta.warriorTimeline : (Array.isArray(rawData?.activity_log) ? rawData.activity_log : []);
 
     const payload = {
@@ -285,7 +288,8 @@ export async function saveSystemMetaToSupabase(meta) {
         payments: mergedPayments,
         emailCopies: mergedCopies,
         importantNotes: mergedNotes,
-        todos: mergedTodos
+        todos: mergedTodos,
+        formSubmissions: mergedForms
       },
       activity_log: mergedTimeline.slice(0, 300),
       leads: [],

@@ -147,3 +147,17 @@ export const initialWarriors = [];
 // 7. Warrior Action Timeline (Live Action Spy / Audit)
 export const initialWarriorTimeline = [];
 
+// 8. Initial Contact Form Submissions (Matching Outbound Workflow)
+export const initialFormSubmissions = [
+  { id: 'form_1', workspaceId: 'ws_crewlixukltd', formUrl: 'https://famraed.wixsite.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_2', workspaceId: 'ws_crewlixukltd', formUrl: 'https://elitedigitalcoach.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_3', workspaceId: 'ws_crewlixukltd', formUrl: 'https://www.facebook.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_4', workspaceId: 'ws_crewlixukltd', formUrl: 'https://salalem.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_5', workspaceId: 'ws_crewlixukltd', formUrl: 'http://www.manhal.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_6', workspaceId: 'ws_crewlixukltd', formUrl: 'https://cvskills.net', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_7', workspaceId: 'ws_crewlixukltd', formUrl: 'http://www.thaka.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_8', workspaceId: 'ws_crewlixukltd', formUrl: 'https://codesksolutions.co', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_9', workspaceId: 'ws_crewlixukltd', formUrl: 'http://itacsoft.com', submitted: true, submissionDate: '08/09/26', submittedBy: 'Warrior', notes: '' },
+  { id: 'form_10', workspaceId: 'ws_crewlixukltd', formUrl: 'http://www.kbeams.com', submitted: false, submissionDate: '', submittedBy: '', notes: '' }
+];
+

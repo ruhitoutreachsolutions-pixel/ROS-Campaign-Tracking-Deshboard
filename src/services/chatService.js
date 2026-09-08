@@ -35,7 +35,7 @@ try {
 // 1. REAL-TIME SUBSCRIPTION & BROADCASTING (SCOPED BY USER)
 // ----------------------------------------------------------------------------
 
-export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMessagesRead, onPresenceSync }) {
+export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMessagesRead, onMessagesDeleted, onPresenceSync }) {
   const supabase = getSupabaseClient();
   if (!supabase || !currentUserId) return () => {};
 
@@ -67,6 +67,10 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
         if (onMessagesRead) onMessagesRead(payload);
       }
     }
+
+    if (type === 'MESSAGES_DELETED' && payload) {
+      if (onMessagesDeleted) onMessagesDeleted(payload);
+    }
   };
 
   if (localBroadcast) {
@@ -86,6 +90,12 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
   userChannel.on('broadcast', { event: 'messages_read' }, ({ payload }) => {
     if (payload && onMessagesRead) {
       onMessagesRead(payload);
+    }
+  });
+
+  userChannel.on('broadcast', { event: 'messages_deleted' }, ({ payload }) => {
+    if (payload && onMessagesDeleted) {
+      onMessagesDeleted(payload);
     }
   });
 
@@ -221,6 +231,45 @@ export async function broadcastMessagesRead(conversationId, readerId, senderId) 
       }
     });
   } catch (e) {}
+}
+
+export async function broadcastMessagesDeleted(conversationId, messageIds, participantIds = []) {
+  if (!conversationId || !Array.isArray(messageIds) || messageIds.length === 0) return;
+
+  const payload = { conversationId, messageIds, deletedAt: new Date().toISOString() };
+
+  // 1. Local BroadcastChannel (same machine/browser)
+  try {
+    if (localBroadcast) {
+      localBroadcast.postMessage({ type: 'MESSAGES_DELETED', payload });
+    }
+  } catch (e) {}
+
+  // 2. Supabase Realtime Scoped Broadcasts to all participants
+  const supabase = getSupabaseClient();
+  if (!supabase || !Array.isArray(participantIds) || participantIds.length === 0) return;
+
+  for (const pid of participantIds) {
+    if (!pid) continue;
+    try {
+      const channelName = getUserChatChannelName(pid);
+      const chan = supabase.channel(channelName);
+      await chan.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await chan.send({
+            type: 'broadcast',
+            event: 'messages_deleted',
+            payload
+          });
+          setTimeout(() => {
+            try { supabase.removeChannel(chan); } catch (e) {}
+          }, 1500);
+        }
+      });
+    } catch (err) {
+      console.warn('Broadcast messages deleted notice:', err);
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -462,6 +511,77 @@ export async function markMessagesAsReadInCloud(conversationId, recipientId) {
         .eq('id', SYSTEM_META_ID);
     }
   } catch (e) {}
+
+  return true;
+}
+
+// Permanently delete chat messages from Supabase (Admin Only)
+export async function deleteMessagesFromCloud(messageIds, adminUser) {
+  if (!Array.isArray(messageIds) || messageIds.length === 0) return false;
+
+  // Security Check: strictly require Admin
+  const isAuthorizedAdmin = adminUser && (adminUser.role === 'admin' || adminUser.username === 'admin');
+  if (!isAuthorizedAdmin) {
+    console.error('Unauthorized message deletion attempt blocked: caller is not Admin');
+    return false;
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  const msgIdSet = new Set(messageIds);
+
+  // 1. Delete from dedicated chat_messages table
+  try {
+    const { error } = await supabase
+      .from('chat_messages')
+      .delete()
+      .in('id', messageIds);
+
+    if (error) {
+      console.warn('Supabase chat_messages table delete error:', error);
+    }
+  } catch (e) {}
+
+  // 2. Delete from __ros_system_metadata__ fallback storage
+  try {
+    const { data } = await supabase
+      .from('workspaces')
+      .select('client_credentials')
+      .eq('id', SYSTEM_META_ID)
+      .maybeSingle();
+
+    if (data?.client_credentials) {
+      const creds = data.client_credentials;
+      const existingMsgs = Array.isArray(creds.chat_messages) ? creds.chat_messages : [];
+      const filteredMsgs = existingMsgs.filter(m => !msgIdSet.has(m.id));
+
+      // Re-evaluate conversation last_message if needed
+      const existingConvs = Array.isArray(creds.chat_conversations) ? creds.chat_conversations : [];
+      const updatedConvs = existingConvs.map(conv => {
+        const remainingForConv = filteredMsgs.filter(m => m.conversation_id === conv.id);
+        const latest = remainingForConv[remainingForConv.length - 1];
+        return {
+          ...conv,
+          last_message: latest ? latest.content : '',
+          updated_at: latest ? latest.created_at : conv.updated_at
+        };
+      });
+
+      await supabase
+        .from('workspaces')
+        .update({
+          client_credentials: {
+            ...creds,
+            chat_messages: filteredMsgs,
+            chat_conversations: updatedConvs
+          }
+        })
+        .eq('id', SYSTEM_META_ID);
+    }
+  } catch (err) {
+    console.warn('Fallback delete messages notice:', err);
+  }
 
   return true;
 }
