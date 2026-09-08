@@ -18,10 +18,11 @@ import {
   RefreshCw,
   Bell,
   Shield,
-  CheckCircle2
+  CheckCircle2,
+  MessageSquare
 } from 'lucide-react';
 
-export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync, onNavigateToTasks }) {
+export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync, onNavigateToTasks, onNavigateToChat }) {
   const {
     workspaces,
     currentWorkspaceId,
@@ -34,7 +35,9 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
     lastSyncedTime,
     isAutoSyncing,
     syncAllWorkspacesToCloud,
-    tasks
+    tasks,
+    chatUnreadCount,
+    canUserAccessChat
   } = useWorkspace();
 
   const [wsDropdownOpen, setWsDropdownOpen] = useState(false);
@@ -217,8 +220,29 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
         </div>
 
         {/* RIGHT: CONTROLS, AUTO-SYNC PILL & AUTH */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 sm:gap-3">
           
+          {/* REAL-TIME CHAT SHORTCUT PILL */}
+          {canUserAccessChat(currentUser) && (
+            <button
+              onClick={onNavigateToChat}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full border text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                chatUnreadCount > 0
+                  ? 'bg-[#00C2FF]/20 text-[#00C2FF] border-[#00C2FF]/60 shadow-[#00C2FF]/25 animate-pulse'
+                  : 'bg-[#111827] text-gray-300 border-[#1E3A5F] hover:border-[#00C2FF]/60 hover:text-white'
+              }`}
+              title="Open ROS Real-Time Chat"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-[#00C2FF]" />
+              <span className="hidden sm:inline">Chat</span>
+              {chatUnreadCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-[#00C2FF] text-[#0A0A0A] font-black text-[10px]">
+                  {chatUnreadCount}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* AUTO-SYNC STATUS PILL (Continuous 20-30s Cloud & Local Sync) */}
           <button
             onClick={() => {

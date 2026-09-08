@@ -16,6 +16,7 @@ import CloudSyncModal from './components/CloudSyncModal';
 import EmailCopiesNotes from './components/EmailCopiesNotes';
 import PaymentsInvoices from './components/PaymentsInvoices';
 import TasksAndReports from './components/TasksAndReports';
+import ChatView from './components/ChatView';
 import { 
   BarChart3, 
   Send, 
@@ -30,7 +31,9 @@ import {
   Eye,
   Lock,
   X,
-  Bell
+  Bell,
+  MessageSquare,
+  ArrowRight
 } from 'lucide-react';
 
 export default function App() {
@@ -43,7 +46,12 @@ export default function App() {
     tasks,
     payments,
     liveToast,
-    setLiveToast
+    setLiveToast,
+    chatUnreadCount,
+    canUserAccessChat,
+    chatInteractiveToast,
+    setChatInteractiveToast,
+    openChatWithContact
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');
@@ -80,16 +88,29 @@ export default function App() {
         badge: pendingApprovalsCount > 0 ? `${pendingApprovalsCount}` : null,
         badgeColor: 'amber',
         role: 'both' 
+      },
+      { 
+        id: 'chat', 
+        label: 'Chat', 
+        icon: MessageSquare, 
+        badge: chatUnreadCount > 0 ? `${chatUnreadCount}` : null,
+        badgeColor: 'cyan',
+        role: 'both' 
       }
     ];
 
     if (isAdmin) return tabs;
     if (isWarrior) {
-      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks'];
-      return tabs.filter(t => t.id !== 'payments' && allowed.includes(t.id));
+      const allowed = currentUser?.allowedTabs || ['dispatcher', 'pipeline', 'leads', 'email-copies', 'tasks', 'chat'];
+      const hasChatAccess = canUserAccessChat(currentUser);
+      return tabs.filter(t => {
+        if (t.id === 'payments') return false;
+        if (t.id === 'chat') return hasChatAccess;
+        return allowed.includes(t.id);
+      });
     }
     return tabs;
-  }, [isAdmin, isWarrior, currentUser, safeMetrics, pendingApprovalsCount]);
+  }, [isAdmin, isWarrior, currentUser, safeMetrics, pendingApprovalsCount, chatUnreadCount, canUserAccessChat]);
 
   // Handle lead click from any subcomponent
   const handleOpenLeadDetail = (lead) => {
@@ -141,12 +162,63 @@ export default function App() {
         </div>
       )}
 
+      {/* Interactive Chat Message Notification Popup */}
+      {chatInteractiveToast && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm sm:max-w-md w-full bg-[#111827] border border-[#00C2FF]/60 text-white p-4 rounded-2xl shadow-2xl shadow-[#00C2FF]/20 flex items-start gap-3.5 animate-slideIn backdrop-blur-md">
+          <div className="w-10 h-10 rounded-xl bg-[#00C2FF]/15 border border-[#00C2FF]/30 flex items-center justify-center shrink-0 text-[#00C2FF] mt-0.5">
+            <MessageSquare className="w-5 h-5 animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0 pr-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#00E5A0] flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-[#00E5A0] inline-block animate-ping" />
+                New Direct Message
+              </span>
+              <span className="text-[10px] text-gray-500 font-mono">Just Now</span>
+            </div>
+            <h4 className="text-xs font-bold text-white mt-0.5 truncate">
+              {chatInteractiveToast.senderName} <span className="text-[10px] text-gray-400 font-normal">({chatInteractiveToast.senderRole})</span>
+            </h4>
+            <p className="text-xs text-gray-200 mt-1 line-clamp-2 leading-relaxed bg-[#0A0A0A]/60 p-2 rounded-lg border border-[#1E3A5F]">
+              "{chatInteractiveToast.content}"
+            </p>
+            <div className="mt-2.5 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setChatInteractiveToast(null)}
+                className="px-2.5 py-1 text-xs text-gray-400 hover:text-white transition cursor-pointer"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  setActiveAdminTab('chat');
+                  openChatWithContact(chatInteractiveToast.senderId);
+                  setChatInteractiveToast(null);
+                }}
+                className="px-3.5 py-1.5 bg-[#00C2FF] hover:bg-[#00C2FF]/80 text-[#0A0A0A] text-xs font-bold rounded-xl transition shadow flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>Open Chat</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <button
+            onClick={() => setChatInteractiveToast(null)}
+            className="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-[#0A0A0A] transition cursor-pointer"
+            title="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation */}
       <Navbar 
         onOpenNewWorkspace={handleOpenNewWorkspace}
         onOpenWorkspaceSettings={handleOpenWorkspaceSettings}
         onOpenCloudSync={() => setCloudSyncModalOpen(true)}
         onNavigateToTasks={() => setActiveAdminTab('tasks')}
+        onNavigateToChat={() => setActiveAdminTab('chat')}
       />
 
       {/* Admin Preview Banner when viewing client view */}
@@ -270,6 +342,10 @@ export default function App() {
 
             {activeAdminTab === 'tasks' && (
               <TasksAndReports />
+            )}
+
+            {activeAdminTab === 'chat' && (
+              <ChatView />
             )}
 
           </div>

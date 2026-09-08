@@ -21,12 +21,15 @@ import {
   FolderOpen,
   History,
   ArrowRight,
-  Filter
+  Filter,
+  MessageSquare
 } from 'lucide-react';
+import ChatView from './ChatView';
 
 export default function ClientPortalView({ onOpenLeadDetail }) {
-  const { currentWorkspace, metrics } = useWorkspace();
-  const [activeTab, setActiveTab] = useState('pipeline'); // 'pipeline', 'sequences', 'campaigns', 'activity', 'leads'
+  const { currentWorkspace, metrics, canUserAccessChat, chatUnreadCount, currentUser } = useWorkspace();
+  const [activeTab, setActiveTab] = useState('pipeline'); // 'pipeline', 'sequences', 'campaigns', 'activity', 'leads', 'chat'
+  const hasChatAccess = canUserAccessChat(currentUser);
   const [searchLead, setSearchLead] = useState('');
   const [selectedCampaignFilter, setSelectedCampaignFilter] = useState('all');
 
@@ -242,7 +245,13 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
             { id: 'pipeline', label: 'Interested Leads Pipeline', icon: Target, badge: `${metrics.interestedCount || 0}` },
             { id: 'sequences', label: 'Sequence Funnel & Steps', icon: Layers, badge: '3 Steps' },
             { id: 'activity', label: 'Live Sending Activity', icon: Activity, badge: `${activityLog.length}` },
-            { id: 'leads', label: 'All Campaign Leads', icon: FolderOpen, badge: `${leads.length}` }
+            { id: 'leads', label: 'All Campaign Leads', icon: FolderOpen, badge: `${leads.length}` },
+            ...(hasChatAccess ? [{ 
+              id: 'chat', 
+              label: 'Agency Chat', 
+              icon: MessageSquare, 
+              badge: chatUnreadCount > 0 ? `${chatUnreadCount}` : null 
+            }] : [])
           ].map(tab => {
             const IconComponent = tab.icon;
             const isSelected = activeTab === tab.id;
@@ -267,6 +276,11 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
             );
           })}
         </div>
+
+        {/* TAB 5: AGENCY CHAT */}
+        {activeTab === 'chat' && hasChatAccess && (
+          <ChatView />
+        )}
 
         {/* TAB 1: INTERESTED PIPELINE (KANBAN & STAGES) */}
         {activeTab === 'pipeline' && (
