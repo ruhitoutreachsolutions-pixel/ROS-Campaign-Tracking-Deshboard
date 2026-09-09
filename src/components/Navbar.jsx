@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import RosLogo from './RosLogo';
+import NotificationButton from './NotificationButton';
 import { 
   Building2, 
   ChevronDown, 
@@ -222,6 +223,9 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
         {/* RIGHT: CONTROLS, AUTO-SYNC PILL & AUTH */}
         <div className="flex items-center gap-2.5 sm:gap-3">
           
+          {/* DESKTOP NOTIFICATIONS BUTTON (GLOBAL ACROSS ALL PORTALS) */}
+          <NotificationButton />
+
           {/* REAL-TIME CHAT SHORTCUT PILL */}
           {canUserAccessChat(currentUser) && (
             <button

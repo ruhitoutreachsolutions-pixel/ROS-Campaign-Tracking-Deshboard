@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import RosLogo from './RosLogo';
+import NotificationButton from './NotificationButton';
 import { Lock, User, ArrowRight, KeyRound, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function LoginScreen() {
@@ -129,6 +130,11 @@ export default function LoginScreen() {
             </button>
           </form>
 
+        </div>
+
+        {/* Quick Option for Desktop Notifications */}
+        <div className="mt-5 flex justify-center">
+          <NotificationButton showLabelAlways={true} className="bg-[#111827] shadow-xl border border-[#1E3A5F]" />
         </div>
 
         {/* Footer */}

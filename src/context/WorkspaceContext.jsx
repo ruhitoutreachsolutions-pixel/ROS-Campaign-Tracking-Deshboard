@@ -371,13 +371,34 @@ export function WorkspaceProvider({ children }) {
   }
 
   async function requestDesktopNotificationPermission() {
-    if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setLiveToast({
+        title: 'Not Supported',
+        message: 'This browser or device does not support HTML5 desktop notifications.'
+      });
+      return 'unsupported';
+    }
     try {
       const perm = await Notification.requestPermission();
       setNotificationPermission(perm);
       if (perm === 'granted') {
         setDesktopAlertsEnabled(true);
         try { localStorage.setItem('ros_desktop_notifications_enabled', 'true'); } catch (e) {}
+        try {
+          new Notification('🔔 ROS Desktop Notifications Active', {
+            body: 'Desktop alerts are enabled! You will receive live updates for chat messages, task approvals, and campaign events.',
+            icon: '/ros-logo.png'
+          });
+        } catch (e) {}
+        setLiveToast({
+          title: 'Notifications Active',
+          message: 'Desktop notifications are enabled. You will receive live OS alerts for incoming updates.'
+        });
+      } else if (perm === 'denied') {
+        setLiveToast({
+          title: 'Notifications Blocked',
+          message: 'Browser notifications are blocked. Please allow notifications in your browser address bar settings.'
+        });
       }
       return perm;
     } catch (e) {

@@ -26,6 +26,7 @@ import {
   Lock
 } from 'lucide-react';
 import ChatView from './ChatView';
+import NotificationButton from './NotificationButton';
 
 export default function ClientPortalView({ onOpenLeadDetail }) {
   const { currentWorkspace, metrics, canUserAccessChat, chatUnreadCount, effectiveUser } = useWorkspace();
@@ -93,7 +94,8 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+            <NotificationButton showLabelAlways={true} className="shadow-lg" />
             <div className="p-3.5 rounded-2xl bg-[#0A0A0A] border border-[#1E3A5F] text-right w-full sm:w-auto">
               <span className="text-[10px] uppercase text-[#7B7B7B] font-semibold block">Total Qualified Deal Value</span>
               <span className="text-2xl font-bold text-[#00E5A0] font-mono">

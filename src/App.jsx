@@ -18,6 +18,7 @@ import PaymentsInvoices from './components/PaymentsInvoices';
 import TasksAndReports from './components/TasksAndReports';
 import FormSubmissions from './components/FormSubmissions';
 import ChatView from './components/ChatView';
+import NotificationButton from './components/NotificationButton';
 import { 
   BarChart3, 
   Send, 
@@ -287,7 +288,7 @@ export default function App() {
             {/* Header with role badge and tabs */}
             <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-[#1E3A5F]">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
                   <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-widest border ${
                     isAdmin 
                       ? 'bg-[#00C2FF]/10 text-[#00C2FF] border-[#00C2FF]/30' 
@@ -298,6 +299,7 @@ export default function App() {
                   <span className="text-xs text-[#7B7B7B] font-mono">
                     Workspace: <strong className="text-white">{currentWorkspace?.name}</strong>
                   </span>
+                  <NotificationButton showLabelAlways={true} />
                 </div>
                 <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1">
                   ROS Campaign <span className="text-[#00C2FF]">Operations</span>
