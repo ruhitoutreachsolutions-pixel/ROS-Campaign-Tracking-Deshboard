@@ -655,11 +655,11 @@ export default function FormSubmissions() {
                   </div>
                 </th>
 
-                {/* Column D: Metadata / Submitter */}
+                {/* Column D: Submitted By */}
                 <th className="py-3 px-4 border-r border-[#1E3A5F]/60 min-w-[160px]">
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-mono text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">D</span>
-                    <span>Submitted By / Client</span>
+                    <span>Submitted By</span>
                   </div>
                 </th>
 
@@ -792,18 +792,29 @@ export default function FormSubmissions() {
                         )}
                       </td>
 
-                      {/* Column D: Submitted By / Client */}
+                      {/* Column D: Submitted By (Warrior Name) */}
                       <td className="py-3 px-4 border-r border-[#1E3A5F]/50 font-sans text-xs">
-                        <div className="flex flex-col">
-                          <span className="font-medium text-gray-300">
-                            {getWorkspaceName(item.workspaceId)}
-                          </span>
-                          {isSubmitted && item.submittedBy && (
-                            <span className="text-[10px] text-[#00C2FF] font-mono">
-                              by {item.submittedBy}
+                        {isSubmitted ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-[#00C2FF]/15 border border-[#00C2FF]/40 flex items-center justify-center text-[#00C2FF] font-mono text-xs font-bold shrink-0 shadow-sm">
+                              {((item.submittedBy && !item.submittedBy.startsWith('ws_') && item.submittedBy !== item.workspaceId) 
+                                ? item.submittedBy 
+                                : (currentUser?.name || currentUser?.username || 'ROS Warrior')).charAt(0).toUpperCase()}
+                            </div>
+                            <span 
+                              className="font-semibold text-white truncate max-w-[170px]" 
+                              title={(item.submittedBy && !item.submittedBy.startsWith('ws_') && item.submittedBy !== item.workspaceId) 
+                                ? item.submittedBy 
+                                : (currentUser?.name || currentUser?.username || 'ROS Warrior')}
+                            >
+                              {(item.submittedBy && !item.submittedBy.startsWith('ws_') && item.submittedBy !== item.workspaceId) 
+                                ? item.submittedBy 
+                                : (currentUser?.name || currentUser?.username || 'ROS Warrior')}
                             </span>
-                          )}
-                        </div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-500 font-mono text-xs">—</span>
+                        )}
                       </td>
 
                       {/* Column E: Actions */}

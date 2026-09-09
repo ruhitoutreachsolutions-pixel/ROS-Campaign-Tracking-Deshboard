@@ -2180,13 +2180,14 @@ export function WorkspaceProvider({ children }) {
   }
 
   function addFormSubmission(formData) {
+    const activeUserName = currentUser?.name || currentUser?.username || (currentUser?.role === 'warrior' ? 'ROS Warrior' : 'Agency Admin');
     const newSubmission = {
       id: 'form_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
       workspaceId: formData.workspaceId || currentWorkspaceId || 'ws_crewlixukltd',
       formUrl: (formData.formUrl || formData.url || '').trim(),
       submitted: formData.submitted || false,
       submissionDate: formData.submissionDate || (formData.submitted ? getTodayFormatted() : ''),
-      submittedBy: formData.submittedBy || (formData.submitted ? (currentUser?.name || currentUser?.username || 'Team') : ''),
+      submittedBy: formData.submittedBy || (formData.submitted ? activeUserName : ''),
       notes: formData.notes || '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -2235,11 +2236,12 @@ export function WorkspaceProvider({ children }) {
 
   function toggleFormSubmissionStatus(submissionId) {
     let toggledItem = null;
+    const activeUserName = currentUser?.name || currentUser?.username || (currentUser?.role === 'warrior' ? 'ROS Warrior' : 'Agency Admin');
     const next = (formSubmissions || []).map(item => {
       if (item.id === submissionId) {
         const nextSubmitted = !item.submitted;
         const nextDate = nextSubmitted ? getTodayFormatted() : '';
-        const nextBy = nextSubmitted ? (currentUser?.name || currentUser?.username || 'Team') : '';
+        const nextBy = nextSubmitted ? activeUserName : '';
         toggledItem = {
           ...item,
           submitted: nextSubmitted,
@@ -2270,7 +2272,7 @@ export function WorkspaceProvider({ children }) {
     if (!Array.isArray(submissionIds) || submissionIds.length === 0) return 0;
     const targetSet = new Set(submissionIds);
     const today = getTodayFormatted();
-    const by = currentUser?.name || currentUser?.username || 'Team';
+    const activeUserName = currentUser?.name || currentUser?.username || (currentUser?.role === 'warrior' ? 'ROS Warrior' : 'Agency Admin');
     let updatedCount = 0;
 
     const next = (formSubmissions || []).map(item => {
@@ -2280,7 +2282,7 @@ export function WorkspaceProvider({ children }) {
           ...item,
           submitted: !!submitted,
           submissionDate: submitted ? today : '',
-          submittedBy: submitted ? by : '',
+          submittedBy: submitted ? activeUserName : '',
           updatedAt: new Date().toISOString()
         };
       }
