@@ -24,7 +24,8 @@ import {
   fetchSystemMetaFromSupabase,
   saveSystemMetaToSupabase,
   fetchWarriorsFromSupabase,
-  saveWarriorsToSupabase
+  saveWarriorsToSupabase,
+  getLastCloudError
 } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
 import { 
@@ -1324,10 +1325,11 @@ export function WorkspaceProvider({ children }) {
           message: `Successfully synced ${workspaces.length} workspace(s) and ${totalLeads} leads to Cloud Database!`
         };
       }
+      const errDetail = getLastCloudError();
       return { 
         success: false, 
         connected: true, 
-        message: 'Cloud sync failed. Make sure your Supabase "workspaces" SQL table is created.' 
+        message: errDetail ? `Cloud sync failed: ${errDetail}` : 'Cloud sync failed. Make sure your Supabase "workspaces" SQL table is created.' 
       };
     } catch (err) {
       return { 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { X, Database, Cloud, Check, Copy, ShieldCheck, RefreshCw, Sparkles, Server, Download, Upload, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected, saveWorkspacesToCloud, fetchWorkspacesFromCloud } from '../services/db';
+import { getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected, saveWorkspacesToCloud, fetchWorkspacesFromCloud, getLastCloudError } from '../services/db';
 
 export default function CloudSyncModal({ isOpen, onClose }) {
   const { workspaces, currentWorkspace, restorePreviousBackup } = useWorkspace();
@@ -100,10 +100,11 @@ create policy "Allow all access" on workspaces for all using (true) with check (
       if (ok) {
         setStatusMessage(`Successfully connected to Supabase! Uploaded ${workspaces.length} workspace(s) and ${workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)} leads to the cloud database.`);
       } else {
-        setStatusMessage('Supabase credentials saved. Please make sure you ran the SQL Table Setup in Supabase.');
+        const err = getLastCloudError();
+        setErrorMessage(err ? `Supabase sync error: ${err}` : 'Supabase credentials saved. Please make sure you ran the SQL Table Setup in Supabase.');
       }
     } catch (err) {
-      setErrorMessage('Connection error. Please check your Supabase URL, Key, and SQL Table.');
+      setErrorMessage(`Connection error: ${err.message || 'Please check your Supabase URL, Key, and SQL Table.'}`);
     } finally {
       setIsSaving(false);
     }
@@ -119,7 +120,8 @@ create policy "Allow all access" on workspaces for all using (true) with check (
       setStatusMessage(`All ${workspaces.length} workspaces and leads are synchronized with Supabase!`);
       setTimeout(() => setStatusMessage(''), 4000);
     } else {
-      setErrorMessage('Cloud sync failed. Make sure Supabase is connected and the SQL table is created.');
+      const err = getLastCloudError();
+      setErrorMessage(err ? `Cloud sync failed: ${err}` : 'Cloud sync failed. Make sure Supabase is connected and the SQL table is created.');
     }
   };
 

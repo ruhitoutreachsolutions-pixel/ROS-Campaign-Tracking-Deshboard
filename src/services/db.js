@@ -138,6 +138,11 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
   return fallbackWorkspaces;
 }
 
+let lastCloudErrorMsg = null;
+export function getLastCloudError() {
+  return lastCloudErrorMsg;
+}
+
 // 3. Save / Sync Workspaces (including all leads) to Supabase Cloud Database
 export async function saveWorkspacesToCloud(workspaces) {
   if (!workspaces || !Array.isArray(workspaces) || workspaces.length === 0) return false;
@@ -146,6 +151,7 @@ export async function saveWorkspacesToCloud(workspaces) {
   if (!supabase) return false;
 
   const deletedIds = getLocalDeletedIds();
+  lastCloudErrorMsg = null;
 
   try {
     let hasError = false;
@@ -167,7 +173,7 @@ export async function saveWorkspacesToCloud(workspaces) {
           ...(ws.sequenceConfig || {}),
           deletedLeadIds: Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || [])
         },
-        activityLog: ws.activityLog || [],
+        activity_log: ws.activityLog || [],
         leads: ws.leads || [],
         updated_at: ws.updatedAt || new Date().toISOString()
       };
@@ -180,11 +186,13 @@ export async function saveWorkspacesToCloud(workspaces) {
         console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
         hasError = true;
         lastError = error;
+        lastCloudErrorMsg = error.message || error.details || String(error);
       }
     }
     return !hasError;
   } catch (err) {
     console.warn('Supabase save failed:', err);
+    lastCloudErrorMsg = err.message || String(err);
     return false;
   }
 }
