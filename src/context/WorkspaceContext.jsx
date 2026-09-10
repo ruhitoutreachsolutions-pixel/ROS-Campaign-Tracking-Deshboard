@@ -266,6 +266,9 @@ export function WorkspaceProvider({ children }) {
   });
 
   const lastFormMutationTimeRef = useRef(0);
+  const lastNotesMutationTimeRef = useRef(0);
+  const lastTasksMutationTimeRef = useRef(0);
+  const lastReportsMutationTimeRef = useRef(0);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(formSubmissions)); } catch (e) {}
@@ -471,15 +474,21 @@ export function WorkspaceProvider({ children }) {
                 return localWs;
               }
 
-              // SMART LEAD-LEVEL MERGE:
-              // Prevents stale cloud data from wiping out yesterday's 1,100 follow-ups or booked meetings!
-              const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || []);
+              // SMART LEAD-LEVEL MERGE WITH AUTHORITATIVE CLOUD RECONCILIATION:
+              const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
+                localWsUpdatedAt: localWs.updatedAt,
+                cloudWsUpdatedAt: cloudWs.updatedAt,
+                deletedLeadIds: [
+                  ...(localWs.deletedLeadIds || []),
+                  ...(cloudWs.deletedLeadIds || [])
+                ]
+              });
 
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
 
-              // If local has newer updates or more leads than cloud, flag to push updates to Supabase
-              if (localTime > cloudTime || (localWs.leads?.length || 0) > (cloudWs.leads?.length || 0)) {
+              // Only push to cloud if local was strictly modified AFTER cloud
+              if (localTime > cloudTime) {
                 needsPushToCloud = true;
               }
 
@@ -487,6 +496,10 @@ export function WorkspaceProvider({ children }) {
                 ...cloudWs,
                 ...localWs,
                 leads: mergedLeads,
+                deletedLeadIds: Array.from(new Set([
+                  ...(localWs.deletedLeadIds || []),
+                  ...(cloudWs.deletedLeadIds || [])
+                ])),
                 activityLog: (localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0)
                   ? localWs.activityLog
                   : cloudWs.activityLog || [],
@@ -609,36 +622,40 @@ export function WorkspaceProvider({ children }) {
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
-  // 4b. CONTINUOUS 25-SECOND AUTO-SYNC ENGINE
+  // 4b. CONTINUOUS 25-SECOND CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
   useEffect(() => {
-    const autoSyncInterval = setInterval(async () => {
+    const autoReconcileInterval = setInterval(async () => {
       try {
         setIsAutoSyncing(true);
-        // 1. Save to local durable database
-        await saveWorkspacesToLocal(workspaces);
-        // 2. Save to Supabase Cloud & Zero-Config Global Endpoint
-        await saveWorkspacesToCloud(workspaces);
-        await saveGlobalMetaToCloud({
-          warriors,
-          tasks,
-          payments,
-          emailCopies,
-          importantNotes,
-          todos,
-          dailyReports,
-          warriorTimeline,
-          formSubmissions
-        });
+        const cloudMeta = await fetchGlobalMetaFromCloud();
+        if (cloudMeta) {
+          if (Date.now() - lastNotesMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.importantNotes)) {
+            setImportantNotes(cloudMeta.importantNotes);
+          }
+          if (Date.now() - lastTasksMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.tasks)) {
+            setTasks(cloudMeta.tasks);
+          }
+          if (Date.now() - lastReportsMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.dailyReports)) {
+            setDailyReports(cloudMeta.dailyReports);
+          }
+          if (Array.isArray(cloudMeta.warriors) && cloudMeta.warriors.length > 0) {
+            setWarriors(cloudMeta.warriors);
+          }
+          if (Date.now() - lastFormMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.formSubmissions)) {
+            const deletedIds = getDeletedFormSubmissionIds();
+            setFormSubmissions(prev => mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds));
+          }
+        }
         setLastSyncedTime(new Date());
       } catch (err) {
-        console.warn('Auto-sync cycle notice:', err);
+        console.warn('Auto-reconcile cycle notice:', err);
       } finally {
-        setTimeout(() => setIsAutoSyncing(false), 1200);
+        setTimeout(() => setIsAutoSyncing(false), 1000);
       }
     }, 25000); // 25 seconds
 
-    return () => clearInterval(autoSyncInterval);
-  }, [workspaces, warriors, tasks, payments, emailCopies, importantNotes, todos, dailyReports, warriorTimeline, formSubmissions]);
+    return () => clearInterval(autoReconcileInterval);
+  }, []);
 
   // Audio Chime notification helper for instant audible feedback
   function playNotificationChime() {
@@ -869,6 +886,52 @@ export function WorkspaceProvider({ children }) {
         setWorkspaces(prev => prev.filter(w => w.id !== targetId));
       }
 
+      // 8b. Realtime Leads Deleted in Workspace
+      if (event.type === 'WORKSPACE_LEADS_DELETED' && event.workspaceId && Array.isArray(event.deletedLeadIds)) {
+        const targetWsId = event.workspaceId;
+        const delSet = new Set(event.deletedLeadIds);
+        setWorkspaces(prev => {
+          const next = prev.map(w => {
+            if (w.id === targetWsId) {
+              const updatedDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...event.deletedLeadIds]));
+              return {
+                ...w,
+                leads: (w.leads || []).filter(l => !delSet.has(l.id)),
+                deletedLeadIds: updatedDeleted,
+                updatedAt: event.updatedAt || new Date().toISOString()
+              };
+            }
+            return w;
+          });
+          saveWorkspacesToLocal(next);
+          return next;
+        });
+      }
+
+      // 8c. Realtime Leads Updated / Imported in Workspace
+      if (event.type === 'WORKSPACE_LEADS_UPDATED' && event.workspaceId && Array.isArray(event.leads)) {
+        const targetWsId = event.workspaceId;
+        setWorkspaces(prev => {
+          const next = prev.map(w => {
+            if (w.id === targetWsId) {
+              const mergedLeads = mergeWorkspaceLeads(w.leads || [], event.leads, {
+                localWsUpdatedAt: w.updatedAt,
+                cloudWsUpdatedAt: event.updatedAt,
+                deletedLeadIds: w.deletedLeadIds || []
+              });
+              return {
+                ...w,
+                leads: mergedLeads,
+                updatedAt: event.updatedAt || new Date().toISOString()
+              };
+            }
+            return w;
+          });
+          saveWorkspacesToLocal(next);
+          return next;
+        });
+      }
+
       // 9. Notes Updated
       if (event.type === 'NOTES_UPDATED' && Array.isArray(event.importantNotes)) {
         setImportantNotes(event.importantNotes);
@@ -949,7 +1012,7 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
-        if (Array.isArray(cloudMeta.tasks)) {
+        if (Array.isArray(cloudMeta.tasks) && Date.now() - lastTasksMutationTimeRef.current > 8000) {
           setTasks(prev => {
             if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.tasks)) {
               try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
@@ -980,7 +1043,7 @@ export function WorkspaceProvider({ children }) {
           });
         }
 
-        if (Array.isArray(cloudMeta.importantNotes)) {
+        if (Array.isArray(cloudMeta.importantNotes) && Date.now() - lastNotesMutationTimeRef.current > 8000) {
           setImportantNotes(prev => {
             if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.importantNotes)) {
               try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(cloudMeta.importantNotes)); } catch (e) {}
@@ -1781,27 +1844,39 @@ export function WorkspaceProvider({ children }) {
       importedAt: l.importedAt || new Date().toISOString()
     }));
 
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === currentWorkspaceId) {
-        return {
-          ...w,
-          leads: [...w.leads, ...leadsWithCampaign],
-          activityLog: [
-            {
-              id: 'act_' + Date.now(),
-              timestamp: new Date().toISOString(),
-              type: 'import',
-              count: newLeads.length,
-              campaignName: campName,
-              description: `Imported ${newLeads.length} leads into campaign "${campName}" on ${todayStr}`
-            },
-            ...(w.activityLog || [])
-          ],
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return w;
-    }));
+    const nowIso = new Date().toISOString();
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === currentWorkspaceId) {
+          return {
+            ...w,
+            leads: [...w.leads, ...leadsWithCampaign],
+            activityLog: [
+              {
+                id: 'act_' + Date.now(),
+                timestamp: nowIso,
+                type: 'import',
+                count: newLeads.length,
+                campaignName: campName,
+                description: `Imported ${newLeads.length} leads into campaign "${campName}" on ${todayStr}`
+              },
+              ...(w.activityLog || [])
+            ],
+            updatedAt: nowIso
+          };
+        }
+        return w;
+      });
+      saveWorkspacesToLocal(next);
+      saveWorkspacesToCloud(next).catch(() => {});
+      return next;
+    });
+
+    broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+      workspaceId: currentWorkspaceId,
+      leads: leadsWithCampaign,
+      updatedAt: nowIso
+    }).catch(() => {});
 
     return newLeads.length;
   }
@@ -1848,49 +1923,95 @@ export function WorkspaceProvider({ children }) {
       description: `Added single lead ${newLead.email} (${newLead.companyName || 'No Company'})`
     };
 
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === currentWorkspaceId) {
-        return {
-          ...w,
-          leads: [newLead, ...w.leads],
-          activityLog: [newActivity, ...(w.activityLog || [])],
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return w;
-    }));
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === currentWorkspaceId) {
+          return {
+            ...w,
+            leads: [newLead, ...w.leads],
+            activityLog: [newActivity, ...(w.activityLog || [])],
+            updatedAt: newLead.updatedAt
+          };
+        }
+        return w;
+      });
+      saveWorkspacesToLocal(next);
+      saveWorkspacesToCloud(next).catch(() => {});
+      return next;
+    });
 
     logWarriorAction('lead_added', `Added single lead: ${newLead.email} (${newLead.companyName || 'No Company'})`);
+
+    broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+      workspaceId: currentWorkspaceId,
+      leads: [newLead],
+      updatedAt: newLead.updatedAt
+    }).catch(() => {});
 
     return newLead;
   }
 
   // 7. Delete Leads
   function deleteLead(leadId) {
-    if (!currentWorkspace) return false;
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === currentWorkspaceId) {
-        return {
-          ...w,
-          leads: w.leads.filter(l => l.id !== leadId)
-        };
-      }
-      return w;
-    }));
+    if (!currentWorkspace || !leadId) return false;
+    const nowIso = new Date().toISOString();
+
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === currentWorkspaceId) {
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId]));
+          return {
+            ...w,
+            leads: (w.leads || []).filter(l => l.id !== leadId),
+            deletedLeadIds: nextDeleted,
+            updatedAt: nowIso
+          };
+        }
+        return w;
+      });
+      saveWorkspacesToLocal(next);
+      saveWorkspacesToCloud(next).catch(() => {});
+      return next;
+    });
+
+    broadcastRealtimeEvent('WORKSPACE_LEADS_DELETED', {
+      workspaceId: currentWorkspaceId,
+      deletedLeadIds: [leadId],
+      updatedAt: nowIso
+    }).catch(() => {});
+
     return true;
   }
 
   function bulkDeleteLeads(leadIds) {
     if (!currentWorkspace || !leadIds || leadIds.length === 0) return false;
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === currentWorkspaceId) {
-        return {
-          ...w,
-          leads: w.leads.filter(l => !leadIds.includes(l.id))
-        };
-      }
-      return w;
-    }));
+    const nowIso = new Date().toISOString();
+    const delSet = new Set(leadIds);
+
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === currentWorkspaceId) {
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds]));
+          return {
+            ...w,
+            leads: (w.leads || []).filter(l => !delSet.has(l.id)),
+            deletedLeadIds: nextDeleted,
+            updatedAt: nowIso
+          };
+        }
+        return w;
+      });
+      saveWorkspacesToLocal(next);
+      saveWorkspacesToCloud(next).catch(() => {});
+      return next;
+    });
+
+    broadcastRealtimeEvent('WORKSPACE_LEADS_DELETED', {
+      workspaceId: currentWorkspaceId,
+      deletedLeadIds: leadIds,
+      updatedAt: nowIso
+    }).catch(() => {});
+
     return true;
   }
 
@@ -2126,6 +2247,7 @@ export function WorkspaceProvider({ children }) {
 
   // 10. Important Notes Realtime Sync & Handlers
   function syncNotesUpdate(nextNotes) {
+    lastNotesMutationTimeRef.current = Date.now();
     setImportantNotes(nextNotes);
     try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(nextNotes)); } catch (e) {}
     saveGlobalMetaToCloud({ importantNotes: nextNotes }).catch(() => {});
@@ -2407,6 +2529,7 @@ export function WorkspaceProvider({ children }) {
 
   // 12. Tasks & Approval Workflow
   function createTask(taskData) {
+    lastTasksMutationTimeRef.current = Date.now();
     const newTask = {
       id: 'task_' + Date.now(),
       title: taskData.title || 'New Task',
@@ -2431,6 +2554,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function submitTaskForApproval(taskId) {
+    lastTasksMutationTimeRef.current = Date.now();
     const task = (tasks || []).find(t => t.id === taskId);
     const now = new Date().toISOString();
     const nextTasks = (tasks || []).map(t => 
@@ -2458,6 +2582,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function approveTask(taskId, feedback = '') {
+    lastTasksMutationTimeRef.current = Date.now();
     let updatedTask = null;
     const nextTasks = (tasks || []).map(t => {
       if (t.id === taskId) {
@@ -2485,6 +2610,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function rejectTask(taskId, feedback = '') {
+    lastTasksMutationTimeRef.current = Date.now();
     let updatedTask = null;
     const nextTasks = (tasks || []).map(t => {
       if (t.id === taskId) {
@@ -2511,6 +2637,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function deleteTask(taskId) {
+    lastTasksMutationTimeRef.current = Date.now();
     const nextTasks = (tasks || []).filter(t => t.id !== taskId);
     setTasks(nextTasks);
     try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(nextTasks)); } catch (e) {}
@@ -2520,6 +2647,7 @@ export function WorkspaceProvider({ children }) {
 
   // 13. Daily Reports
   function submitDailyReport(repData) {
+    lastReportsMutationTimeRef.current = Date.now();
     const warriorName = currentUser?.name || currentUser?.username || 'ROS Warrior';
     const newRep = {
       id: 'rep_' + Date.now(),
@@ -2554,6 +2682,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function approveDailyReport(repId, feedback = '') {
+    lastReportsMutationTimeRef.current = Date.now();
     let updatedReport = null;
     const nextReports = (dailyReports || []).map(r => {
       if (r.id === repId) {
@@ -2581,6 +2710,7 @@ export function WorkspaceProvider({ children }) {
   }
 
   function rejectDailyReport(repId, feedback = '') {
+    lastReportsMutationTimeRef.current = Date.now();
     let updatedReport = null;
     const nextReports = (dailyReports || []).map(r => {
       if (r.id === repId) {

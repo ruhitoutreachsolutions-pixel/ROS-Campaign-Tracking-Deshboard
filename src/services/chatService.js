@@ -7,11 +7,17 @@
 // 4. Supabase Storage + Dual-Persistence Fallback
 // ============================================================================
 
-import { getSupabaseClient } from './db';
+import { 
+  getSupabaseClient, 
+  fetchChatDataFromCloud, 
+  saveChatDataToCloud,
+  SYSTEM_META_ID,
+  CHAT_DATA_ID 
+} from './db';
 
-const PRESENCE_CHANNEL_NAME = 'ros_chat_presence_v1';
+const CHAT_REALTIME_CHANNEL = 'ros_chat_realtime_v2';
+const PRESENCE_CHANNEL_NAME = 'ros_chat_presence_v2';
 const LOCAL_BROADCAST_NAME = 'ros_chat_local_broadcast_v1';
-const SYSTEM_META_ID = '__ros_system_metadata__';
 const STORAGE_KEY_PERMISSIONS = 'ros_chat_permissions_v1';
 
 export function getUserChatChannelName(userId) {
@@ -19,7 +25,7 @@ export function getUserChatChannelName(userId) {
   return `ros_chat_user_${String(userId).trim().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
 
-let activeUserChannel = null;
+let activeChatChannel = null;
 let activePresenceChannel = null;
 let localBroadcast = null;
 
@@ -31,8 +37,37 @@ try {
   // BroadcastChannel fallback
 }
 
+export function getChatRealtimeChannel() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  if (activeChatChannel) {
+    return activeChatChannel;
+  }
+
+  try {
+    const channel = supabase.channel(CHAT_REALTIME_CHANNEL, {
+      config: {
+        broadcast: { self: false }
+      }
+    });
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        // Chat realtime connected
+      }
+    });
+
+    activeChatChannel = channel;
+    return channel;
+  } catch (err) {
+    console.warn('Supabase chat realtime channel init notice:', err);
+    return null;
+  }
+}
+
 // ----------------------------------------------------------------------------
-// 1. REAL-TIME SUBSCRIPTION & BROADCASTING (SCOPED BY USER)
+// 1. REAL-TIME SUBSCRIPTION & BROADCASTING (PERSISTENT SINGLETON CHANNEL)
 // ----------------------------------------------------------------------------
 
 export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMessagesRead, onMessagesDeleted, onPresenceSync }) {
@@ -40,30 +75,21 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
   if (!supabase || !currentUserId) return () => {};
 
   const cleanUserId = String(currentUserId);
+  const userRole = userMetadata?.role || 'client';
 
-  // Clean up any existing channels
-  if (activeUserChannel) {
-    try { supabase.removeChannel(activeUserChannel); } catch (e) {}
-    activeUserChannel = null;
-  }
-  if (activePresenceChannel) {
-    try { supabase.removeChannel(activePresenceChannel); } catch (e) {}
-    activePresenceChannel = null;
-  }
-
-  // 1. Local BroadcastChannel: strictly ignore messages not for or from this user
+  // 1. Local BroadcastChannel: handles tabs in same browser instance
   const handleLocalMessage = (event) => {
     if (!event?.data) return;
     const { type, payload } = event.data;
 
     if (type === 'NEW_MESSAGE' && payload) {
-      if (String(payload.recipient_id) === cleanUserId || String(payload.sender_id) === cleanUserId) {
+      if (String(payload.recipient_id) === cleanUserId || String(payload.sender_id) === cleanUserId || userRole === 'admin') {
         if (onMessage) onMessage(payload);
       }
     }
 
     if (type === 'MESSAGES_READ' && payload) {
-      if (payload.conversationId && (String(payload.readerId) === cleanUserId || String(payload.senderId) === cleanUserId)) {
+      if (payload.conversationId && (String(payload.readerId) === cleanUserId || String(payload.senderId) === cleanUserId || userRole === 'admin')) {
         if (onMessagesRead) onMessagesRead(payload);
       }
     }
@@ -77,32 +103,37 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
     localBroadcast.addEventListener('message', handleLocalMessage);
   }
 
-  // 2. Personal User Channel: Only receives direct messages for this user
-  const userChannelName = getUserChatChannelName(cleanUserId);
-  const userChannel = supabase.channel(userChannelName);
+  // 2. Persistent Supabase Realtime Channel
+  const chatChannel = getChatRealtimeChannel();
+  if (chatChannel) {
+    chatChannel.on('broadcast', { event: 'chat_msg' }, ({ payload }) => {
+      if (!payload) return;
+      if (String(payload.recipient_id) === cleanUserId || String(payload.sender_id) === cleanUserId || userRole === 'admin') {
+        if (onMessage) onMessage(payload);
+      }
+    });
 
-  userChannel.on('broadcast', { event: 'new_message' }, ({ payload }) => {
-    if (payload && (String(payload.recipient_id) === cleanUserId || String(payload.sender_id) === cleanUserId)) {
-      if (onMessage) onMessage(payload);
-    }
-  });
+    chatChannel.on('broadcast', { event: 'chat_read' }, ({ payload }) => {
+      if (payload && onMessagesRead) {
+        if (String(payload.senderId) === cleanUserId || String(payload.readerId) === cleanUserId || userRole === 'admin') {
+          onMessagesRead(payload);
+        }
+      }
+    });
 
-  userChannel.on('broadcast', { event: 'messages_read' }, ({ payload }) => {
-    if (payload && onMessagesRead) {
-      onMessagesRead(payload);
-    }
-  });
-
-  userChannel.on('broadcast', { event: 'messages_deleted' }, ({ payload }) => {
-    if (payload && onMessagesDeleted) {
-      onMessagesDeleted(payload);
-    }
-  });
-
-  userChannel.subscribe();
-  activeUserChannel = userChannel;
+    chatChannel.on('broadcast', { event: 'chat_del' }, ({ payload }) => {
+      if (payload && onMessagesDeleted) {
+        onMessagesDeleted(payload);
+      }
+    });
+  }
 
   // 3. Presence Channel: Tracks online users with zero DB writes
+  if (activePresenceChannel) {
+    try { supabase.removeChannel(activePresenceChannel); } catch (e) {}
+    activePresenceChannel = null;
+  }
+
   const presenceChannel = supabase.channel(PRESENCE_CHANNEL_NAME, {
     config: {
       presence: { key: cleanUserId }
@@ -122,7 +153,7 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
         await presenceChannel.track({
           user_id: cleanUserId,
           name: userMetadata?.name || cleanUserId,
-          role: userMetadata?.role || 'client',
+          role: userRole,
           online_at: new Date().toISOString()
         });
       } catch (err) {
@@ -138,10 +169,6 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
     if (localBroadcast) {
       localBroadcast.removeEventListener('message', handleLocalMessage);
     }
-    if (activeUserChannel) {
-      try { supabase.removeChannel(activeUserChannel); } catch (e) {}
-      activeUserChannel = null;
-    }
     if (activePresenceChannel) {
       try { supabase.removeChannel(activePresenceChannel); } catch (e) {}
       activePresenceChannel = null;
@@ -152,54 +179,25 @@ export function setupChatRealtime({ currentUserId, userMetadata, onMessage, onMe
 export async function broadcastChatMessage(message) {
   if (!message || !message.recipient_id) return;
 
-  // 1. Local BroadcastChannel (instant in same browser)
+  // 1. Local BroadcastChannel (instant in same browser profile)
   try {
     if (localBroadcast) {
       localBroadcast.postMessage({ type: 'NEW_MESSAGE', payload: message });
     }
   } catch (e) {}
 
-  // 2. Supabase Realtime Scoped Broadcasts:
-  // Target recipient's channel AND sender's channel
-  const supabase = getSupabaseClient();
-  if (!supabase) return;
-
-  const recipientChannelName = getUserChatChannelName(message.recipient_id);
-  const senderChannelName = getUserChatChannelName(message.sender_id);
-
+  // 2. Persistent Supabase Realtime Channel Broadcast (instant cross-device worldwide)
   try {
-    const recipientChan = supabase.channel(recipientChannelName);
-    await recipientChan.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await recipientChan.send({
-          type: 'broadcast',
-          event: 'new_message',
-          payload: message
-        });
-        setTimeout(() => {
-          try { supabase.removeChannel(recipientChan); } catch (e) {}
-        }, 1500);
-      }
-    });
-
-    // Also broadcast to sender's own channel if different to sync multi-device tabs
-    if (senderChannelName !== recipientChannelName) {
-      const senderChan = supabase.channel(senderChannelName);
-      await senderChan.subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await senderChan.send({
-            type: 'broadcast',
-            event: 'new_message',
-            payload: message
-          });
-          setTimeout(() => {
-            try { supabase.removeChannel(senderChan); } catch (e) {}
-          }, 1500);
-        }
-      });
+    const channel = getChatRealtimeChannel();
+    if (channel) {
+      channel.send({
+        type: 'broadcast',
+        event: 'chat_msg',
+        payload: message
+      }).catch(err => console.warn('Supabase chat message send notice:', err));
     }
   } catch (err) {
-    console.warn('Supabase scoped broadcast error:', err);
+    console.warn('Supabase broadcast error:', err);
   }
 }
 
@@ -212,63 +210,42 @@ export async function broadcastMessagesRead(conversationId, readerId, senderId) 
     }
   } catch (e) {}
 
-  const supabase = getSupabaseClient();
-  if (!supabase || !senderId) return;
-
   try {
-    const targetChannelName = getUserChatChannelName(senderId);
-    const targetChan = supabase.channel(targetChannelName);
-    await targetChan.subscribe(async (status) => {
-      if (status === 'SUBSCRIBED') {
-        await targetChan.send({
-          type: 'broadcast',
-          event: 'messages_read',
-          payload
-        });
-        setTimeout(() => {
-          try { supabase.removeChannel(targetChan); } catch (e) {}
-        }, 1500);
-      }
-    });
+    const channel = getChatRealtimeChannel();
+    if (channel) {
+      channel.send({
+        type: 'broadcast',
+        event: 'chat_read',
+        payload
+      }).catch(() => {});
+    }
   } catch (e) {}
 }
 
 export async function broadcastMessagesDeleted(conversationId, messageIds, participantIds = []) {
   if (!conversationId || !Array.isArray(messageIds) || messageIds.length === 0) return;
 
-  const payload = { conversationId, messageIds, deletedAt: new Date().toISOString() };
+  const payload = { conversationId, messageIds, participantIds, deletedAt: new Date().toISOString() };
 
-  // 1. Local BroadcastChannel (same machine/browser)
+  // 1. Local BroadcastChannel
   try {
     if (localBroadcast) {
       localBroadcast.postMessage({ type: 'MESSAGES_DELETED', payload });
     }
   } catch (e) {}
 
-  // 2. Supabase Realtime Scoped Broadcasts to all participants
-  const supabase = getSupabaseClient();
-  if (!supabase || !Array.isArray(participantIds) || participantIds.length === 0) return;
-
-  for (const pid of participantIds) {
-    if (!pid) continue;
-    try {
-      const channelName = getUserChatChannelName(pid);
-      const chan = supabase.channel(channelName);
-      await chan.subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await chan.send({
-            type: 'broadcast',
-            event: 'messages_deleted',
-            payload
-          });
-          setTimeout(() => {
-            try { supabase.removeChannel(chan); } catch (e) {}
-          }, 1500);
-        }
-      });
-    } catch (err) {
-      console.warn('Broadcast messages deleted notice:', err);
+  // 2. Supabase Realtime Broadcast
+  try {
+    const channel = getChatRealtimeChannel();
+    if (channel) {
+      channel.send({
+        type: 'broadcast',
+        event: 'chat_del',
+        payload
+      }).catch(() => {});
     }
+  } catch (err) {
+    console.warn('Broadcast messages deleted notice:', err);
   }
 }
 
@@ -294,52 +271,24 @@ export function parseConversationParticipants(conversationId) {
 // ----------------------------------------------------------------------------
 
 export async function fetchConversationsFromCloud(currentUserId) {
-  const supabase = getSupabaseClient();
-  if (!supabase || !currentUserId) return [];
-
+  if (!currentUserId) return [];
   const uid = String(currentUserId);
 
   try {
-    // 1. Try dedicated chat_conversations table
-    let query = supabase.from('chat_conversations').select('*');
-    if (uid !== 'admin') {
-      query = query.contains('participant_ids', [uid]);
-    }
-
-    const { data, error } = await query.order('updated_at', { ascending: false });
-
-    if (!error && Array.isArray(data)) {
-      // Filter out internal system IDs
-      return data.filter(c => !c.id.includes(SYSTEM_META_ID));
-    }
-  } catch (e) {}
-
-  // 2. Fallback: Retrieve from __ros_system_metadata__ in workspaces table
-  try {
-    const { data, error } = await supabase
-      .from('workspaces')
-      .select('client_credentials')
-      .eq('id', SYSTEM_META_ID)
-      .maybeSingle();
-
-    if (!error && data?.client_credentials?.chat_conversations) {
-      const allConvs = data.client_credentials.chat_conversations;
-      return allConvs.filter(c => {
-        if (!c || c.id?.includes(SYSTEM_META_ID)) return false;
-        if (uid === 'admin') return true;
-        return Array.isArray(c.participant_ids) && c.participant_ids.includes(uid);
-      });
-    }
+    const { conversations } = await fetchChatDataFromCloud();
+    return (conversations || []).filter(c => {
+      if (!c || c.id?.includes(SYSTEM_META_ID)) return false;
+      if (uid === 'admin') return true;
+      return Array.isArray(c.participant_ids) && c.participant_ids.includes(uid);
+    });
   } catch (err) {
-    console.warn('Fallback fetch conversations notice:', err);
+    console.warn('fetchConversationsFromCloud error:', err);
+    return [];
   }
-
-  return [];
 }
 
 export async function fetchMessagesFromCloud(conversationId, currentUserId) {
-  const supabase = getSupabaseClient();
-  if (!supabase || !conversationId) return [];
+  if (!conversationId) return [];
 
   // Security Check: Validate user is a participant of this conversation
   if (currentUserId && String(currentUserId) !== 'admin') {
@@ -351,76 +300,36 @@ export async function fetchMessagesFromCloud(conversationId, currentUserId) {
   }
 
   try {
-    // 1. Try dedicated chat_messages table
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select('*')
-      .eq('conversation_id', conversationId)
-      .order('created_at', { ascending: true })
-      .limit(200);
+    const { messages } = await fetchChatDataFromCloud();
+    const uid = currentUserId ? String(currentUserId) : null;
 
-    if (!error && Array.isArray(data)) {
-      return data.filter(m => !m.sender_id?.includes(SYSTEM_META_ID) && !m.recipient_id?.includes(SYSTEM_META_ID));
-    }
-  } catch (e) {}
-
-  // 2. Fallback: Retrieve from __ros_system_metadata__
-  try {
-    const { data, error } = await supabase
-      .from('workspaces')
-      .select('client_credentials')
-      .eq('id', SYSTEM_META_ID)
-      .maybeSingle();
-
-    if (!error && data?.client_credentials?.chat_messages) {
-      const allMsgs = data.client_credentials.chat_messages;
-      const uid = currentUserId ? String(currentUserId) : null;
-
-      return allMsgs.filter(m => {
-        if (m.conversation_id !== conversationId) return false;
-        if (m.sender_id?.includes(SYSTEM_META_ID) || m.recipient_id?.includes(SYSTEM_META_ID)) return false;
-        if (!uid || uid === 'admin') return true;
-        return String(m.sender_id) === uid || String(m.recipient_id) === uid;
-      });
-    }
+    return (messages || []).filter(m => {
+      if (m.conversation_id !== conversationId) return false;
+      if (m.sender_id?.includes(SYSTEM_META_ID) || m.recipient_id?.includes(SYSTEM_META_ID)) return false;
+      if (!uid || uid === 'admin') return true;
+      return String(m.sender_id) === uid || String(m.recipient_id) === uid;
+    });
   } catch (err) {
-    console.warn('Fallback fetch messages notice:', err);
+    console.warn('fetchMessagesFromCloud error:', err);
+    return [];
   }
-
-  return [];
 }
 
 export async function saveMessageToCloud(message) {
-  const supabase = getSupabaseClient();
-  if (!supabase || !message) return false;
+  if (!message || !message.conversation_id) return false;
 
   // Never persist system metadata dummy IDs
   if (message.sender_id?.includes(SYSTEM_META_ID) || message.recipient_id?.includes(SYSTEM_META_ID)) {
     return false;
   }
 
-  // 1. Try dedicated chat_messages table
   try {
-    await supabase.from('chat_messages').insert(message);
-  } catch (e) {}
+    const { messages = [], conversations = [] } = await fetchChatDataFromCloud();
 
-  // 2. Always maintain dual-sync in __ros_system_metadata__
-  try {
-    const { data } = await supabase
-      .from('workspaces')
-      .select('client_credentials')
-      .eq('id', SYSTEM_META_ID)
-      .maybeSingle();
-
-    const creds = data?.client_credentials || {};
-    const existingMsgs = Array.isArray(creds.chat_messages) ? creds.chat_messages : [];
-
-    if (!existingMsgs.some(m => m.id === message.id)) {
-      const nextMsgs = [...existingMsgs.slice(-500), message];
-
-      const existingConvs = Array.isArray(creds.chat_conversations) ? creds.chat_conversations : [];
-      const convIdx = existingConvs.findIndex(c => c.id === message.conversation_id);
-      let nextConvs = [...existingConvs];
+    if (!messages.some(m => m.id === message.id)) {
+      const nextMsgs = [...messages.slice(-500), message];
+      let nextConvs = [...conversations];
+      const convIdx = nextConvs.findIndex(c => c.id === message.conversation_id);
 
       if (convIdx >= 0) {
         nextConvs[convIdx] = {
@@ -439,80 +348,39 @@ export async function saveMessageToCloud(message) {
         });
       }
 
-      await supabase
-        .from('workspaces')
-        .update({
-          client_credentials: {
-            ...creds,
-            chat_messages: nextMsgs,
-            chat_conversations: nextConvs
-          }
-        })
-        .eq('id', SYSTEM_META_ID);
+      return await saveChatDataToCloud({ messages: nextMsgs, conversations: nextConvs });
     }
+    return true;
   } catch (err) {
-    console.warn('Fallback save message notice:', err);
+    console.warn('saveMessageToCloud error:', err);
+    return false;
   }
-
-  // 3. Upsert conversation record
-  try {
-    await supabase
-      .from('chat_conversations')
-      .upsert({
-        id: message.conversation_id,
-        type: 'direct',
-        participant_ids: [message.sender_id, message.recipient_id],
-        updated_at: new Date().toISOString()
-      });
-  } catch (e) {}
-
-  return true;
 }
 
 export async function markMessagesAsReadInCloud(conversationId, recipientId) {
-  const supabase = getSupabaseClient();
-  if (!supabase || !conversationId) return false;
-
-  const now = new Date().toISOString();
+  if (!conversationId) return false;
 
   try {
-    await supabase
-      .from('chat_messages')
-      .update({ status: 'read', read_at: now })
-      .eq('conversation_id', conversationId)
-      .eq('recipient_id', recipientId)
-      .eq('status', 'sent');
-  } catch (e) {}
+    const { messages = [], conversations = [] } = await fetchChatDataFromCloud();
+    const now = new Date().toISOString();
+    let changed = false;
 
-  try {
-    const { data } = await supabase
-      .from('workspaces')
-      .select('client_credentials')
-      .eq('id', SYSTEM_META_ID)
-      .maybeSingle();
+    const updatedMsgs = messages.map(m => {
+      if (m.conversation_id === conversationId && String(m.recipient_id) === String(recipientId) && m.status !== 'read') {
+        changed = true;
+        return { ...m, status: 'read', read_at: now };
+      }
+      return m;
+    });
 
-    if (data?.client_credentials?.chat_messages) {
-      const creds = data.client_credentials;
-      const updatedMsgs = creds.chat_messages.map(m => {
-        if (m.conversation_id === conversationId && String(m.recipient_id) === String(recipientId) && m.status !== 'read') {
-          return { ...m, status: 'read', read_at: now };
-        }
-        return m;
-      });
-
-      await supabase
-        .from('workspaces')
-        .update({
-          client_credentials: {
-            ...creds,
-            chat_messages: updatedMsgs
-          }
-        })
-        .eq('id', SYSTEM_META_ID);
+    if (changed) {
+      return await saveChatDataToCloud({ messages: updatedMsgs, conversations });
     }
-  } catch (e) {}
-
-  return true;
+    return true;
+  } catch (err) {
+    console.warn('markMessagesAsReadInCloud error:', err);
+    return false;
+  }
 }
 
 // Permanently delete chat messages from Supabase (Admin Only)
@@ -526,64 +394,26 @@ export async function deleteMessagesFromCloud(messageIds, adminUser) {
     return false;
   }
 
-  const supabase = getSupabaseClient();
-  if (!supabase) return false;
-
-  const msgIdSet = new Set(messageIds);
-
-  // 1. Delete from dedicated chat_messages table
   try {
-    const { error } = await supabase
-      .from('chat_messages')
-      .delete()
-      .in('id', messageIds);
+    const { messages = [], conversations = [] } = await fetchChatDataFromCloud();
+    const msgIdSet = new Set(messageIds);
+    const filteredMsgs = messages.filter(m => !msgIdSet.has(m.id));
 
-    if (error) {
-      console.warn('Supabase chat_messages table delete error:', error);
-    }
-  } catch (e) {}
+    const updatedConvs = conversations.map(conv => {
+      const remainingForConv = filteredMsgs.filter(m => m.conversation_id === conv.id);
+      const latest = remainingForConv[remainingForConv.length - 1];
+      return {
+        ...conv,
+        last_message: latest ? latest.content : '',
+        updated_at: latest ? latest.created_at : conv.updated_at
+      };
+    });
 
-  // 2. Delete from __ros_system_metadata__ fallback storage
-  try {
-    const { data } = await supabase
-      .from('workspaces')
-      .select('client_credentials')
-      .eq('id', SYSTEM_META_ID)
-      .maybeSingle();
-
-    if (data?.client_credentials) {
-      const creds = data.client_credentials;
-      const existingMsgs = Array.isArray(creds.chat_messages) ? creds.chat_messages : [];
-      const filteredMsgs = existingMsgs.filter(m => !msgIdSet.has(m.id));
-
-      // Re-evaluate conversation last_message if needed
-      const existingConvs = Array.isArray(creds.chat_conversations) ? creds.chat_conversations : [];
-      const updatedConvs = existingConvs.map(conv => {
-        const remainingForConv = filteredMsgs.filter(m => m.conversation_id === conv.id);
-        const latest = remainingForConv[remainingForConv.length - 1];
-        return {
-          ...conv,
-          last_message: latest ? latest.content : '',
-          updated_at: latest ? latest.created_at : conv.updated_at
-        };
-      });
-
-      await supabase
-        .from('workspaces')
-        .update({
-          client_credentials: {
-            ...creds,
-            chat_messages: filteredMsgs,
-            chat_conversations: updatedConvs
-          }
-        })
-        .eq('id', SYSTEM_META_ID);
-    }
+    return await saveChatDataToCloud({ messages: filteredMsgs, conversations: updatedConvs });
   } catch (err) {
-    console.warn('Fallback delete messages notice:', err);
+    console.warn('deleteMessagesFromCloud error:', err);
+    return false;
   }
-
-  return true;
 }
 
 // ----------------------------------------------------------------------------

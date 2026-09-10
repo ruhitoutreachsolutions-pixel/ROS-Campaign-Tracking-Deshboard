@@ -1,10 +1,19 @@
-// UNIVERSAL MULTI-TIER REAL-TIME SYNC & NOTIFICATION ENGINE
-// Tier 1: Browser BroadcastChannel (0ms, same browser / incognito tabs)
-// Tier 2: Vite Local Server API /api/sync (0ms, cross-browser on machine / LAN)
-// Tier 3: Cloud Realtime Pub/Sub & SSE via ntfy.sh (unlimited, zero-auth, real-time push across devices)
+// ============================================================================
+// UNIVERSAL REAL-TIME SYNC & NOTIFICATION ENGINE (V2 - SUPABASE REALTIME BACKBONE)
+// Primary Tier: Supabase Realtime WebSocket Channels (0ms - 50ms worldwide across all devices)
+// Fast-Path Tier: Browser BroadcastChannel (0ms same-machine tabs & incognito windows)
+// Local Dev Tier: /api/sync fallback (safe no-op if unavailable)
+// ============================================================================
 
-const NTFY_TOPIC = 'ros_warrior_sync_prod_9921';
-const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+import { 
+  getSupabaseClient, 
+  fetchSystemMetaFromSupabase, 
+  saveSystemMetaToSupabase,
+  fetchFormSubmissionsFromCloud,
+  saveFormSubmissionsToCloud 
+} from './db';
+
+const GLOBAL_REALTIME_CHANNEL = 'ros_global_realtime_v2';
 const BROADCAST_CHANNEL_NAME = 'ros_realtime_broadcast_v1';
 
 let broadcastChannel = null;
@@ -16,45 +25,85 @@ try {
   // BroadcastChannel fallback
 }
 
+let activeGlobalChannel = null;
+
+export function getGlobalRealtimeChannel() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  if (activeGlobalChannel) {
+    return activeGlobalChannel;
+  }
+
+  try {
+    const channel = supabase.channel(GLOBAL_REALTIME_CHANNEL, {
+      config: {
+        broadcast: { self: false }
+      }
+    });
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        // Channel connected
+      }
+    });
+
+    activeGlobalChannel = channel;
+    return channel;
+  } catch (err) {
+    console.warn('Supabase global realtime channel init notice:', err);
+    return null;
+  }
+}
+
 // 1. Broadcast an instant real-time event across all channels
-export async function broadcastRealtimeEvent(eventData) {
+export async function broadcastRealtimeEvent(typeOrData, payload = {}) {
+  let eventData = typeOrData;
+  if (typeof typeOrData === 'string') {
+    eventData = { type: typeOrData, ...(typeof payload === 'object' && payload !== null ? payload : {}) };
+  }
   if (!eventData || typeof eventData !== 'object') return false;
 
   const eventPayload = {
     ...eventData,
-    _eventId: 'evt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-    _timestamp: new Date().toISOString()
+    _eventId: eventData._eventId || ('evt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)),
+    _timestamp: eventData._timestamp || new Date().toISOString()
   };
 
-  // A. BroadcastChannel (0ms, local browser tabs & windows)
+  // Lane A: BroadcastChannel (0ms, local browser tabs & windows on same machine)
   try {
     if (broadcastChannel) {
       broadcastChannel.postMessage(eventPayload);
     }
   } catch (e) {}
 
-  // B. Local Vite Server /api/sync (0ms, cross-browser on this machine)
+  // Lane B: Supabase Native Realtime WebSocket Broadcast (Instant worldwide across all devices)
   try {
-    fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lastEvent: eventPayload })
-    }).catch(() => {});
+    const channel = getGlobalRealtimeChannel();
+    if (channel) {
+      channel.send({
+        type: 'broadcast',
+        event: 'ros_event',
+        payload: eventPayload
+      }).catch(err => console.warn('Supabase broadcast send notice:', err));
+    }
   } catch (e) {}
 
-  // C. Cloud Pub/Sub via ntfy.sh (real-time push to all connected browsers)
+  // Lane C: Local Vite Server /api/sync (if running Vite dev server locally)
   try {
-    fetch(NTFY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(eventPayload)
-    }).catch(() => {});
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lastEvent: eventPayload })
+      }).catch(() => {});
+    }
   } catch (e) {}
 
   return true;
 }
 
-// 2. Subscribe to real-time events via Server-Sent Events (SSE) & BroadcastChannel
+// 2. Subscribe to real-time events via Supabase Realtime & BroadcastChannel
 export function subscribeRealtimeEvents(onEventReceived) {
   if (typeof window === 'undefined' || typeof onEventReceived !== 'function') {
     return () => {};
@@ -80,7 +129,7 @@ export function subscribeRealtimeEvents(onEventReceived) {
     } catch (e) {}
   };
 
-  // 1. Listen to BroadcastChannel (same browser)
+  // 1. Listen to BroadcastChannel (same browser profile)
   let channelHandler = null;
   if (broadcastChannel) {
     channelHandler = (e) => {
@@ -89,75 +138,55 @@ export function subscribeRealtimeEvents(onEventReceived) {
     broadcastChannel.addEventListener('message', channelHandler);
   }
 
-  // 2. Listen to Cloud Server-Sent Events (cross-browser / cross-device)
-  let sse = null;
-  try {
-    if ('EventSource' in window) {
-      sse = new EventSource(`${NTFY_URL}/sse`);
-      sse.onmessage = (event) => {
-        try {
-          const parsed = JSON.parse(event.data);
-          if (parsed && parsed.event === 'message' && parsed.message) {
-            handleEvent(parsed.message);
-          }
-        } catch (e) {}
-      };
-      sse.onerror = () => {
-        // EventSource auto-reconnects automatically
-      };
-    }
-  } catch (e) {}
+  // 2. Listen to Supabase Global Realtime Broadcast (all devices globally)
+  const channel = getGlobalRealtimeChannel();
+  let supabaseHandler = null;
+  if (channel) {
+    supabaseHandler = ({ payload }) => {
+      if (payload) handleEvent(payload);
+    };
+    channel.on('broadcast', { event: 'ros_event' }, supabaseHandler);
+  }
 
   return () => {
     if (broadcastChannel && channelHandler) {
       broadcastChannel.removeEventListener('message', channelHandler);
     }
-    if (sse) {
-      try { sse.close(); } catch (e) {}
-    }
   };
 }
 
-// 3. Fetch historical events submitted in the last 24 hours
-export async function fetchHistoricalEvents(since = '24h') {
-  const events = [];
+// 3. Historical Events Catch-Up (From Supabase Timeline)
+export async function fetchHistoricalEvents() {
   try {
-    const res = await fetch(`${NTFY_URL}/json?poll=1&since=${since}`, {
-      headers: { 'Accept': 'application/x-ndjson, text/plain, application/json' }
-    });
-    if (res.ok) {
-      const text = await res.text();
-      const lines = text.trim().split('\n');
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed && parsed.event === 'message' && parsed.message) {
-            const inner = typeof parsed.message === 'string' ? JSON.parse(parsed.message) : parsed.message;
-            if (inner && inner.type) {
-              events.push(inner);
-            }
-          }
-        } catch (e) {}
-      }
+    const meta = await fetchSystemMetaFromSupabase();
+    if (meta && Array.isArray(meta.warriorTimeline)) {
+      return meta.warriorTimeline.map(action => ({
+        type: 'WARRIOR_ACTION',
+        action
+      }));
     }
   } catch (err) {
     console.warn('Historical events fetch notice:', err);
   }
-  return events;
+  return [];
 }
 
-import { fetchSystemMetaFromSupabase, saveSystemMetaToSupabase } from './db';
-
-// 4. Fetch Global Metadata (Warriors, Reports, Tasks, Timeline) from Supabase & Cloud
+// 4. Fetch Global Metadata (Warriors, Reports, Tasks, Timeline, Forms)
 export async function fetchGlobalMetaFromCloud() {
   let localData = null;
 
-  // A. Primary: Query Supabase Cloud Database directly (Zero-delay, works on all devices worldwide)
+  // A. Primary: Query Supabase Cloud Database directly
   try {
-    const supabaseMeta = await fetchSystemMetaFromSupabase();
+    const [supabaseMeta, formSubmissions] = await Promise.all([
+      fetchSystemMetaFromSupabase(),
+      fetchFormSubmissionsFromCloud()
+    ]);
+
     if (supabaseMeta) {
-      localData = supabaseMeta;
+      localData = {
+        ...supabaseMeta,
+        formSubmissions: Array.isArray(formSubmissions) ? formSubmissions : (supabaseMeta.formSubmissions || [])
+      };
     }
   } catch (e) {
     console.warn('Supabase fetchGlobalMeta notice:', e);
@@ -165,109 +194,65 @@ export async function fetchGlobalMetaFromCloud() {
 
   // B. Secondary: Check Local Server API (if running Vite dev server on localhost)
   try {
-    const res = await fetch('/api/sync');
-    if (res.ok) {
-      const devData = await res.json();
-      localData = {
-        ...(localData || {}),
-        ...devData,
-        warriors: (localData?.warriors && localData.warriors.length > 0) ? localData.warriors : (devData.warriors || []),
-        dailyReports: [...(localData?.dailyReports || []), ...(devData.dailyReports || []).filter(r => !(localData?.dailyReports || []).some(x => x.id === r.id))],
-        warriorTimeline: [...(localData?.warriorTimeline || []), ...(devData.warriorTimeline || []).filter(t => !(localData?.warriorTimeline || []).some(x => x.id === t.id))],
-        formSubmissions: (Array.isArray(localData?.formSubmissions) && localData.formSubmissions.length > 0) 
-          ? localData.formSubmissions 
-          : (Array.isArray(devData?.formSubmissions) && devData.formSubmissions.length > 0 ? devData.formSubmissions : (localData?.formSubmissions || [])),
-        importantNotes: (Array.isArray(localData?.importantNotes) && localData.importantNotes.length > 0) 
-          ? localData.importantNotes 
-          : (Array.isArray(devData?.importantNotes) && devData.importantNotes.length > 0 ? devData.importantNotes : (localData?.importantNotes || []))
-      };
-    }
-  } catch (e) {}
-
-  // B. Check Historical Cloud Events (catch up on anything missed)
-  try {
-    const cloudEvents = await fetchHistoricalEvents('24h');
-    if (cloudEvents.length > 0) {
-      const reports = [...(localData?.dailyReports || [])];
-      const tasks = [...(localData?.tasks || [])];
-      const timeline = [...(localData?.warriorTimeline || [])];
-      const warriors = [...(localData?.warriors || [])];
-
-      for (const evt of cloudEvents) {
-        if (evt.type === 'DAILY_REPORT_SUBMITTED' && evt.report) {
-          if (!reports.some(r => r.id === evt.report.id)) {
-            reports.unshift(evt.report);
-          }
-        }
-        if (evt.type === 'WARRIOR_ACTION' && evt.action) {
-          if (!timeline.some(t => t.id === evt.action.id)) {
-            timeline.unshift(evt.action);
-          }
-        }
-        if (evt.type === 'WARRIOR_UPDATED' && evt.warrior) {
-          const idx = warriors.findIndex(w => w.id === evt.warrior.id);
-          if (idx >= 0) warriors[idx] = { ...warriors[idx], ...evt.warrior };
-          else warriors.unshift(evt.warrior);
-        }
-        if (evt.type === 'TASK_SUBMITTED' && evt.task) {
-          const idx = tasks.findIndex(t => t.id === evt.task.id);
-          if (idx >= 0) tasks[idx] = evt.task;
-          else tasks.unshift(evt.task);
-        }
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      const res = await fetch('/api/sync');
+      if (res.ok) {
+        const devData = await res.json();
+        localData = {
+          ...(localData || {}),
+          ...devData,
+          warriors: (localData?.warriors && localData.warriors.length > 0) ? localData.warriors : (devData.warriors || []),
+          dailyReports: [...(localData?.dailyReports || []), ...(devData.dailyReports || []).filter(r => !(localData?.dailyReports || []).some(x => x.id === r.id))],
+          warriorTimeline: [...(localData?.warriorTimeline || []), ...(devData.warriorTimeline || []).filter(t => !(localData?.warriorTimeline || []).some(x => x.id === t.id))],
+          formSubmissions: (Array.isArray(localData?.formSubmissions) && localData.formSubmissions.length > 0) 
+            ? localData.formSubmissions 
+            : (Array.isArray(devData?.formSubmissions) && devData.formSubmissions.length > 0 ? devData.formSubmissions : (localData?.formSubmissions || [])),
+          importantNotes: (Array.isArray(localData?.importantNotes) && localData.importantNotes.length > 0) 
+            ? localData.importantNotes 
+            : (Array.isArray(devData?.importantNotes) && devData.importantNotes.length > 0 ? devData.importantNotes : (localData?.importantNotes || []))
+        };
       }
-
-      localData = {
-        ...(localData || {}),
-        dailyReports: reports,
-        tasks,
-        warriorTimeline: timeline,
-        warriors
-      };
     }
   } catch (e) {}
 
   return localData;
 }
 
-// 5. Save Global Metadata (Warriors, Reports, Tasks, Workspaces)
+// 5. Save Global Metadata (Warriors, Reports, Tasks, Forms)
 export async function saveGlobalMetaToCloud(meta) {
   if (!meta || typeof meta !== 'object') return false;
 
-  // A. Primary: Save to Supabase Cloud Database (Permanent, global multi-device persistence)
+  // If form submissions are present, save to dedicated partition
+  if (Array.isArray(meta.formSubmissions)) {
+    saveFormSubmissionsToCloud(meta.formSubmissions).catch(err => {
+      console.warn('saveFormSubmissionsToCloud error:', err);
+    });
+  }
+
+  // Save remainder of meta to system metadata partition
+  const { formSubmissions: _forms, ...restMeta } = meta;
+  if (Object.keys(restMeta).length > 0) {
+    saveSystemMetaToSupabase(restMeta).catch(err => {
+      console.warn('saveSystemMetaToSupabase error:', err);
+    });
+  }
+
+  // Local Server API if on localhost
   try {
-    saveSystemMetaToSupabase(meta).catch(err => console.warn('Supabase saveGlobalMeta notice:', err));
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      fetch('/api/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(meta)
+      }).catch(() => {});
+    }
   } catch (e) {}
 
-  // B. Secondary: Save to Local Server API (if running Vite dev server)
-  try {
-    fetch('/api/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(meta)
-    }).catch(() => {});
-  } catch (e) {}
-
-  // C. Broadcast State Sync across tabs and devices
+  // Broadcast State Sync across tabs and devices
   broadcastRealtimeEvent({
     type: 'STATE_SYNC',
     meta
   });
 
   return true;
-}
-
-// 6. Workspaces helpers
-export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
-  try {
-    const meta = await fetchGlobalMetaFromCloud();
-    if (meta && Array.isArray(meta.workspaces) && meta.workspaces.length > 0) {
-      return meta.workspaces;
-    }
-  } catch (err) {}
-  return fallbackWorkspaces;
-}
-
-export async function saveWorkspacesToCloud(workspaces) {
-  if (!workspaces || !Array.isArray(workspaces)) return false;
-  return saveGlobalMetaToCloud({ workspaces });
 }

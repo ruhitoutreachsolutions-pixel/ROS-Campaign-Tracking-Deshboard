@@ -9,9 +9,12 @@ const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta
 
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
-const SYSTEM_META_ID = '__ros_system_metadata__';
+export const SYSTEM_META_ID = '__ros_system_metadata__';
 
-// 1. Get active Supabase client
+let cachedClient = null;
+let cachedClientKey = '';
+
+// 1. Get active Supabase client (singleton cached for stable realtime connection)
 export function getSupabaseClient() {
   const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
   const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
@@ -19,10 +22,21 @@ export function getSupabaseClient() {
   const key = savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
   if (url && key && url.startsWith('http')) {
+    const clientKey = `${url.trim()}___${key.trim()}`;
+    if (cachedClient && cachedClientKey === clientKey) {
+      return cachedClient;
+    }
     try {
-      return createClient(url.trim(), key.trim(), {
-        auth: { persistSession: false }
+      cachedClient = createClient(url.trim(), key.trim(), {
+        auth: { persistSession: false },
+        realtime: {
+          params: {
+            eventsPerSecond: 20
+          }
+        }
       });
+      cachedClientKey = clientKey;
+      return cachedClient;
     } catch (err) {
       console.warn('Failed to initialize Supabase client:', err);
     }
@@ -108,6 +122,9 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
         sequenceConfig: typeof item.sequence_config === 'object' && item.sequence_config !== null
           ? item.sequence_config
           : (typeof item.sequence_config === 'string' ? JSON.parse(item.sequence_config) : {}),
+        deletedLeadIds: Array.isArray(item.sequence_config?.deletedLeadIds) 
+          ? item.sequence_config.deletedLeadIds 
+          : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
         activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
         leads: Array.isArray(item.leads) ? item.leads : (typeof item.leads === 'string' ? JSON.parse(item.leads) : []),
         createdAt: item.created_at || new Date().toISOString().split('T')[0],
@@ -146,8 +163,11 @@ export async function saveWorkspacesToCloud(workspaces) {
         active_sending_account: ws.activeSendingAccount || ws.sendingAccounts?.[0] || '',
         sending_accounts: ws.sendingAccounts || [ws.activeSendingAccount],
         client_credentials: ws.clientCredentials || { username: ws.name, password: 'client2026' },
-        sequence_config: ws.sequenceConfig || {},
-        activity_log: ws.activityLog || [],
+        sequence_config: {
+          ...(ws.sequenceConfig || {}),
+          deletedLeadIds: Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || [])
+        },
+        activityLog: ws.activityLog || [],
         leads: ws.leads || [],
         updated_at: ws.updatedAt || new Date().toISOString()
       };
@@ -320,4 +340,171 @@ export async function fetchWarriorsFromSupabase() {
 export async function saveWarriorsToSupabase(warriors) {
   return saveSystemMetaToSupabase({ warriors });
 }
+
+// ============================================================================
+// PARTITIONED CLOUD STORAGE (ISOLATED MICRO-ENTITIES)
+// Prevents race conditions and overwrites between Chat, Forms, and System Meta
+// ============================================================================
+export const FORM_SUBMISSIONS_ID = '__ros_form_submissions_v1__';
+export const CHAT_DATA_ID = '__ros_chat_messages_v1__';
+
+// 7. Dedicated Form Submissions Partition
+export async function fetchFormSubmissionsFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+
+  try {
+    // 1. Try dedicated partition row first
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('sequence_config')
+      .eq('id', FORM_SUBMISSIONS_ID)
+      .maybeSingle();
+
+    if (!error && data?.sequence_config && Array.isArray(data.sequence_config.formSubmissions)) {
+      return data.sequence_config.formSubmissions;
+    }
+
+    // 2. Fallback / migration check from legacy row
+    const { data: legacyData } = await supabase
+      .from('workspaces')
+      .select('sequence_config')
+      .eq('id', SYSTEM_META_ID)
+      .maybeSingle();
+
+    const legacyForms = legacyData?.sequence_config?.formSubmissions;
+    if (Array.isArray(legacyForms) && legacyForms.length > 0) {
+      // Seed dedicated row
+      saveFormSubmissionsToCloud(legacyForms).catch(() => {});
+      return legacyForms;
+    }
+  } catch (err) {
+    console.warn('fetchFormSubmissionsFromCloud notice:', err);
+  }
+  return [];
+}
+
+export async function saveFormSubmissionsToCloud(formSubmissions) {
+  const supabase = getSupabaseClient();
+  if (!supabase || !Array.isArray(formSubmissions)) return false;
+
+  try {
+    const payload = {
+      id: FORM_SUBMISSIONS_ID,
+      name: 'ROS Form Submissions Partition',
+      client_name: 'System Partition',
+      client_email: 'forms@rosoutreach.com',
+      campaign_name: 'Form Submissions',
+      active_sending_account: 'system',
+      sending_accounts: ['system'],
+      client_credentials: {},
+      sequence_config: { formSubmissions },
+      activity_log: [],
+      leads: [],
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('workspaces')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('saveFormSubmissionsToCloud error:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('saveFormSubmissionsToCloud exception:', err);
+    return false;
+  }
+}
+
+// 8. Dedicated Chat Data Partition
+export async function fetchChatDataFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return { messages: [], conversations: [] };
+
+  try {
+    // 1. Try dedicated partition row first
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('client_credentials')
+      .eq('id', CHAT_DATA_ID)
+      .maybeSingle();
+
+    if (!error && data?.client_credentials) {
+      const messages = Array.isArray(data.client_credentials.chat_messages) ? data.client_credentials.chat_messages : [];
+      const conversations = Array.isArray(data.client_credentials.chat_conversations) ? data.client_credentials.chat_conversations : [];
+      if (messages.length > 0 || conversations.length > 0) {
+        return { messages, conversations };
+      }
+    }
+
+    // 2. Fallback / migration check from legacy row
+    const { data: legacyData } = await supabase
+      .from('workspaces')
+      .select('client_credentials')
+      .eq('id', SYSTEM_META_ID)
+      .maybeSingle();
+
+    const legacyCreds = legacyData?.client_credentials;
+    const legacyMsgs = Array.isArray(legacyCreds?.chat_messages) ? legacyCreds.chat_messages : [];
+    const legacyConvs = Array.isArray(legacyCreds?.chat_conversations) ? legacyCreds.chat_conversations : [];
+
+    if (legacyMsgs.length > 0 || legacyConvs.length > 0) {
+      saveChatDataToCloud({ messages: legacyMsgs, conversations: legacyConvs }).catch(() => {});
+      return { messages: legacyMsgs, conversations: legacyConvs };
+    }
+  } catch (err) {
+    console.warn('fetchChatDataFromCloud notice:', err);
+  }
+  return { messages: [], conversations: [] };
+}
+
+export async function saveChatDataToCloud({ messages, conversations }) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  try {
+    const { data: existing } = await supabase
+      .from('workspaces')
+      .select('client_credentials')
+      .eq('id', CHAT_DATA_ID)
+      .maybeSingle();
+
+    const existingCreds = existing?.client_credentials || {};
+    const nextCreds = { ...existingCreds };
+    if (messages !== undefined) nextCreds.chat_messages = messages;
+    if (conversations !== undefined) nextCreds.chat_conversations = conversations;
+
+    const payload = {
+      id: CHAT_DATA_ID,
+      name: 'ROS Chat Partition',
+      client_name: 'Chat Partition',
+      client_email: 'chat@rosoutreach.com',
+      campaign_name: 'Chat Data',
+      active_sending_account: 'system',
+      sending_accounts: ['system'],
+      client_credentials: nextCreds,
+      sequence_config: {},
+      activity_log: [],
+      leads: [],
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('workspaces')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('saveChatDataToCloud error:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('saveChatDataToCloud exception:', err);
+    return false;
+  }
+}
+
 
