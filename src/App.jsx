@@ -273,12 +273,12 @@ export default function App() {
       )}
 
       {/* CGE UK LTD Authoritative Recovery Banner */}
-      {currentWorkspace?.id === 'ws_zrnl1fjb' && (currentWorkspace?.leads?.length || 0) < 500 && (
+      {currentWorkspace?.id === 'ws_zrnl1fjb' && (currentWorkspace?.leads?.length !== 9907) && (
         <div className="bg-gradient-to-r from-[#00E5A0]/20 via-[#00C2FF]/15 to-transparent border-b border-[#00E5A0]/40 text-white px-4 py-2.5 text-xs font-semibold flex flex-wrap items-center justify-between gap-3 shadow-lg">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-[#00E5A0] shrink-0 animate-pulse" />
             <span>
-              <strong>CGE UK LTD Recovery Notice:</strong> Browser is displaying {currentWorkspace?.leads?.length || 0} leads instead of the authoritative pool. Click to restore all <strong>9,907 leads (10 interested, 1,350 sent today)</strong>.
+              <strong>CGE UK LTD Desynchronization Notice:</strong> Browser is displaying {currentWorkspace?.leads?.length || 0} leads instead of the authoritative pool. Click to restore all <strong>9,907 leads (10 interested, 1,350 sent today, 9,110 total sent)</strong>.
             </span>
           </div>
           <button

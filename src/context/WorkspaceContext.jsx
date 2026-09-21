@@ -481,9 +481,9 @@ export function WorkspaceProvider({ children }) {
               const deletedIds = getDeletedWorkspaceIds();
               const valid = sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
               
-              // AUTO-UPGRADE: If CGE UK LTD has fewer than 500 leads in local cache, immediately upgrade to authentic 9,907 leads!
+              // AUTO-UPGRADE: If CGE UK LTD does not have the authentic 9,907 leads (e.g. stale 50 or corrupted 16k), upgrade immediately!
               const cge = valid.find(w => w.id === 'ws_zrnl1fjb');
-              if (cge && (cge.leads?.length || 0) < 500) {
+              if (cge && (cge.leads?.length || 0) !== 9907) {
                 console.log('[Auto-Upgrade] CGE UK LTD has', cge.leads?.length, 'leads. Upgrading to authentic 9,907 leads...');
                 setTimeout(() => {
                   restoreCgeAuthoritativeLeads();
@@ -576,9 +576,9 @@ export function WorkspaceProvider({ children }) {
           // Save merged result safely to IndexedDB
           saveWorkspacesToLocal(cleanMerged);
 
-          // AUTO-UPGRADE: If CGE UK LTD has fewer than 500 leads, upgrade to authentic 9,907 leads
+          // AUTO-UPGRADE: If CGE UK LTD does not have the authentic 9,907 leads, upgrade immediately!
           const cgeMerged = cleanMerged.find(w => w.id === 'ws_zrnl1fjb');
-          if (cgeMerged && (cgeMerged.leads?.length || 0) < 500) {
+          if (cgeMerged && (cgeMerged.leads?.length || 0) !== 9907) {
             setTimeout(() => {
               restoreCgeAuthoritativeLeads();
             }, 80);
@@ -3248,8 +3248,8 @@ export function WorkspaceProvider({ children }) {
         );
         if (valid.length > 0) {
           const cgeCloud = valid.find(w => w.id === 'ws_zrnl1fjb');
-          if (cgeCloud && (cgeCloud.leads?.length || 0) < 500) {
-            console.warn('Cloud CGE has fewer than 500 leads, merging authentic bundled backup...');
+          if (cgeCloud && (cgeCloud.leads?.length || 0) !== 9907) {
+            console.warn('Cloud CGE does not match 9,907 leads, merging authentic bundled backup...');
             const cgeModule = await import('../data/cgeLeadsBackup.json');
             const leads = cgeModule.default || cgeModule;
             cgeCloud.leads = leads;
