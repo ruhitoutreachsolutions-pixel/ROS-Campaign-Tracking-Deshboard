@@ -14,12 +14,28 @@ export const SYSTEM_META_ID = '__ros_system_metadata__';
 let cachedClient = null;
 let cachedClientKey = '';
 
+// Helper to validate Supabase anon key is a valid JWT
+export function isValidSupabaseKey(key) {
+  if (!key || typeof key !== 'string') return false;
+  const trimmed = key.trim();
+  const parts = trimmed.split('.');
+  return parts.length === 3 && trimmed.startsWith('eyJ') && trimmed.length > 50;
+}
+
 // 1. Get active Supabase client (singleton cached for stable realtime connection)
 export function getSupabaseClient() {
   const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
   const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
-  const url = savedUrl || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-  const key = savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+  
+  // Guard: if savedKey is invalid (e.g. autofilled browser password), purge it and fallback to authoritative anon key
+  const validSavedKey = isValidSupabaseKey(savedKey) ? savedKey.trim() : null;
+  if (savedKey && !validSavedKey && typeof localStorage !== 'undefined') {
+    console.warn('Purged invalid Supabase API key from localStorage');
+    try { localStorage.removeItem(STORAGE_KEY_SUPABASE_KEY); } catch (e) {}
+  }
+
+  const url = (savedUrl && savedUrl.startsWith('http')) ? savedUrl.trim() : (ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL);
+  const key = validSavedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
   if (url && key && url.startsWith('http')) {
     const clientKey = `${url.trim()}___${key.trim()}`;
@@ -84,6 +100,7 @@ function getLocalDeletedIds() {
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
   const supabase = getSupabaseClient();
   if (!supabase) {
+    lastCloudErrorMsg = 'Supabase client is not connected or anon key is missing.';
     return fallbackWorkspaces;
   }
 
@@ -95,6 +112,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
 
     if (error) {
       console.warn('Supabase fetch error:', error);
+      lastCloudErrorMsg = error.message || error.details || String(error);
       return fallbackWorkspaces;
     }
 
@@ -133,6 +151,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
     }
   } catch (err) {
     console.warn('Cloud database fetch failed:', err);
+    lastCloudErrorMsg = err.message || String(err);
   }
 
   return fallbackWorkspaces;
@@ -159,6 +178,35 @@ export async function saveWorkspacesToCloud(workspaces) {
 
     for (const ws of workspaces) {
       if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
+
+      // SAFETY GUARD: Never overwrite a cloud workspace that has thousands of authoritative leads (e.g. 9907) with stale truncated local state (e.g. 50)
+      try {
+        const { data: existingRow } = await supabase
+          .from('workspaces')
+          .select('id, updated_at, leads')
+          .eq('id', ws.id)
+          .maybeSingle();
+
+        if (existingRow && Array.isArray(existingRow.leads)) {
+          const cloudLeadCount = existingRow.leads.length;
+          const localLeadCount = ws.leads?.length || 0;
+          const cloudTime = new Date(existingRow.updated_at || 0).getTime();
+          const localTime = new Date(ws.updatedAt || 0).getTime();
+
+          const explicitlyDeletedCount = ws.deletedLeadIds?.length || 0;
+          if (cloudLeadCount > 500 && localLeadCount < cloudLeadCount / 2 && explicitlyDeletedCount < (cloudLeadCount - localLeadCount)) {
+            console.warn(`[Supabase Guard] Protected cloud workspace ${ws.id} (${cloudLeadCount} leads in cloud) from being overwritten by stale local state (${localLeadCount} leads).`);
+            continue;
+          }
+
+          if (cloudTime > localTime && cloudLeadCount >= localLeadCount) {
+            console.warn(`[Supabase Guard] Cloud is newer (${existingRow.updated_at} vs ${ws.updatedAt}). Skipping overwrite of ${ws.id}.`);
+            continue;
+          }
+        }
+      } catch (guardErr) {
+        console.warn('Supabase safety pre-check warning:', guardErr);
+      }
 
       const payload = {
         id: ws.id,

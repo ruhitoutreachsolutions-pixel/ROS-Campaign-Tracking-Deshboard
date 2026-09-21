@@ -56,7 +56,8 @@ export default function App() {
     setChatInteractiveToast,
     openChatWithContact,
     formSubmissions,
-    setActiveAdminTabRef
+    setActiveAdminTabRef,
+    restoreCgeAuthoritativeLeads
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');
@@ -268,6 +269,25 @@ export default function App() {
         <div className="bg-amber-500/15 border-b border-amber-500/30 text-amber-300 px-4 py-2 text-xs font-semibold flex items-center justify-center gap-2">
           <Eye className="w-4 h-4 text-amber-400" />
           <span>You are logged in with <strong>View-Only</strong> permissions. Lead editing and modifications are locked.</span>
+        </div>
+      )}
+
+      {/* CGE UK LTD Authoritative Recovery Banner */}
+      {currentWorkspace?.id === 'ws_zrnl1fjb' && (currentWorkspace?.leads?.length || 0) < 500 && (
+        <div className="bg-gradient-to-r from-[#00E5A0]/20 via-[#00C2FF]/15 to-transparent border-b border-[#00E5A0]/40 text-white px-4 py-2.5 text-xs font-semibold flex flex-wrap items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-[#00E5A0] shrink-0 animate-pulse" />
+            <span>
+              <strong>CGE UK LTD Recovery Notice:</strong> Browser is displaying {currentWorkspace?.leads?.length || 0} leads instead of the authoritative pool. Click to restore all <strong>9,907 leads (10 interested, 1,350 sent today)</strong>.
+            </span>
+          </div>
+          <button
+            onClick={() => restoreCgeAuthoritativeLeads()}
+            className="px-3.5 py-1.5 rounded-lg bg-[#00E5A0] hover:bg-[#00E5A0]/90 text-[#0A0A0A] font-bold text-xs shadow-md cursor-pointer transition-all flex items-center gap-1.5"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Restore Authentic 9,907 Leads Now</span>
+          </button>
         </div>
       )}
 

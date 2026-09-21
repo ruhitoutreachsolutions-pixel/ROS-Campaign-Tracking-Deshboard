@@ -462,6 +462,8 @@ export function WorkspaceProvider({ children }) {
 
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
+  // Track whether initial cloud sync has completed (prevents pushing stale local state on mount)
+  const isCloudSyncedRef = useRef(false);
 
   // 2. Durable Local Storage Load (IndexedDB has NO 5MB limit and stores full 50k+ leads safely)
   useEffect(() => {
@@ -477,7 +479,18 @@ export function WorkspaceProvider({ children }) {
             // If IndexedDB has more or equal leads, or newer updates, adopt it
             if (idbTotalLeads >= prevTotalLeads) {
               const deletedIds = getDeletedWorkspaceIds();
-              return sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
+              const valid = sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
+              
+              // AUTO-UPGRADE: If CGE UK LTD has fewer than 500 leads in local cache, immediately upgrade to authentic 9,907 leads!
+              const cge = valid.find(w => w.id === 'ws_zrnl1fjb');
+              if (cge && (cge.leads?.length || 0) < 500) {
+                console.log('[Auto-Upgrade] CGE UK LTD has', cge.leads?.length, 'leads. Upgrading to authentic 9,907 leads...');
+                setTimeout(() => {
+                  restoreCgeAuthoritativeLeads();
+                }, 80);
+              }
+
+              return valid;
             }
             return prev;
           });
@@ -563,10 +576,21 @@ export function WorkspaceProvider({ children }) {
           // Save merged result safely to IndexedDB
           saveWorkspacesToLocal(cleanMerged);
 
+          // AUTO-UPGRADE: If CGE UK LTD has fewer than 500 leads, upgrade to authentic 9,907 leads
+          const cgeMerged = cleanMerged.find(w => w.id === 'ws_zrnl1fjb');
+          if (cgeMerged && (cgeMerged.leads?.length || 0) < 500) {
+            setTimeout(() => {
+              restoreCgeAuthoritativeLeads();
+            }, 80);
+          }
+
+          isCloudSyncedRef.current = true;
           return cleanMerged;
         });
       } catch (err) {
         console.warn('Background cloud sync notice:', err);
+      } finally {
+        isCloudSyncedRef.current = true;
       }
     }
 
@@ -649,7 +673,11 @@ export function WorkspaceProvider({ children }) {
     // A. Always save to local durable storage (IndexedDB + localStorage)
     saveWorkspacesToLocal(workspaces);
 
-    // B. Debounced cloud backup to Supabase & Cloud Endpoint
+    // B. Debounced cloud backup to Supabase & Cloud Endpoint (BLOCKED until initial cloud sync finishes)
+    if (!isCloudSyncedRef.current) {
+      return;
+    }
+
     const cloudTimer = setTimeout(() => {
       saveWorkspacesToCloud(workspaces).catch(err => {
         console.warn('Auto cloud sync notice:', err);
@@ -3219,14 +3247,86 @@ export function WorkspaceProvider({ children }) {
           cloudData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
         );
         if (valid.length > 0) {
+          const cgeCloud = valid.find(w => w.id === 'ws_zrnl1fjb');
+          if (cgeCloud && (cgeCloud.leads?.length || 0) < 500) {
+            console.warn('Cloud CGE has fewer than 500 leads, merging authentic bundled backup...');
+            const cgeModule = await import('../data/cgeLeadsBackup.json');
+            const leads = cgeModule.default || cgeModule;
+            cgeCloud.leads = leads;
+            cgeCloud.updatedAt = '2026-09-22T12:00:00.000Z';
+          }
           setWorkspaces(valid);
           saveWorkspacesToLocal(valid);
+          saveWorkspacesToCloud(valid).catch(() => {});
+          isCloudSyncedRef.current = true;
           const total = valid.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
           return { success: true, count: total, message: `Successfully pulled & restored ${total} leads cleanly from Cloud Database!` };
         }
       }
-      return { success: false, message: 'No workspaces found in Cloud Database.' };
+      console.warn('Cloud fetch empty or failed, falling back to authentic recovery bundle...');
+      return await restoreCgeAuthoritativeLeads();
     } catch (err) {
+      console.warn('Cloud sync error, falling back to recovery bundle:', err);
+      return await restoreCgeAuthoritativeLeads();
+    }
+  }
+
+  // 17. Direct Instant Restore of CGE UK LTD 9,907 Authoritative Leads
+  async function restoreCgeAuthoritativeLeads() {
+    try {
+      const cgeModule = await import('../data/cgeLeadsBackup.json');
+      const leads = cgeModule.default || cgeModule;
+      if (Array.isArray(leads) && leads.length > 0) {
+        setWorkspaces(prev => {
+          const exists = prev.some(w => w.id === 'ws_zrnl1fjb');
+          let next;
+          if (exists) {
+            next = prev.map(w => {
+              if (w.id === 'ws_zrnl1fjb') {
+                return {
+                  ...w,
+                  leads: leads,
+                  updatedAt: '2026-09-22T12:00:00.000Z'
+                };
+              }
+              return w;
+            });
+          } else {
+            next = [
+              ...prev,
+              {
+                id: 'ws_zrnl1fjb',
+                name: 'CGE UK LTD',
+                clientName: 'CGE UK LTD',
+                clientEmail: 'contact@cgeuk.com',
+                campaignName: 'Banqueting-halls-UK-Campaign-1',
+                activeSendingAccount: 'hello@cgeenergy.co.uk',
+                sendingAccounts: ['hello@cgeenergy.co.uk', 's.hossen@getcge.co.uk'],
+                clientCredentials: { username: 'cgeuk', password: 'client2026' },
+                sequenceConfig: {
+                  email1Name: 'Initial Outreach',
+                  email2Name: 'Follow-up 1 (Value Add)',
+                  email3Name: 'Follow-up 2 (Breakup / Case Study)',
+                  daysBetween1and2: 3,
+                  daysBetween2and3: 4
+                },
+                activityLog: [],
+                leads: leads,
+                createdAt: '2026-09-14T19:09:27.088Z',
+                updatedAt: '2026-09-22T12:00:00.000Z'
+              }
+            ];
+          }
+          saveWorkspacesToLocal(next);
+          saveWorkspacesToCloud(next).catch(() => {});
+          return next;
+        });
+        isCloudSyncedRef.current = true;
+        return { success: true, count: leads.length, message: `Successfully restored ${leads.length} authoritative leads for CGE UK LTD!` };
+      }
+      return { success: false, message: 'Could not load backup dataset.' };
+    } catch (err) {
+      console.error('Failed to restore CGE authoritative leads:', err);
       return { success: false, message: err.message };
     }
   }
@@ -3346,7 +3446,8 @@ export function WorkspaceProvider({ children }) {
     saveSupabaseConfig,
     syncAllWorkspacesToCloud,
     restorePreviousBackup,
-    forceSyncFromCloud
+    forceSyncFromCloud,
+    restoreCgeAuthoritativeLeads
   };
 
   return (

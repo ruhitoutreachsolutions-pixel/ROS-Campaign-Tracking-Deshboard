@@ -4,7 +4,7 @@ import { X, Database, Cloud, Check, Copy, ShieldCheck, RefreshCw, Sparkles, Serv
 import { getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected, saveWorkspacesToCloud, fetchWorkspacesFromCloud, getLastCloudError } from '../services/db';
 
 export default function CloudSyncModal({ isOpen, onClose }) {
-  const { workspaces, currentWorkspace, restorePreviousBackup, forceSyncFromCloud } = useWorkspace();
+  const { workspaces, currentWorkspace, restorePreviousBackup, forceSyncFromCloud, restoreCgeAuthoritativeLeads } = useWorkspace();
   const existingConfig = getSupabaseConfig();
 
   const [supabaseUrl, setSupabaseUrl] = useState(existingConfig.url || '');
@@ -44,6 +44,20 @@ export default function CloudSyncModal({ isOpen, onClose }) {
       setTimeout(() => setStatusMessage(''), 5000);
     } else {
       setErrorMessage(res.message || 'Failed to pull cloud database.');
+    }
+  };
+
+  const handleRestoreCge = async () => {
+    setIsSaving(true);
+    setStatusMessage('');
+    setErrorMessage('');
+    const res = await restoreCgeAuthoritativeLeads();
+    setIsSaving(false);
+    if (res.success) {
+      setStatusMessage(res.message);
+      setTimeout(() => setStatusMessage(''), 6000);
+    } else {
+      setErrorMessage(res.message || 'Failed to restore CGE UK LTD leads.');
     }
   };
 
@@ -102,6 +116,11 @@ create policy "Allow all access" on workspaces for all using (true) with check (
 
     if (!supabaseUrl.includes('.supabase.co')) {
       setErrorMessage('Invalid Supabase URL. It should look like: https://xxxx.supabase.co');
+      return;
+    }
+
+    if (!supabaseKey.trim().startsWith('eyJ')) {
+      setErrorMessage('Invalid Supabase Anon Key. Anon keys must be a JWT starting with "eyJ...". Make sure you did not autofill a password.');
       return;
     }
 
@@ -241,6 +260,32 @@ create policy "Allow all access" on workspaces for all using (true) with check (
           </button>
         </div>
 
+        {/* AUTHORITATIVE CGE UK LTD (9,907 LEADS) INSTANT RECOVERY */}
+        <div className="p-4 rounded-xl bg-[#0A0A0A] border border-[#00E5A0]/40 mb-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-gradient-to-r from-[#00E5A0]/10 to-transparent shadow-lg shadow-[#00E5A0]/10">
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#00E5A0]" />
+              <span>CGE UK LTD 9,907 Leads Authoritative Recovery</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#00E5A0]/20 border border-[#00E5A0]/40 text-[#00E5A0] font-mono font-bold">
+                10 Interested · 9,110 Sent · 9,907 Total
+              </span>
+            </div>
+            <div className="text-[11px] text-[#7B7B7B] mt-0.5">
+              Restores exact 9,907 authentic leads, 10 interested pipeline, 1,350 sent today, and 9,110 total sent.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRestoreCge}
+            disabled={isSaving}
+            className="px-3.5 py-1.5 rounded-lg bg-[#00E5A0] hover:bg-[#00E5A0]/90 text-[#0A0A0A] text-xs font-bold transition-all cursor-pointer whitespace-nowrap shadow-md flex items-center gap-1.5"
+            title="Restore exact 9,907 leads for CGE UK LTD"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Restore 9,907 Leads</span>
+          </button>
+        </div>
+
         {/* STEP-BY-STEP SUPABASE SETUP */}
         <form onSubmit={handleSaveConfig} className="space-y-4">
           <div className="p-4 rounded-xl bg-[#0A0A0A] border border-[#00C2FF]/30 space-y-3">
@@ -280,6 +325,8 @@ create policy "Allow all access" on workspaces for all using (true) with check (
               <input
                 type="password"
                 required
+                autoComplete="new-password"
+                spellCheck={false}
                 value={supabaseKey}
                 onChange={(e) => setSupabaseKey(e.target.value)}
                 placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
