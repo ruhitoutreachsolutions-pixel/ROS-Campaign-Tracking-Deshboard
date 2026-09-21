@@ -89,6 +89,52 @@ export function isLeadDNC(lead) {
   return false;
 }
 
+// Check if a stage string represents an active positive pipeline stage
+export function isPositivePipelineStage(stageStr) {
+  if (!stageStr || typeof stageStr !== 'string') return false;
+  const s = stageStr.toLowerCase().trim();
+  if (
+    s === '' ||
+    s.includes('progress') ||
+    s.includes('pending') ||
+    s.includes('active') ||
+    s.includes('dnc') ||
+    s.includes('unsub') ||
+    s.includes('not interested') ||
+    s.includes('lost') ||
+    s.includes('not a fit') ||
+    s.includes('disqual') ||
+    s.includes('not fit')
+  ) {
+    return false;
+  }
+  return (
+    s.includes('interest') ||
+    s.includes('positive') ||
+    s.includes('call') ||
+    s.includes('book') ||
+    s.includes('proposal') ||
+    s.includes('audit') ||
+    s.includes('negotiat') ||
+    s.includes('won') ||
+    s.includes('close')
+  );
+}
+
+// Derive clean default status for lead based on outreach sequence activity
+export function deriveLeadStatus(lead) {
+  if (!lead) return 'pending';
+  if (isLeadDNC(lead)) return 'dnc';
+  if (isPositivePipelineStage(lead.stage)) return 'interested';
+  if (lead.stage && (lead.stage.toLowerCase().includes('lost') || lead.stage.toLowerCase().includes('not a fit') || lead.stage.toLowerCase().includes('disqual'))) {
+    return 'lost';
+  }
+  if (lead.email3 && String(lead.email3).trim()) return 'sent_3';
+  if (lead.email2 && String(lead.email2).trim()) return 'sent_2';
+  if (lead.email1 && String(lead.email1).trim()) return 'sent_1';
+  return 'pending';
+}
+
 // Normalizes any stage string or lead object to the standard pipeline column ID
 export function normalizeLeadStage(leadOrStage) {
   let stage = '';
@@ -101,6 +147,10 @@ export function normalizeLeadStage(leadOrStage) {
   }
 
   const s = (stage || '').toLowerCase().trim();
+
+  if (s.includes('progress') || s.includes('pending') || s.includes('dnc') || s.includes('unsub') || s.includes('not interested')) {
+    return stage || 'In Progress';
+  }
 
   if (s.includes('book') || s.includes('call') || s.includes('discovery')) {
     return 'Discovery Call Booked';
@@ -130,19 +180,51 @@ export function isLeadInterested(lead) {
   const stage = (lead.stage || '').toLowerCase().trim();
   const status = (lead.status || '').toLowerCase().trim();
 
-  if (status === 'interested') return true;
+  // 1. Explicit Non-Interested / Outreach In-Progress stages: NEVER interested
   if (
-    stage !== '' && 
-    !stage.includes('progress') && 
-    !stage.includes('pending') && 
-    !stage.includes('dnc') && 
-    !stage.includes('unsub') &&
-    !stage.includes('not interested')
+    stage.includes('progress') ||
+    stage.includes('pending') ||
+    stage.includes('active') ||
+    stage.includes('dnc') ||
+    stage.includes('unsub') ||
+    stage.includes('not interested')
   ) {
+    return false;
+  }
+
+  // 2. Explicit Non-Interested statuses
+  if (
+    status === 'dnc' ||
+    status === 'unsubscribed' ||
+    status === 'not_interested' ||
+    status === 'lost' ||
+    status === 'pending' ||
+    status.startsWith('sent_')
+  ) {
+    if (!isPositivePipelineStage(lead.stage) && stage !== 'not a fit' && !stage.includes('disqual')) {
+      return false;
+    }
+  }
+
+  // 3. Positive pipeline stage
+  if (isPositivePipelineStage(lead.stage)) {
     return true;
   }
-  if (lead.dealValue && Number(lead.dealValue) > 0) return true;
-  if (lead.replyDate && lead.replyDate.trim() !== '') return true;
+
+  // 4. Lost / Not a fit stage (belongs in pipeline Kanban column)
+  if (stage === 'not a fit' || stage.includes('disqual')) {
+    return true;
+  }
+
+  // 5. Explicit interested status (only if stage is not in-progress/pending)
+  if (status === 'interested') {
+    return true;
+  }
+
+  // 6. Lead has deal value assigned (and not in progress)
+  if (lead.dealValue && Number(lead.dealValue) > 0) {
+    return true;
+  }
 
   return false;
 }

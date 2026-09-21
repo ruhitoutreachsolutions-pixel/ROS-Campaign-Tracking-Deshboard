@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { getTodayFormatted, isLeadDNC } from '../utils/helpers';
+import { getTodayFormatted, isLeadDNC, isPositivePipelineStage } from '../utils/helpers';
 import { 
   X, 
   UserPlus, 
@@ -96,10 +96,7 @@ export default function AddLeadModal({ isOpen, onClose, onLeadAdded }) {
                   stage.toLowerCase().includes('unsub') || 
                   stage.toLowerCase().includes('not interested');
 
-    const isPositiveStage = stage && 
-                            !stage.toLowerCase().includes('lost') && 
-                            !stage.toLowerCase().includes('not a') && 
-                            !isDnc;
+    const isPositiveStage = !isDnc && isPositivePipelineStage(stage);
 
     const newLead = addSingleLead({
       email: cleanEmail,

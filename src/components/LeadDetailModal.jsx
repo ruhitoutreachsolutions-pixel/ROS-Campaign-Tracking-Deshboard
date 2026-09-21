@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { isLeadDNC, getTodayFormatted } from '../utils/helpers';
+import { isLeadDNC, getTodayFormatted, isPositivePipelineStage, deriveLeadStatus } from '../utils/helpers';
 import { 
   X, 
   User, 
@@ -77,13 +77,30 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
                      stage.toLowerCase().includes('unsub') || 
                      stage.toLowerCase().includes('not interested');
 
-    const isPositiveStage = stage && 
-                            !stage.toLowerCase().includes('lost') && 
-                            !stage.toLowerCase().includes('not a') && 
-                            !isNowDnc;
+    const isInProgress = stage.toLowerCase().includes('progress') || stage.toLowerCase().includes('pending') || stage.trim() === '';
+    const isPositiveStage = isPositivePipelineStage(stage);
 
-    const finalStatus = isNowDnc ? 'dnc' : (isPositiveStage ? 'interested' : (lead.status || 'pending'));
-    const finalReplyDate = replyDate.trim() || (isPositiveStage ? (lead.replyDate || getTodayFormatted()) : lead.replyDate || '');
+    let finalStatus = 'pending';
+    let finalReplyDate = '';
+    let finalDealValue = 0;
+
+    if (isNowDnc) {
+      finalStatus = 'dnc';
+      finalReplyDate = '';
+      finalDealValue = 0;
+    } else if (isInProgress) {
+      finalStatus = deriveLeadStatus({ email1, email2, email3 });
+      finalReplyDate = '';
+      finalDealValue = 0;
+    } else if (isPositiveStage) {
+      finalStatus = 'interested';
+      finalReplyDate = replyDate.trim() || lead.replyDate || getTodayFormatted();
+      finalDealValue = Number(dealValue) || 0;
+    } else if (stage.toLowerCase().includes('lost') || stage.toLowerCase().includes('not a fit')) {
+      finalStatus = 'lost';
+      finalReplyDate = replyDate.trim() || lead.replyDate || '';
+      finalDealValue = Number(dealValue) || 0;
+    }
 
     updateLead(lead.id, {
       firstName,
@@ -98,7 +115,7 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
       stage,
       status: finalStatus,
       isDNC: isNowDnc,
-      dealValue: Number(dealValue) || 0,
+      dealValue: finalDealValue,
       replyDate: finalReplyDate,
       dateAdded: dateAdded.trim() || getTodayFormatted(),
       notes

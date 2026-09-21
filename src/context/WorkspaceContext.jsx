@@ -12,7 +12,7 @@ import {
   initialWarriorTimeline,
   initialFormSubmissions
 } from '../data/initialWorkspaces';
-import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC } from '../utils/helpers';
+import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested } from '../utils/helpers';
 import { 
   fetchWorkspacesFromCloud, 
   saveWorkspacesToCloud, 
@@ -135,6 +135,47 @@ export function mergeFormSubmissions(localList = [], cloudList = [], deletedIds 
   });
 }
 
+// Lead State Sanitizer: guarantees In Progress and DNC leads are never contaminated as interested
+export function sanitizeLeadState(lead) {
+  if (!lead) return lead;
+  const stage = (lead.stage || '').toLowerCase().trim();
+  const isInProgress = stage.includes('progress') || stage.includes('pending');
+  const isDnc = isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested');
+
+  if (isDnc) {
+    if (lead.status !== 'dnc' || lead.isDNC !== true || (lead.replyDate && lead.replyDate.trim()) || lead.dealValue) {
+      return {
+        ...lead,
+        status: 'dnc',
+        isDNC: true,
+        replyDate: '',
+        dealValue: 0
+      };
+    }
+  } else if (isInProgress) {
+    if (lead.status === 'interested' || (lead.replyDate && lead.replyDate.trim()) || lead.dealValue) {
+      return {
+        ...lead,
+        status: deriveLeadStatus(lead),
+        replyDate: '',
+        dealValue: 0
+      };
+    }
+  }
+  return lead;
+}
+
+export function sanitizeWorkspaceLeads(workspacesList) {
+  if (!Array.isArray(workspacesList)) return workspacesList;
+  return workspacesList.map(ws => {
+    if (!ws || !Array.isArray(ws.leads)) return ws;
+    return {
+      ...ws,
+      leads: ws.leads.map(sanitizeLeadState)
+    };
+  });
+}
+
 export function WorkspaceProvider({ children }) {
   // 1. Initial fast synchronous load from localStorage (Strictly excluding internal system metadata and deleted workspaces)
   const [workspaces, setWorkspaces] = useState(() => {
@@ -146,14 +187,14 @@ export function WorkspaceProvider({ children }) {
         if (Array.isArray(parsed) && parsed.length > 0) {
           const validParsed = parsed.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
           if (validParsed.length > 0) {
-            return validParsed;
+            return sanitizeWorkspaceLeads(validParsed);
           }
         }
       }
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
     }
-    return (initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
+    return sanitizeWorkspaceLeads((initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
   });
 
   // 2. Load active workspace ID
@@ -436,7 +477,7 @@ export function WorkspaceProvider({ children }) {
             // If IndexedDB has more or equal leads, or newer updates, adopt it
             if (idbTotalLeads >= prevTotalLeads) {
               const deletedIds = getDeletedWorkspaceIds();
-              return idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
+              return sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
             }
             return prev;
           });
@@ -476,7 +517,7 @@ export function WorkspaceProvider({ children }) {
               }
 
               // SMART LEAD-LEVEL MERGE WITH AUTHORITATIVE CLOUD RECONCILIATION:
-              const mergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
+              const rawMergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
                 localWsUpdatedAt: localWs.updatedAt,
                 cloudWsUpdatedAt: cloudWs.updatedAt,
                 deletedLeadIds: [
@@ -484,6 +525,7 @@ export function WorkspaceProvider({ children }) {
                   ...(cloudWs.deletedLeadIds || [])
                 ]
               });
+              const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
 
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
@@ -516,7 +558,7 @@ export function WorkspaceProvider({ children }) {
           });
 
           // Filter out internal system metadata and deleted workspaces
-          const cleanMerged = merged.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
+          const cleanMerged = sanitizeWorkspaceLeads(merged.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
 
           // If local has newer follow-ups/updates, push them back to Supabase so all devices stay updated!
           if (needsPushToCloud) {
@@ -1611,22 +1653,46 @@ export function WorkspaceProvider({ children }) {
     return true;
   }
 
-  // 3. Update Lead Interested Stage & Deal Value
+  // 3. Move Lead Pipeline Stage (Kanban / Inline / Modal)
   function updateLeadStage(leadId, newStage, notes = '', dealValue = null) {
     if (!currentWorkspace) return false;
 
     let targetLead = null;
+    const isPos = isPositivePipelineStage(newStage);
+    const isDnc = isLeadDNC({ stage: newStage });
+    const isInProgress = !newStage || newStage.toLowerCase().includes('progress') || newStage.toLowerCase().includes('pending');
+    const isLost = newStage && (newStage.toLowerCase().includes('lost') || newStage.toLowerCase().includes('not a fit') || newStage.toLowerCase().includes('disqual'));
+
     const updatedLeads = currentWorkspace.leads.map(l => {
       if (l.id === leadId) {
         targetLead = l;
-        const isInterested = newStage && !newStage.toLowerCase().includes('lost') && !newStage.toLowerCase().includes('not a');
+        let finalStatus = l.status;
+        let finalReplyDate = l.replyDate || '';
+        let finalDealValue = dealValue !== null && dealValue !== undefined ? Number(dealValue) : (l.dealValue || 0);
+
+        if (isDnc) {
+          finalStatus = 'dnc';
+          finalReplyDate = '';
+          finalDealValue = 0;
+        } else if (isInProgress) {
+          finalStatus = deriveLeadStatus({ ...l, stage: 'In Progress' });
+          finalReplyDate = '';
+          finalDealValue = 0;
+        } else if (isPos) {
+          finalStatus = 'interested';
+          if (!finalReplyDate) finalReplyDate = getTodayFormatted();
+        } else if (isLost) {
+          finalStatus = 'lost';
+        }
+
         return {
           ...l,
           stage: newStage,
-          status: isInterested ? 'interested' : l.status,
-          replyDate: l.replyDate || getTodayFormatted(),
+          status: finalStatus,
+          isDNC: isDnc,
+          replyDate: finalReplyDate,
           notes: notes !== '' ? notes : l.notes,
-          dealValue: dealValue !== null && dealValue !== undefined ? Number(dealValue) : l.dealValue,
+          dealValue: finalDealValue,
           updatedAt: new Date().toISOString()
         };
       }
@@ -1680,12 +1746,34 @@ export function WorkspaceProvider({ children }) {
           leads: w.leads.map(l => {
             if (l.id !== leadId) return l;
             const next = { ...l, ...updates, updatedAt: new Date().toISOString() };
-            const isInterested = next.status === 'interested' || (next.stage && !next.stage.toLowerCase().includes('lost') && !next.stage.toLowerCase().includes('not a') && !next.stage.toLowerCase().includes('dnc'));
-            if (isInterested) {
-              next.status = 'interested';
+            if (next.stage !== undefined) {
+              const isPos = isPositivePipelineStage(next.stage);
+              const isDnc = isLeadDNC(next);
+              const isInProgress = !next.stage || next.stage.toLowerCase().includes('progress') || next.stage.toLowerCase().includes('pending');
+              const isLost = next.stage && (next.stage.toLowerCase().includes('lost') || next.stage.toLowerCase().includes('not a fit') || next.stage.toLowerCase().includes('disqual'));
+
+              if (isDnc) {
+                next.status = 'dnc';
+                next.isDNC = true;
+                next.replyDate = '';
+                next.dealValue = 0;
+              } else if (isInProgress) {
+                next.status = deriveLeadStatus(next);
+                next.replyDate = '';
+                next.dealValue = 0;
+                next.isDNC = false;
+              } else if (isPos) {
+                next.status = 'interested';
+                next.isDNC = false;
+                if (!next.replyDate) next.replyDate = today;
+              } else if (isLost) {
+                next.status = 'lost';
+                next.isDNC = false;
+              }
+            } else if (next.status === 'interested') {
               if (!next.replyDate) next.replyDate = today;
             }
-            return next;
+            return sanitizeLeadState(next);
           }),
           updatedAt: new Date().toISOString()
         };
@@ -1711,12 +1799,32 @@ export function WorkspaceProvider({ children }) {
 
       if (updates.stage !== undefined && updates.stage !== '') {
         next.stage = updates.stage;
-        const isInterested = updates.stage && !updates.stage.toLowerCase().includes('lost') && !updates.stage.toLowerCase().includes('not a');
-        if (isInterested) {
+        const isPos = isPositivePipelineStage(updates.stage);
+        const isDnc = updates.stage.toLowerCase().includes('dnc') || 
+                      updates.stage.toLowerCase().includes('unsub') || 
+                      updates.stage.toLowerCase().includes('not interested');
+        const isInProgress = updates.stage.toLowerCase().includes('progress') || updates.stage.toLowerCase().includes('pending');
+        const isLost = updates.stage.toLowerCase().includes('lost') || 
+                       updates.stage.toLowerCase().includes('not a fit') || 
+                       updates.stage.toLowerCase().includes('disqual');
+
+        if (isDnc) {
+          next.status = 'dnc';
+          next.isDNC = true;
+          next.replyDate = '';
+          next.dealValue = 0;
+        } else if (isInProgress) {
+          next.status = deriveLeadStatus(next);
+          next.replyDate = '';
+          next.dealValue = 0;
+          next.isDNC = false;
+        } else if (isPos) {
           next.status = 'interested';
+          next.isDNC = false;
           if (!next.replyDate) next.replyDate = getTodayFormatted();
-        } else if (updates.stage.toLowerCase().includes('lost') || updates.stage.toLowerCase().includes('disqual')) {
+        } else if (isLost) {
           next.status = 'lost';
+          next.isDNC = false;
         }
       }
 
@@ -1761,7 +1869,7 @@ export function WorkspaceProvider({ children }) {
       }
 
       next.updatedAt = new Date().toISOString();
-      return next;
+      return sanitizeLeadState(next);
     });
 
     const newActivity = {
@@ -1890,9 +1998,10 @@ export function WorkspaceProvider({ children }) {
     const todayStr = getTodayFormatted();
     const campName = (leadData.campaignName || currentWorkspace.campaignName || 'General Outbound').trim();
     const isDnc = leadData.isDNC || isLeadDNC(leadData);
-    const isInterested = !isDnc && (leadData.status === 'interested' || (leadData.stage && !leadData.stage.toLowerCase().includes('lost') && !leadData.stage.toLowerCase().includes('not a')));
+    const isPos = isPositivePipelineStage(leadData.stage);
+    const isInterested = !isDnc && (leadData.status === 'interested' || isPos);
 
-    const newLead = {
+    const newLead = sanitizeLeadState({
       id: 'ld_' + Math.random().toString(36).substr(2, 9),
       email: leadData.email.trim(),
       firstName: (leadData.firstName || '').trim(),
@@ -1904,16 +2013,16 @@ export function WorkspaceProvider({ children }) {
       email2: (leadData.email2 || '').trim(),
       email3: (leadData.email3 || '').trim(),
       stage: (leadData.stage || '').trim(),
-      status: isDnc ? 'dnc' : (isInterested ? 'interested' : (leadData.status || 'pending')),
+      status: isDnc ? 'dnc' : (isInterested ? 'interested' : deriveLeadStatus(leadData)),
       isDNC: isDnc,
-      dealValue: Number(leadData.dealValue) || 0,
+      dealValue: isInterested ? (Number(leadData.dealValue) || 0) : 0,
       replyDate: leadData.replyDate ? leadData.replyDate.trim() : (isInterested ? todayStr : ''),
       dateAdded: (leadData.dateAdded || '').trim() || todayStr,
       notes: (leadData.notes || '').trim(),
       createdAt: new Date().toISOString(),
       importedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    };
+    });
 
     const newActivity = {
       id: 'act_' + Date.now(),
