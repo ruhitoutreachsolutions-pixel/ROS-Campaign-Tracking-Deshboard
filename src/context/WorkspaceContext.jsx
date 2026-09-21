@@ -526,27 +526,22 @@ export function WorkspaceProvider({ children }) {
                 ]
               });
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
-
-              const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
-              const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
-
-              // Only push to cloud if local was strictly modified AFTER cloud
-              if (localTime > cloudTime) {
-                needsPushToCloud = true;
-              }
+              const localTime = new Date(localWs.updatedAt || 0).getTime();
+              const cloudTime = new Date(cloudWs.updatedAt || 0).getTime();
+              const isCloudAuth = cloudTime >= localTime;
 
               return {
-                ...cloudWs,
-                ...localWs,
+                ...(isCloudAuth ? localWs : cloudWs),
+                ...(isCloudAuth ? cloudWs : localWs),
                 leads: mergedLeads,
                 deletedLeadIds: Array.from(new Set([
                   ...(localWs.deletedLeadIds || []),
                   ...(cloudWs.deletedLeadIds || [])
                 ])),
-                activityLog: (localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0)
-                  ? localWs.activityLog
-                  : cloudWs.activityLog || [],
-                updatedAt: localTime >= cloudTime ? (localWs.updatedAt || new Date().toISOString()) : cloudWs.updatedAt
+                activityLog: isCloudAuth
+                  ? (cloudWs.activityLog?.length ? cloudWs.activityLog : localWs.activityLog || [])
+                  : ((localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0) ? localWs.activityLog : cloudWs.activityLog || []),
+                updatedAt: isCloudAuth ? cloudWs.updatedAt : (localWs.updatedAt || new Date().toISOString())
               };
             });
 
@@ -3214,6 +3209,28 @@ export function WorkspaceProvider({ children }) {
     }
   }
 
+  // 16. Force Pull & Restore Authoritative Cloud Database
+  async function forceSyncFromCloud() {
+    try {
+      const cloudData = await fetchWorkspacesFromCloud(null);
+      if (Array.isArray(cloudData) && cloudData.length > 0) {
+        const deletedIds = getDeletedWorkspaceIds();
+        const valid = sanitizeWorkspaceLeads(
+          cloudData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
+        );
+        if (valid.length > 0) {
+          setWorkspaces(valid);
+          saveWorkspacesToLocal(valid);
+          const total = valid.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+          return { success: true, count: total, message: `Successfully pulled & restored ${total} leads cleanly from Cloud Database!` };
+        }
+      }
+      return { success: false, message: 'No workspaces found in Cloud Database.' };
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  }
+
   const value = {
     workspaces,
     currentWorkspaceId,
@@ -3328,7 +3345,8 @@ export function WorkspaceProvider({ children }) {
     getSupabaseConfig,
     saveSupabaseConfig,
     syncAllWorkspacesToCloud,
-    restorePreviousBackup
+    restorePreviousBackup,
+    forceSyncFromCloud
   };
 
   return (

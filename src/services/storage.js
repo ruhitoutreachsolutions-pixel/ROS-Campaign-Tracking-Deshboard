@@ -211,7 +211,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
 
         const leadLocalTime = new Date(local.updatedAt || local.importedAt || 0).getTime();
 
-        if (leadLocalTime > cloudTime || hasLocalE2 || hasLocalE3 || isLocalAdvancedStage) {
+        if (leadLocalTime > cloudTime) {
           result.push({
             ...cLead,
             ...local,
@@ -224,7 +224,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
             notes: local.notes || cLead.notes || ''
           });
         } else {
-          result.push({ ...local, ...cLead });
+          result.push(cLead);
         }
       }
     });

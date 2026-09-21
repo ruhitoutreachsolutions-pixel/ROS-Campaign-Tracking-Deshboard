@@ -4,7 +4,7 @@ import { X, Database, Cloud, Check, Copy, ShieldCheck, RefreshCw, Sparkles, Serv
 import { getSupabaseConfig, saveSupabaseConfig, getSupabaseClient, isCloudDatabaseConnected, saveWorkspacesToCloud, fetchWorkspacesFromCloud, getLastCloudError } from '../services/db';
 
 export default function CloudSyncModal({ isOpen, onClose }) {
-  const { workspaces, currentWorkspace, restorePreviousBackup } = useWorkspace();
+  const { workspaces, currentWorkspace, restorePreviousBackup, forceSyncFromCloud } = useWorkspace();
   const existingConfig = getSupabaseConfig();
 
   const [supabaseUrl, setSupabaseUrl] = useState(existingConfig.url || '');
@@ -30,6 +30,20 @@ export default function CloudSyncModal({ isOpen, onClose }) {
       setTimeout(() => setStatusMessage(''), 4000);
     } else {
       setErrorMessage(res.message || 'No previous session backup found.');
+    }
+  };
+
+  const handleForcePullCloud = async () => {
+    setIsSaving(true);
+    setStatusMessage('');
+    setErrorMessage('');
+    const res = await forceSyncFromCloud();
+    setIsSaving(false);
+    if (res.success) {
+      setStatusMessage(res.message);
+      setTimeout(() => setStatusMessage(''), 5000);
+    } else {
+      setErrorMessage(res.message || 'Failed to pull cloud database.');
     }
   };
 
@@ -179,13 +193,26 @@ create policy "Allow all access" on workspaces for all using (true) with check (
           </div>
 
           {isConnected && (
-            <button
-              onClick={handleManualSyncNow}
-              disabled={isSaving}
-              className="px-3 py-1.5 rounded-lg bg-[#00E5A0]/10 hover:bg-[#00E5A0]/20 text-[#00E5A0] border border-[#00E5A0]/30 text-xs font-bold transition-all cursor-pointer"
-            >
-              {isSaving ? 'Syncing...' : 'Sync Now'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleForcePullCloud}
+                disabled={isSaving}
+                className="px-3 py-1.5 rounded-lg bg-[#00C2FF]/10 hover:bg-[#00C2FF]/20 text-[#00C2FF] border border-[#00C2FF]/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                title="Pull and restore clean authoritative data directly from Supabase Cloud"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Pull from Cloud</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleManualSyncNow}
+                disabled={isSaving}
+                className="px-3 py-1.5 rounded-lg bg-[#00E5A0]/10 hover:bg-[#00E5A0]/20 text-[#00E5A0] border border-[#00E5A0]/30 text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+              >
+                {isSaving ? 'Syncing...' : 'Sync Now'}
+              </button>
+            </div>
           )}
         </div>
 
