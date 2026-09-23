@@ -464,6 +464,10 @@ export function WorkspaceProvider({ children }) {
   const idbLoadedRef = useRef(false);
   // Track whether initial cloud sync has completed (prevents pushing stale local state on mount)
   const isCloudSyncedRef = useRef(false);
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  const currentWorkspaceIdRef = useRef(currentWorkspaceId);
+  currentWorkspaceIdRef.current = currentWorkspaceId;
 
   // 2. Durable Local Storage Load (IndexedDB has NO 5MB limit and stores full 50k+ leads safely)
   useEffect(() => {
@@ -500,7 +504,7 @@ export function WorkspaceProvider({ children }) {
     let isMounted = true;
     async function syncFromCloud() {
       try {
-        const cloudData = await fetchWorkspacesFromCloud(null);
+        const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, currentWorkspaceIdRef.current);
         if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
 
         const deletedIds = getDeletedWorkspaceIds();
@@ -668,7 +672,7 @@ export function WorkspaceProvider({ children }) {
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
-  // 4b. CONTINUOUS 25-SECOND CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
+  // 4b. CONTINUOUS 20-SECOND CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
   useEffect(() => {
     const autoReconcileInterval = setInterval(async () => {
       try {
@@ -692,13 +696,73 @@ export function WorkspaceProvider({ children }) {
             setFormSubmissions(prev => mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds));
           }
         }
+
+        // Active Workspace Auto-Reconcile: Check Supabase for workspace lead updates
+        const activeId = currentWorkspaceIdRef.current;
+        if (activeId && !activeId.startsWith('__ros_')) {
+          const supabase = getSupabaseClient();
+          if (supabase) {
+            const { data: cloudHeader, error: headErr } = await supabase
+              .from('workspaces')
+              .select('id, updated_at')
+              .eq('id', activeId)
+              .maybeSingle();
+
+            if (!headErr && cloudHeader && cloudHeader.updated_at) {
+              const currentWs = (workspacesRef.current || []).find(w => w.id === activeId);
+              const localTime = new Date(currentWs?.updatedAt || 0).getTime();
+              const cloudTime = new Date(cloudHeader.updated_at).getTime();
+
+              if (cloudTime > localTime + 1500) {
+                const { data: cloudRow, error: rowErr } = await supabase
+                  .from('workspaces')
+                  .select('id, leads, activity_log, sequence_config, updated_at')
+                  .eq('id', activeId)
+                  .maybeSingle();
+
+                if (!rowErr && cloudRow && Array.isArray(cloudRow.leads)) {
+                  setWorkspaces(prev => {
+                    const target = prev.find(w => w.id === activeId);
+                    if (!target) return prev;
+
+                    const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                      localWsUpdatedAt: target.updatedAt,
+                      cloudWsUpdatedAt: cloudRow.updated_at,
+                      deletedLeadIds: [
+                        ...(target.deletedLeadIds || []),
+                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                      ]
+                    }).map(sanitizeLeadState);
+
+                    const next = prev.map(w => {
+                      if (w.id === activeId) {
+                        return {
+                          ...w,
+                          leads: mergedLeads,
+                          activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
+                            ? cloudRow.activity_log
+                            : (w.activityLog || []),
+                          updatedAt: cloudRow.updated_at
+                        };
+                      }
+                      return w;
+                    });
+                    saveWorkspacesToLocal(next);
+                    return next;
+                  });
+                }
+              }
+            }
+          }
+        }
+
         setLastSyncedTime(new Date());
       } catch (err) {
         console.warn('Auto-reconcile cycle notice:', err);
       } finally {
         setTimeout(() => setIsAutoSyncing(false), 1000);
       }
-    }, 25000); // 25 seconds
+    }, 20000); // 20 seconds
 
     return () => clearInterval(autoReconcileInterval);
   }, []);
@@ -976,6 +1040,51 @@ export function WorkspaceProvider({ children }) {
           saveWorkspacesToLocal(next);
           return next;
         });
+      }
+
+      // 8d. Realtime Workspace Reconcile Trigger
+      if ((event.type === 'WORKSPACE_RECONCILE_NEEDED' || event.type === 'WORKSPACE_SAVED') && event.workspaceId) {
+        const targetWsId = event.workspaceId;
+        const supabase = getSupabaseClient();
+        if (supabase) {
+          supabase
+            .from('workspaces')
+            .select('id, leads, activity_log, sequence_config, updated_at')
+            .eq('id', targetWsId)
+            .maybeSingle()
+            .then(({ data: cloudRow, error: cErr }) => {
+              if (!cErr && cloudRow && Array.isArray(cloudRow.leads)) {
+                setWorkspaces(prev => {
+                  const target = prev.find(w => w.id === targetWsId);
+                  if (!target) return prev;
+                  const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                    localWsUpdatedAt: target.updatedAt,
+                    cloudWsUpdatedAt: cloudRow.updated_at,
+                    deletedLeadIds: [
+                      ...(target.deletedLeadIds || []),
+                      ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                    ]
+                  }).map(sanitizeLeadState);
+
+                  const next = prev.map(w => {
+                    if (w.id === targetWsId) {
+                      return {
+                        ...w,
+                        leads: mergedLeads,
+                        activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
+                          ? cloudRow.activity_log
+                          : (w.activityLog || []),
+                        updatedAt: cloudRow.updated_at
+                      };
+                    }
+                    return w;
+                  });
+                  saveWorkspacesToLocal(next);
+                  return next;
+                });
+              }
+            }).catch(() => {});
+        }
       }
 
       // 9. Notes Updated
@@ -1361,9 +1470,63 @@ export function WorkspaceProvider({ children }) {
 
     try {
       const targetId = currentWorkspace?.id || currentWorkspaceId;
-      const ok = await saveWorkspacesToCloud(workspaces, targetId);
+
+      // 1. Pull latest cloud data for this workspace first to ensure true bidirectional sync
+      const supabase = getSupabaseClient();
+      if (supabase && targetId) {
+        try {
+          const { data: cloudRow } = await supabase
+            .from('workspaces')
+            .select('id, leads, activity_log, sequence_config, updated_at')
+            .eq('id', targetId)
+            .maybeSingle();
+
+          if (cloudRow && Array.isArray(cloudRow.leads)) {
+            setWorkspaces(prev => {
+              const target = prev.find(w => w.id === targetId);
+              if (!target) return prev;
+
+              const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                localWsUpdatedAt: target.updatedAt,
+                cloudWsUpdatedAt: cloudRow.updated_at,
+                deletedLeadIds: [
+                  ...(target.deletedLeadIds || []),
+                  ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                ]
+              }).map(sanitizeLeadState);
+
+              const next = prev.map(w => {
+                if (w.id === targetId) {
+                  return {
+                    ...w,
+                    leads: mergedLeads,
+                    activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
+                      ? cloudRow.activity_log
+                      : (w.activityLog || []),
+                    updatedAt: new Date().toISOString()
+                  };
+                }
+                return w;
+              });
+              saveWorkspacesToLocal(next);
+              return next;
+            });
+          }
+        } catch (pullErr) {
+          console.warn('Pre-sync pull notice:', pullErr);
+        }
+      }
+
+      const ok = await saveWorkspacesToCloud(workspacesRef.current, targetId);
       if (ok) {
-        const totalLeads = currentWorkspace?.leads?.length || 0;
+        setLastSyncedTime(new Date());
+        broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
+          workspaceId: targetId,
+          updatedAt: new Date().toISOString()
+        }).catch(() => {});
+
+        const updatedWs = (workspacesRef.current || []).find(w => w.id === targetId);
+        const totalLeads = updatedWs?.leads?.length || currentWorkspace?.leads?.length || 0;
         return { 
           success: true, 
           connected: true, 
@@ -1986,9 +2149,16 @@ export function WorkspaceProvider({ children }) {
       return next;
     });
 
-    broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+    if (leadsWithCampaign.length <= 50) {
+      broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+        workspaceId: currentWorkspaceId,
+        leads: leadsWithCampaign,
+        updatedAt: nowIso
+      }).catch(() => {});
+    }
+
+    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
       workspaceId: currentWorkspaceId,
-      leads: leadsWithCampaign,
       updatedAt: nowIso
     }).catch(() => {});
 

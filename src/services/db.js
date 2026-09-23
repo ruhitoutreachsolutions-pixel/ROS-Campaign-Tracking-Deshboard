@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { mergeWorkspaceLeads } from './storage';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
@@ -98,10 +99,11 @@ function getLocalDeletedIds() {
 
 // 2. Fetch all workspaces from Supabase Cloud Database (Lightweight & Scalable)
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null) {
+  const safeFallback = Array.isArray(fallbackWorkspaces) ? fallbackWorkspaces : [];
   const supabase = getSupabaseClient();
   if (!supabase) {
     lastCloudErrorMsg = 'Supabase client is not connected or anon key is missing.';
-    return fallbackWorkspaces;
+    return safeFallback;
   }
 
   try {
@@ -115,7 +117,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
     if (error) {
       console.warn('Supabase fetch error:', error);
       lastCloudErrorMsg = error.message || error.details || String(error);
-      return fallbackWorkspaces;
+      return safeFallback;
     }
 
     if (Array.isArray(data) && data.length > 0) {
@@ -132,7 +134,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
       // If local already has leads and local updatedAt is up-to-date, reuse local leads.
       // Only fetch leads individually from cloud for the target workspace, or if cloud has newer updates.
       const workspacesWithLeads = await Promise.all(clientWorkspaces.map(async (item) => {
-        const localWs = fallbackWorkspaces.find(w => w.id === item.id);
+        const localWs = safeFallback.find(w => w.id === item.id);
         const cloudTime = new Date(item.updated_at || item.created_at || 0).getTime();
         const localTime = new Date(localWs?.updatedAt || 0).getTime();
 
@@ -149,7 +151,15 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
               .maybeSingle();
 
             if (!leadErr && leadRow && Array.isArray(leadRow.leads)) {
-              leads = leadRow.leads;
+              if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
+                leads = mergeWorkspaceLeads(localWs.leads, leadRow.leads, {
+                  localWsUpdatedAt: localWs.updatedAt,
+                  cloudWsUpdatedAt: item.updated_at,
+                  deletedLeadIds: localWs.deletedLeadIds || []
+                });
+              } else {
+                leads = leadRow.leads;
+              }
             } else if (localWs && Array.isArray(localWs.leads)) {
               leads = localWs.leads;
             }
@@ -193,7 +203,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
     lastCloudErrorMsg = err.message || String(err);
   }
 
-  return fallbackWorkspaces;
+  return safeFallback;
 }
 
 let lastCloudErrorMsg = null;
@@ -225,20 +235,35 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
         continue;
       }
 
-      // Fast timestamp check (WITHOUT downloading the heavy leads column!)
+      // Pre-save safety & merge: fetch existing cloud row to prevent blind overwrite
+      let leadsToSave = ws.leads || [];
       try {
         const { data: existingRow, error: checkErr } = await supabase
           .from('workspaces')
-          .select('id, updated_at')
+          .select('id, updated_at, leads, sequence_config')
           .eq('id', ws.id)
           .maybeSingle();
 
-        if (!checkErr && existingRow && existingRow.updated_at && ws.updatedAt) {
-          const cloudTime = new Date(existingRow.updated_at).getTime();
-          const localTime = new Date(ws.updatedAt).getTime();
-          // If cloud has identical or newer timestamp, and this wasn't an explicit forced target save, skip to save bandwidth & prevent timeouts
-          if (!targetWorkspaceId && cloudTime >= localTime) {
+        if (!checkErr && existingRow) {
+          const cloudTime = new Date(existingRow.updated_at || 0).getTime();
+          const localTime = new Date(ws.updatedAt || 0).getTime();
+
+          // If bulk save and cloud already has newer/identical data and same/more leads, skip
+          if (!targetWorkspaceId && cloudTime >= localTime && Array.isArray(existingRow.leads) && existingRow.leads.length >= (ws.leads?.length || 0)) {
             continue;
+          }
+
+          // If cloud has leads, merge local and cloud leads non-destructively
+          if (Array.isArray(existingRow.leads) && existingRow.leads.length > 0) {
+            leadsToSave = mergeWorkspaceLeads(ws.leads || [], existingRow.leads, {
+              localWsUpdatedAt: ws.updatedAt,
+              cloudWsUpdatedAt: existingRow.updated_at,
+              deletedLeadIds: [
+                ...(ws.deletedLeadIds || []),
+                ...(existingRow.sequence_config?.deletedLeadIds || [])
+              ]
+            });
+            ws.leads = leadsToSave;
           }
         }
       } catch (guardErr) {
@@ -265,8 +290,8 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
           deletedLeadIds: cappedDeleted
         },
         activity_log: ws.activityLog || [],
-        leads: ws.leads || [],
-        updated_at: ws.updatedAt || new Date().toISOString()
+        leads: leadsToSave,
+        updated_at: new Date().toISOString()
       };
 
       try {

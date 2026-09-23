@@ -151,131 +151,122 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
   return fallbackWorkspaces;
 }
 
-// Smart Lead-Level Merge with Authoritative Cloud Sync & Tombstones
+// Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation
 export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = {}) {
   const deletedSet = new Set(options.deletedLeadIds || []);
-  const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(l => l && l.id && !deletedSet.has(l.id));
-  const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(l => l && l.id && !deletedSet.has(l.id));
+  const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(l => l && (l.id || l.email) && !deletedSet.has(l.id));
+  const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(l => l && (l.id || l.email) && !deletedSet.has(l.id));
 
   if (validLocal.length === 0) return validCloud;
-  if (validCloud.length === 0) {
-    // If cloud has 0 leads and cloudWsUpdatedAt is strictly newer than localWsUpdatedAt,
-    // it means leads were deleted/cleared in cloud! Return empty array!
-    const localTime = new Date(options.localWsUpdatedAt || 0).getTime();
-    const cloudTime = new Date(options.cloudWsUpdatedAt || 0).getTime();
-    if (cloudTime > localTime) {
-      return [];
-    }
-    return validLocal;
-  }
+  if (validCloud.length === 0) return validLocal;
 
-  const localTime = new Date(options.localWsUpdatedAt || 0).getTime();
-  const cloudTime = new Date(options.cloudWsUpdatedAt || 0).getTime();
-  const isCloudAuthoritative = cloudTime > localTime;
+  const leadMap = new Map();
+  const emailToIdMap = new Map();
 
-  const localMap = new Map();
-  validLocal.forEach(l => {
-    if (l && l.id) localMap.set(l.id, l);
-    else if (l && l.email) localMap.set(l.email.toLowerCase().trim(), l);
-  });
+  const isAdvancedStage = (lead) => {
+    if (!lead) return false;
+    const s = `${lead.stage || ''} ${lead.status || ''}`.toLowerCase();
+    return s.includes('interest') || s.includes('book') || s.includes('won') || s.includes('negotiat') || s.includes('proposal') || s.includes('dnc');
+  };
 
-  const cloudMap = new Map();
-  validCloud.forEach(l => {
-    if (l && l.id) cloudMap.set(l.id, l);
-    else if (l && l.email) cloudMap.set(l.email.toLowerCase().trim(), l);
-  });
+  const mergeTwoLeads = (leadA, leadB) => {
+    if (!leadA) return leadB;
+    if (!leadB) return leadA;
 
-  const result = [];
-  const processedIds = new Set();
+    // Email sending progress: always union and preserve all sent emails
+    const email1 = leadB.email1 || leadA.email1 || '';
+    const email2 = leadB.email2 || leadA.email2 || '';
+    const email3 = leadB.email3 || leadA.email3 || '';
 
-  // If cloud is newer/authoritative, iterate over cloud leads as base
-  if (isCloudAuthoritative) {
-    validCloud.forEach(cLead => {
-      processedIds.add(cLead.id);
-      const local = localMap.get(cLead.id) || (cLead.email ? localMap.get(cLead.email.toLowerCase().trim()) : null);
-      if (!local) {
-        result.push(cLead);
-      } else {
-        // Reconcile status / follow-ups
-        const hasLocalE1 = local.email1 && local.email1.trim() !== '';
-        const hasLocalE2 = local.email2 && local.email2.trim() !== '';
-        const hasLocalE3 = local.email3 && local.email3.trim() !== '';
-        const isLocalAdvancedStage = local.stage && (
-          local.stage.toLowerCase().includes('book') || 
-          local.stage.toLowerCase().includes('interest') || 
-          local.stage.toLowerCase().includes('won') || 
-          local.stage.toLowerCase().includes('proposal') ||
-          local.stage.toLowerCase().includes('negotiat') ||
-          local.stage.toLowerCase().includes('dnc')
-        );
+    // Advanced stages: preserve interested, meeting booked, won, dnc
+    const aAdv = isAdvancedStage(leadA);
+    const bAdv = isAdvancedStage(leadB);
 
-        const leadLocalTime = new Date(local.updatedAt || local.importedAt || 0).getTime();
+    let stage = leadA.stage || leadB.stage || '';
+    let status = leadA.status || leadB.status || 'pending';
 
-        if (leadLocalTime > cloudTime) {
-          result.push({
-            ...cLead,
-            ...local,
-            email1: local.email1 || cLead.email1 || '',
-            email2: local.email2 || cLead.email2 || '',
-            email3: local.email3 || cLead.email3 || '',
-            stage: local.stage || cLead.stage || '',
-            status: local.status || cLead.status || 'pending',
-            dealValue: local.dealValue !== undefined ? local.dealValue : cLead.dealValue || 0,
-            notes: local.notes || cLead.notes || ''
-          });
-        } else {
-          result.push(cLead);
-        }
-      }
-    });
-
-    // Any local lead created strictly after cloudTime is preserved
-    validLocal.forEach(local => {
-      if (!processedIds.has(local.id)) {
-        const leadLocalTime = new Date(local.updatedAt || local.createdAt || local.importedAt || 0).getTime();
-        if (leadLocalTime > cloudTime) {
-          result.push(local);
-        }
-        // Otherwise, it was deleted on cloud and is pruned!
-      }
-    });
-
-    return result;
-  }
-
-  // Otherwise local is newer/authoritative:
-  validLocal.forEach(local => {
-    processedIds.add(local.id);
-    const cLead = cloudMap.get(local.id) || (local.email ? cloudMap.get(local.email.toLowerCase().trim()) : null);
-    if (!cLead) {
-      result.push(local);
+    if (bAdv && !aAdv) {
+      stage = leadB.stage;
+      status = leadB.status;
+    } else if (aAdv && !bAdv) {
+      stage = leadA.stage;
+      status = leadA.status;
     } else {
-      const leadLocalTime = new Date(local.updatedAt || local.importedAt || 0).getTime();
-      const leadCloudTime = new Date(cLead.updatedAt || cLead.updated_at || cLead.importedAt || 0).getTime();
-      if (leadLocalTime >= leadCloudTime) {
-        result.push({
-          ...cLead,
-          ...local,
-          email1: local.email1 || cLead.email1 || '',
-          email2: local.email2 || cLead.email2 || '',
-          email3: local.email3 || cLead.email3 || '',
-          stage: local.stage || cLead.stage || '',
-          status: local.status || cLead.status || 'pending',
-          dealValue: local.dealValue !== undefined ? local.dealValue : cLead.dealValue || 0,
-          notes: local.notes || cLead.notes || ''
-        });
-      } else {
-        result.push({ ...local, ...cLead });
+      const timeA = new Date(leadA.updatedAt || leadA.importedAt || 0).getTime();
+      const timeB = new Date(leadB.updatedAt || leadB.importedAt || 0).getTime();
+      if (timeB >= timeA) {
+        stage = leadB.stage || leadA.stage;
+        status = leadB.status || leadA.status;
+      }
+    }
+
+    const isDnc = status === 'dnc' || (stage && stage.toLowerCase().includes('dnc'));
+    const isInterested = status === 'interested' || (stage && stage.toLowerCase().includes('interest'));
+    if (!isDnc && !isInterested) {
+      if (email3 && email3.trim()) status = 'sent_3';
+      else if (email2 && email2.trim()) status = 'sent_2';
+      else if (email1 && email1.trim()) status = 'sent_1';
+    }
+
+    const notes = (leadB.notes && leadB.notes.length >= (leadA.notes?.length || 0))
+      ? leadB.notes
+      : (leadA.notes || leadB.notes || '');
+
+    const timeA = new Date(leadA.updatedAt || leadA.importedAt || 0).getTime();
+    const timeB = new Date(leadB.updatedAt || leadB.importedAt || 0).getTime();
+    const primary = timeB >= timeA ? leadB : leadA;
+    const secondary = timeB >= timeA ? leadA : leadB;
+
+    return {
+      ...secondary,
+      ...primary,
+      email1,
+      email2,
+      email3,
+      stage,
+      status,
+      notes,
+      dealValue: primary.dealValue !== undefined ? primary.dealValue : (secondary.dealValue || 0),
+      replyDate: primary.replyDate || secondary.replyDate || '',
+      updatedAt: new Date(Math.max(timeA, timeB, Date.now())).toISOString()
+    };
+  };
+
+  // 1. Populate map with local leads
+  validLocal.forEach(lead => {
+    const key = lead.id ? String(lead.id) : (lead.email ? `email:${lead.email.toLowerCase().trim()}` : null);
+    if (key) {
+      leadMap.set(key, lead);
+      if (lead.email) {
+        emailToIdMap.set(lead.email.toLowerCase().trim(), key);
       }
     }
   });
 
-  // Add any new leads from cloud that do not exist locally
+  // 2. Merge cloud leads non-destructively
   validCloud.forEach(cLead => {
-    if (!processedIds.has(cLead.id)) {
-      result.push(cLead);
+    let key = cLead.id ? String(cLead.id) : null;
+    const emailKey = cLead.email ? cLead.email.toLowerCase().trim() : null;
+
+    if ((!key || !leadMap.has(key)) && emailKey && emailToIdMap.has(emailKey)) {
+      key = emailToIdMap.get(emailKey);
+    }
+
+    if (!key) {
+      key = emailKey ? `email:${emailKey}` : `gen_${Math.random()}`;
+    }
+
+    if (leadMap.has(key)) {
+      const existing = leadMap.get(key);
+      leadMap.set(key, mergeTwoLeads(existing, cLead));
+    } else {
+      leadMap.set(key, cLead);
+      if (emailKey) {
+        emailToIdMap.set(emailKey, key);
+      }
     }
   });
 
-  return result;
+  return Array.from(leadMap.values());
 }
+
