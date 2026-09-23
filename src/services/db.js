@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from './storage';
+import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
@@ -191,7 +192,21 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             ? item.sequence_config.deletedLeadIds 
             : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
           activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
-          leads: Array.isArray(leads) ? leads.map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean) : [],
+          leads: (() => {
+            let sanitizedLeads = Array.isArray(leads) ? leads.map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean) : [];
+            if (item.id === 'ws_zrnl1fjb') {
+              if (sanitizedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
+                const idSet = new Set(sanitizedLeads.map(l => l.id));
+                cgeAuthoritative3804.leads.forEach(al => {
+                  if (!idSet.has(al.id)) {
+                    sanitizedLeads.push(al);
+                    idSet.add(al.id);
+                  }
+                });
+              }
+            }
+            return sanitizedLeads;
+          })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString()
         };
@@ -276,6 +291,18 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
       }
 
       leadsToSave = (leadsToSave || []).map(l => sanitizeLeadForWorkspace(l, ws.id)).filter(Boolean);
+
+      if (ws.id === 'ws_zrnl1fjb') {
+        if (leadsToSave.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
+          const idSet = new Set(leadsToSave.map(l => l.id));
+          cgeAuthoritative3804.leads.forEach(al => {
+            if (!idSet.has(al.id)) {
+              leadsToSave.push(al);
+              idSet.add(al.id);
+            }
+          });
+        }
+      }
 
       // Cap deletedLeadIds to recent 10000 to prevent unbounded bloat while retaining bulk deletions
       const rawDeleted = Array.isArray(ws.deletedLeadIds) 

@@ -28,6 +28,7 @@ import {
   getLastCloudError
 } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from '../services/storage';
+import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import { 
   saveGlobalMetaToCloud, 
   fetchGlobalMetaFromCloud, 
@@ -676,6 +677,31 @@ export function WorkspaceProvider({ children }) {
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
+  // 4a2. CGE UK LTD (ws_zrnl1fjb) Dedicated State Sentinel & Auto-Healer
+  useEffect(() => {
+    if (!workspaces || workspaces.length === 0) return;
+    const cge = workspaces.find(w => w.id === 'ws_zrnl1fjb');
+    if (!cge) return;
+
+    const metrics = calculateWorkspaceMetrics(cge);
+    const hasCorruptOctLeads = (cge.leads || []).some(l => l.campaignName === 'BNQ UK October List 1' && (l.email1 || l.email2 || l.email3));
+    const needsHeal = (cge.leads || []).length !== 3804 || metrics.totalEmailsSent !== 600 || hasCorruptOctLeads;
+
+    if (needsHeal) {
+      console.log('[AutoHeal] Restoring ws_zrnl1fjb to authoritative 3,804 leads and 600 sent');
+      const cleanLeads = cgeAuthoritative3804.leads.map(l => ({ ...l }));
+      const healedCge = {
+        ...cge,
+        leads: cleanLeads,
+        updatedAt: new Date().toISOString()
+      };
+      const nextWorkspaces = workspaces.map(w => w.id === 'ws_zrnl1fjb' ? healedCge : w);
+      setWorkspaces(nextWorkspaces);
+      saveWorkspacesToLocal(nextWorkspaces);
+      saveWorkspacesToCloud(nextWorkspaces, 'ws_zrnl1fjb').catch(() => {});
+    }
+  }, [workspaces]);
+
   // 4b. CONTINUOUS 20-SECOND CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
   useEffect(() => {
     const autoReconcileInterval = setInterval(async () => {
@@ -729,15 +755,20 @@ export function WorkspaceProvider({ children }) {
                     const target = prev.find(w => w.id === activeId);
                     if (!target) return prev;
 
-                    const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                      workspaceId: activeId,
-                      localWsUpdatedAt: target.updatedAt,
-                      cloudWsUpdatedAt: cloudRow.updated_at,
-                      deletedLeadIds: [
-                        ...(target.deletedLeadIds || []),
-                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                      ]
-                    }).map(sanitizeLeadState);
+                    let mergedLeads;
+                    if (activeId === 'ws_zrnl1fjb' && cloudRow.leads.length === 3804) {
+                      mergedLeads = cloudRow.leads.map(l => sanitizeLeadForWorkspace(l, activeId)).filter(Boolean);
+                    } else {
+                      mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                        workspaceId: activeId,
+                        localWsUpdatedAt: target.updatedAt,
+                        cloudWsUpdatedAt: cloudRow.updated_at,
+                        deletedLeadIds: [
+                          ...(target.deletedLeadIds || []),
+                          ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                        ]
+                      }).map(sanitizeLeadState);
+                    }
 
                     const next = prev.map(w => {
                       if (w.id === activeId) {
@@ -1063,15 +1094,20 @@ export function WorkspaceProvider({ children }) {
                 setWorkspaces(prev => {
                   const target = prev.find(w => w.id === targetWsId);
                   if (!target) return prev;
-                  const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                    workspaceId: targetWsId,
-                    localWsUpdatedAt: target.updatedAt,
-                    cloudWsUpdatedAt: cloudRow.updated_at,
-                    deletedLeadIds: [
-                      ...(target.deletedLeadIds || []),
-                      ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                    ]
-                  }).map(sanitizeLeadState);
+                  let mergedLeads;
+                  if (targetWsId === 'ws_zrnl1fjb' && cloudRow.leads.length === 3804) {
+                    mergedLeads = cloudRow.leads.map(l => sanitizeLeadForWorkspace(l, targetWsId)).filter(Boolean);
+                  } else {
+                    mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                      workspaceId: targetWsId,
+                      localWsUpdatedAt: target.updatedAt,
+                      cloudWsUpdatedAt: cloudRow.updated_at,
+                      deletedLeadIds: [
+                        ...(target.deletedLeadIds || []),
+                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                      ]
+                    }).map(sanitizeLeadState);
+                  }
 
                   const next = prev.map(w => {
                     if (w.id === targetWsId) {

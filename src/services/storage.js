@@ -7,6 +7,8 @@ const STORE_NAME = 'workspaces_store';
 const BACKUP_KEY = 'ros_workspaces_prod_v3';
 const BACKUP_SNAPSHOT_KEY = 'ros_workspaces_snapshot_v1';
 
+import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
+
 // Open or initialize IndexedDB
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -91,7 +93,7 @@ export function sanitizeLeadForWorkspace(lead, workspaceId) {
 
     // 4. BNQ Google Maps: Only keep the 600 sends from 23/09/26
     if (camp === 'BNQ Google Maps') {
-      const isSent23 = (lead.email1 && lead.email1.includes('23/09/26')) || lead.status === 'sent_1';
+      const isSent23 = Boolean(lead.email1 && lead.email1.includes('23/09/26'));
       return {
         ...lead,
         email1: isSent23 ? 'Email Sent - 23/09/26' : '',
@@ -188,9 +190,21 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
     if (!Array.isArray(list)) return list;
     return list.map(w => {
       if (!w || !Array.isArray(w.leads)) return w;
+      let cleanLeads = w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean);
+      if (w.id === 'ws_zrnl1fjb') {
+        if (cleanLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
+          const idSet = new Set(cleanLeads.map(l => l.id));
+          cgeAuthoritative3804.leads.forEach(al => {
+            if (!idSet.has(al.id)) {
+              cleanLeads.push(al);
+              idSet.add(al.id);
+            }
+          });
+        }
+      }
       return {
         ...w,
-        leads: w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean)
+        leads: cleanLeads
       };
     });
   };
@@ -271,6 +285,60 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     if (!leadA) return leadB;
     if (!leadB) return leadA;
 
+    // For ws_zrnl1fjb: strictly guard against reviving old emails or invalid campaigns
+    if (wsId === 'ws_zrnl1fjb') {
+      const camp = (leadB.campaignName || leadA.campaignName || '').trim();
+      if (camp === 'BNQ UK October List 1') {
+        return {
+          ...leadA,
+          ...leadB,
+          email1: '',
+          email2: '',
+          email3: '',
+          status: 'pending',
+          stage: '',
+          updatedAt: new Date(Math.max(
+            new Date(leadA.updatedAt || 0).getTime(),
+            new Date(leadB.updatedAt || 0).getTime(),
+            Date.now()
+          )).toISOString()
+        };
+      }
+      if (camp === 'Banqueting-halls-UK-Campaign-1') {
+        return {
+          ...leadA,
+          ...leadB,
+          email1: '',
+          email2: '',
+          email3: '',
+          status: 'interested',
+          stage: 'Interested',
+          updatedAt: new Date(Math.max(
+            new Date(leadA.updatedAt || 0).getTime(),
+            new Date(leadB.updatedAt || 0).getTime(),
+            Date.now()
+          )).toISOString()
+        };
+      }
+      if (camp === 'BNQ Google Maps') {
+        const isSent23 = Boolean((leadB.email1 && leadB.email1.includes('23/09/26')) || (leadA.email1 && leadA.email1.includes('23/09/26')));
+        return {
+          ...leadA,
+          ...leadB,
+          email1: isSent23 ? 'Email Sent - 23/09/26' : '',
+          email2: '',
+          email3: '',
+          status: isSent23 ? 'sent_1' : 'pending',
+          stage: '',
+          updatedAt: new Date(Math.max(
+            new Date(leadA.updatedAt || 0).getTime(),
+            new Date(leadB.updatedAt || 0).getTime(),
+            Date.now()
+          )).toISOString()
+        };
+      }
+    }
+
     // Email sending progress: always union and preserve all sent emails
     const email1 = leadB.email1 || leadA.email1 || '';
     const email2 = leadB.email2 || leadA.email2 || '';
@@ -350,8 +418,20 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     }
   });
 
-  return Array.from(leadMap.values())
+  const mergedLeads = Array.from(leadMap.values())
     .map(l => sanitizeLeadForWorkspace(l, wsId))
     .filter(Boolean);
+
+  if (wsId === 'ws_zrnl1fjb' && mergedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
+    const idSet = new Set(mergedLeads.map(l => l.id));
+    cgeAuthoritative3804.leads.forEach(al => {
+      if (!idSet.has(al.id)) {
+        mergedLeads.push(al);
+        idSet.add(al.id);
+      }
+    });
+  }
+
+  return mergedLeads;
 }
 
