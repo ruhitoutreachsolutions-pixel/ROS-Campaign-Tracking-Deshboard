@@ -50,23 +50,66 @@ export const PERMANENTLY_PURGED_CAMPAIGNS = {
   ])
 };
 
-export function isLeadPermanentlyPurged(lead, workspaceId) {
-  if (!lead) return true;
+export function sanitizeLeadForWorkspace(lead, workspaceId) {
+  if (!lead) return null;
   const wsId = workspaceId || lead.workspaceId;
-  if (wsId === 'ws_zrnl1fjb' || !wsId) {
+
+  // STRICT PURGE & SANITIZATION FOR CGE UK LTD (ws_zrnl1fjb) ONLY
+  if (wsId === 'ws_zrnl1fjb') {
     const camp = (lead.campaignName || '').trim();
-    if (PERMANENTLY_PURGED_CAMPAIGNS['ws_zrnl1fjb'].has(camp)) {
-      return true;
+
+    // 1. Only BNQ Google Maps, BNQ UK October List 1, and Banqueting-halls-UK-Campaign-1 are allowed
+    if (camp !== 'BNQ Google Maps' && camp !== 'BNQ UK October List 1' && camp !== 'Banqueting-halls-UK-Campaign-1') {
+      return null;
     }
-    // For CGE UK LTD Banqueting-halls-UK-Campaign-1, all leads were deleted EXCEPT the 10 interested ones
+
+    // 2. Banqueting-halls-UK-Campaign-1: ONLY the 10 interested leads
     if (camp === 'Banqueting-halls-UK-Campaign-1') {
-      const stage = (lead.stage || '').toLowerCase().trim();
-      const status = (lead.status || '').toLowerCase().trim();
-      const isInterested = stage.includes('interest') || status === 'interested';
-      if (!isInterested) return true;
+      const s = String(lead.stage || '') + ' ' + String(lead.status || '');
+      if (!s.toLowerCase().includes('interest')) return null;
+      return {
+        ...lead,
+        email1: '',
+        email2: '',
+        email3: '',
+        status: 'interested',
+        stage: 'Interested'
+      };
+    }
+
+    // 3. BNQ UK October List 1: Brand new pending outreach pool (no sent emails)
+    if (camp === 'BNQ UK October List 1') {
+      return {
+        ...lead,
+        email1: '',
+        email2: '',
+        email3: '',
+        status: 'pending',
+        stage: ''
+      };
+    }
+
+    // 4. BNQ Google Maps: Only keep the 600 sends from 23/09/26
+    if (camp === 'BNQ Google Maps') {
+      const isSent23 = (lead.email1 && lead.email1.includes('23/09/26')) || lead.status === 'sent_1';
+      return {
+        ...lead,
+        email1: isSent23 ? 'Email Sent - 23/09/26' : '',
+        email2: '',
+        email3: '',
+        status: isSent23 ? 'sent_1' : 'pending',
+        stage: ''
+      };
     }
   }
-  return false;
+
+  // ALL OTHER WORKSPACES: Return lead completely untouched!
+  return lead;
+}
+
+export function isLeadPermanentlyPurged(lead, workspaceId) {
+  if (!lead) return true;
+  return sanitizeLeadForWorkspace(lead, workspaceId) === null;
 }
 
 // Save workspaces to IndexedDB & localStorage safely
@@ -77,7 +120,7 @@ export async function saveWorkspacesToLocal(workspaces) {
     if (!w || !Array.isArray(w.leads)) return w;
     return {
       ...w,
-      leads: w.leads.filter(l => !isLeadPermanentlyPurged(l, w.id))
+      leads: w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean)
     };
   });
 
@@ -147,7 +190,7 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
       if (!w || !Array.isArray(w.leads)) return w;
       return {
         ...w,
-        leads: w.leads.filter(l => !isLeadPermanentlyPurged(l, w.id))
+        leads: w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean)
       };
     });
   };
@@ -209,11 +252,14 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
   const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(isValid);
   const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(isValid);
 
-  if (validLocal.length === 0) return validCloud;
-  if (validCloud.length === 0) return validLocal;
+  if (validLocal.length === 0) {
+    return validCloud.map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean);
+  }
+  if (validCloud.length === 0) {
+    return validLocal.map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean);
+  }
 
   const leadMap = new Map();
-  const emailToIdMap = new Map();
 
   const isAdvancedStage = (lead) => {
     if (!lead) return false;
@@ -284,41 +330,28 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     };
   };
 
-  // 1. Populate map with local leads
+  // 1. Populate map with local leads by exact unique ID (or fallback to email ONLY if lead has no ID)
   validLocal.forEach(lead => {
     const key = lead.id ? String(lead.id) : (lead.email ? `email:${lead.email.toLowerCase().trim()}` : null);
     if (key) {
       leadMap.set(key, lead);
-      if (lead.email) {
-        emailToIdMap.set(lead.email.toLowerCase().trim(), key);
-      }
     }
   });
 
-  // 2. Merge cloud leads non-destructively
+  // 2. Merge cloud leads non-destructively by exact unique ID (or fallback to email ONLY if lead has no ID)
   validCloud.forEach(cLead => {
-    let key = cLead.id ? String(cLead.id) : null;
-    const emailKey = cLead.email ? cLead.email.toLowerCase().trim() : null;
-
-    if ((!key || !leadMap.has(key)) && emailKey && emailToIdMap.has(emailKey)) {
-      key = emailToIdMap.get(emailKey);
-    }
-
-    if (!key) {
-      key = emailKey ? `email:${emailKey}` : `gen_${Math.random()}`;
-    }
+    const key = cLead.id ? String(cLead.id) : (cLead.email ? `email:${cLead.email.toLowerCase().trim()}` : `gen_${Math.random()}`);
 
     if (leadMap.has(key)) {
       const existing = leadMap.get(key);
       leadMap.set(key, mergeTwoLeads(existing, cLead));
     } else {
       leadMap.set(key, cLead);
-      if (emailKey) {
-        emailToIdMap.set(emailKey, key);
-      }
     }
   });
 
-  return Array.from(leadMap.values());
+  return Array.from(leadMap.values())
+    .map(l => sanitizeLeadForWorkspace(l, wsId))
+    .filter(Boolean);
 }
 

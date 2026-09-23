@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads, isLeadPermanentlyPurged } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from './storage';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
@@ -191,7 +191,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             ? item.sequence_config.deletedLeadIds 
             : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
           activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
-          leads: Array.isArray(leads) ? leads.filter(l => !isLeadPermanentlyPurged(l, item.id)) : [],
+          leads: Array.isArray(leads) ? leads.map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean) : [],
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString()
         };
@@ -275,7 +275,7 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
         console.warn('Supabase safety pre-check warning:', guardErr);
       }
 
-      leadsToSave = (leadsToSave || []).filter(l => !isLeadPermanentlyPurged(l, ws.id));
+      leadsToSave = (leadsToSave || []).map(l => sanitizeLeadForWorkspace(l, ws.id)).filter(Boolean);
 
       // Cap deletedLeadIds to recent 10000 to prevent unbounded bloat while retaining bulk deletions
       const rawDeleted = Array.isArray(ws.deletedLeadIds) 

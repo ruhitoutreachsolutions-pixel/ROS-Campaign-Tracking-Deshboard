@@ -23,9 +23,17 @@ export function extractDateFromStatus(statusStr) {
   // 1. Matches DD/MM/YY or DD/MM/YYYY or D/M/YY
   const slashMatch = statusStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
   if (slashMatch) {
-    const dd = slashMatch[1].padStart(2, '0');
-    const mm = slashMatch[2].padStart(2, '0');
+    let p1 = slashMatch[1];
+    let p2 = slashMatch[2];
     const yy = slashMatch[3].length === 4 ? slashMatch[3].slice(-2) : slashMatch[3].padStart(2, '0');
+    // If MM/DD format where second part is day > 12
+    if (Number(p1) <= 12 && Number(p2) > 12) {
+      const temp = p1;
+      p1 = p2;
+      p2 = temp;
+    }
+    const dd = p1.padStart(2, '0');
+    const mm = p2.padStart(2, '0');
     return `${dd}/${mm}/${yy}`;
   }
 
@@ -465,18 +473,29 @@ export function calculateWorkspaceMetrics(workspace) {
     }
   });
 
-  // Calculate Last Active Date (excluding today if today is 0)
-  const sortedDates = Object.keys(dateCounts).sort((a, b) => {
-    const parse = (s) => {
-      const parts = s.split('/');
+  // Calculate Last Active Date (excluding future dates and today if today is 0)
+  const nowMs = Date.now();
+  const sortedDates = Object.keys(dateCounts)
+    .filter(d => {
+      const parts = d.split('/');
       if (parts.length === 3) {
         const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
-        return new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+        const dt = new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+        return dt <= nowMs + 86400000;
       }
-      return 0;
-    };
-    return parse(b) - parse(a);
-  });
+      return true;
+    })
+    .sort((a, b) => {
+      const parse = (s) => {
+        const parts = s.split('/');
+        if (parts.length === 3) {
+          const year = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+          return new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+        }
+        return 0;
+      };
+      return parse(b) - parse(a);
+    });
 
   const lastActiveDate = sortedDates.find(d => d !== todayStr) || sortedDates[0] || null;
   const lastDaySent = lastActiveDate ? (dateCounts[lastActiveDate] || 0) : 0;

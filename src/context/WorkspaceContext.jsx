@@ -27,7 +27,7 @@ import {
   saveWarriorsToSupabase,
   getLastCloudError
 } from '../services/db';
-import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged } from '../services/storage';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from '../services/storage';
 import { 
   saveGlobalMetaToCloud, 
   fetchGlobalMetaFromCloud, 
@@ -172,7 +172,8 @@ export function sanitizeWorkspaceLeads(workspacesList) {
     return {
       ...ws,
       leads: ws.leads
-        .filter(l => !isLeadPermanentlyPurged(l, ws.id))
+        .map(l => sanitizeLeadForWorkspace(l, ws.id))
+        .filter(Boolean)
         .map(sanitizeLeadState)
     };
   });
