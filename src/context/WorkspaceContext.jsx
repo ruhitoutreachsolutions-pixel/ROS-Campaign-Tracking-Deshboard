@@ -660,7 +660,7 @@ export function WorkspaceProvider({ children }) {
     }
 
     const cloudTimer = setTimeout(() => {
-      saveWorkspacesToCloud(workspaces).catch(err => {
+      saveWorkspacesToCloud(workspaces, currentWorkspaceId).catch(err => {
         console.warn('Auto cloud sync notice:', err);
       });
     }, 2500);
@@ -1360,14 +1360,15 @@ export function WorkspaceProvider({ children }) {
     }
 
     try {
-      const ok = await saveWorkspacesToCloud(workspaces);
+      const targetId = currentWorkspace?.id || currentWorkspaceId;
+      const ok = await saveWorkspacesToCloud(workspaces, targetId);
       if (ok) {
-        const totalLeads = workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
+        const totalLeads = currentWorkspace?.leads?.length || 0;
         return { 
           success: true, 
           connected: true, 
           count: totalLeads,
-          message: `Successfully synced ${workspaces.length} workspace(s) and ${totalLeads} leads to Cloud Database!`
+          message: `Successfully synced ${currentWorkspace?.name || 'workspace'} (${totalLeads} leads) to Cloud Database!`
         };
       }
       const errDetail = getLastCloudError();
@@ -1981,7 +1982,7 @@ export function WorkspaceProvider({ children }) {
         return w;
       });
       saveWorkspacesToLocal(next);
-      saveWorkspacesToCloud(next).catch(() => {});
+      saveWorkspacesToCloud(next, currentWorkspaceId).catch(() => {});
       return next;
     });
 
@@ -2050,7 +2051,7 @@ export function WorkspaceProvider({ children }) {
         return w;
       });
       saveWorkspacesToLocal(next);
-      saveWorkspacesToCloud(next).catch(() => {});
+      saveWorkspacesToCloud(next, currentWorkspaceId).catch(() => {});
       return next;
     });
 
@@ -2084,7 +2085,7 @@ export function WorkspaceProvider({ children }) {
         return w;
       });
       saveWorkspacesToLocal(next);
-      saveWorkspacesToCloud(next).catch(() => {});
+      saveWorkspacesToCloud(next, currentWorkspaceId).catch(() => {});
       return next;
     });
 
@@ -2116,7 +2117,7 @@ export function WorkspaceProvider({ children }) {
         return w;
       });
       saveWorkspacesToLocal(next);
-      saveWorkspacesToCloud(next).catch(() => {});
+      saveWorkspacesToCloud(next, currentWorkspaceId).catch(() => {});
       return next;
     });
 
@@ -3218,9 +3219,10 @@ export function WorkspaceProvider({ children }) {
   }
 
   // 16. Force Pull & Restore Authoritative Cloud Database
-  async function forceSyncFromCloud() {
+  async function forceSyncFromCloud(targetWsId = null) {
     try {
-      const cloudData = await fetchWorkspacesFromCloud(null);
+      const target = targetWsId || currentWorkspaceId;
+      const cloudData = await fetchWorkspacesFromCloud(workspaces, target);
       if (Array.isArray(cloudData) && cloudData.length > 0) {
         const deletedIds = getDeletedWorkspaceIds();
         const valid = sanitizeWorkspaceLeads(

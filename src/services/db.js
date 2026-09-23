@@ -220,6 +220,11 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
       // If a specific targetWorkspaceId was requested, only save that workspace
       if (targetWorkspaceId && ws.id !== targetWorkspaceId) continue;
 
+      // Skip massive historical archives (e.g. 5,000+ leads) during bulk saves to avoid statement timeouts
+      if (!targetWorkspaceId && ws.leads && ws.leads.length > 5000) {
+        continue;
+      }
+
       // Fast timestamp check (WITHOUT downloading the heavy leads column!)
       try {
         const { data: existingRow, error: checkErr } = await supabase
@@ -264,14 +269,24 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
         updated_at: ws.updatedAt || new Date().toISOString()
       };
 
-      const { error } = await supabase
-        .from('workspaces')
-        .upsert(payload, { onConflict: 'id' });
+      try {
+        const { error } = await supabase
+          .from('workspaces')
+          .upsert(payload, { onConflict: 'id' });
 
-      if (error) {
-        console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
-        hasError = true;
-        lastCloudErrorMsg = error.message || error.details || String(error);
+        if (error) {
+          console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
+          lastCloudErrorMsg = error.message || error.details || String(error);
+          if (!targetWorkspaceId || ws.id === targetWorkspaceId) {
+            hasError = true;
+          }
+        }
+      } catch (upsertErr) {
+        console.warn(`Upsert exception for ${ws.id}:`, upsertErr);
+        lastCloudErrorMsg = upsertErr.message || String(upsertErr);
+        if (!targetWorkspaceId || ws.id === targetWorkspaceId) {
+          hasError = true;
+        }
       }
     }
     return !hasError;
