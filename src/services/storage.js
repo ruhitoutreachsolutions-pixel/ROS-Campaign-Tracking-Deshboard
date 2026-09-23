@@ -40,9 +40,46 @@ function openDB() {
   });
 }
 
+// Historical deleted campaigns that must never be merged or resurrected from stale local caches
+export const PERMANENTLY_PURGED_CAMPAIGNS = {
+  'ws_zrnl1fjb': new Set([
+    'Banqueting-halls-UK-Campaign-2',
+    'Banqueting-halls-UK-Campaign-3',
+    'Banqueting-halls-UK-Campaign-4',
+    'Cold Outreach Campaign (HTML Email Design)'
+  ])
+};
+
+export function isLeadPermanentlyPurged(lead, workspaceId) {
+  if (!lead) return true;
+  const wsId = workspaceId || lead.workspaceId;
+  if (wsId === 'ws_zrnl1fjb' || !wsId) {
+    const camp = (lead.campaignName || '').trim();
+    if (PERMANENTLY_PURGED_CAMPAIGNS['ws_zrnl1fjb'].has(camp)) {
+      return true;
+    }
+    // For CGE UK LTD Banqueting-halls-UK-Campaign-1, all leads were deleted EXCEPT the 10 interested ones
+    if (camp === 'Banqueting-halls-UK-Campaign-1') {
+      const stage = (lead.stage || '').toLowerCase().trim();
+      const status = (lead.status || '').toLowerCase().trim();
+      const isInterested = stage.includes('interest') || status === 'interested';
+      if (!isInterested) return true;
+    }
+  }
+  return false;
+}
+
 // Save workspaces to IndexedDB & localStorage safely
 export async function saveWorkspacesToLocal(workspaces) {
   if (!workspaces || !Array.isArray(workspaces)) return false;
+
+  const sanitized = workspaces.map(w => {
+    if (!w || !Array.isArray(w.leads)) return w;
+    return {
+      ...w,
+      leads: w.leads.filter(l => !isLeadPermanentlyPurged(l, w.id))
+    };
+  });
 
   const nowIso = new Date().toISOString();
   let idbSuccess = false;
@@ -55,15 +92,15 @@ export async function saveWorkspacesToLocal(workspaces) {
       const store = tx.objectStore(STORE_NAME);
       store.put({
         key: 'workspaces_data',
-        data: workspaces,
+        data: sanitized,
         updatedAt: nowIso,
-        leadCount: workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)
+        leadCount: sanitized.reduce((acc, w) => acc + (w.leads?.length || 0), 0)
       });
 
       // Keep a rolling snapshot backup
       store.put({
         key: 'workspaces_backup',
-        data: workspaces,
+        data: sanitized,
         timestamp: nowIso
       });
 
@@ -81,13 +118,13 @@ export async function saveWorkspacesToLocal(workspaces) {
 
   // 2. Secondary Save to localStorage (with quota safety check)
   try {
-    const serialized = JSON.stringify(workspaces);
+    const serialized = JSON.stringify(sanitized);
     // If under 4.5MB, save to localStorage
     if (serialized.length < 4.5 * 1024 * 1024) {
       localStorage.setItem(BACKUP_KEY, serialized);
     } else {
       // If large, save lightweight metadata in localStorage
-      const lightWorkspaces = workspaces.map(w => ({
+      const lightWorkspaces = sanitized.map(w => ({
         ...w,
         leads: (w.leads || []).slice(0, 50) // only sample in localStorage to prevent quota error
       }));
@@ -103,6 +140,18 @@ export async function saveWorkspacesToLocal(workspaces) {
 
 // Load workspaces from IndexedDB (with localStorage and snapshot fallback)
 export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
+  // Helper to filter out any permanently purged leads from local loads
+  const cleanLoadedWorkspaces = (list) => {
+    if (!Array.isArray(list)) return list;
+    return list.map(w => {
+      if (!w || !Array.isArray(w.leads)) return w;
+      return {
+        ...w,
+        leads: w.leads.filter(l => !isLeadPermanentlyPurged(l, w.id))
+      };
+    });
+  };
+
   // 1. Try IndexedDB first (most complete and largest capacity)
   try {
     const db = await openDB();
@@ -117,7 +166,7 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
       });
 
       if (Array.isArray(result) && result.length > 0) {
-        return result;
+        return cleanLoadedWorkspaces(result);
       }
 
       // Try snapshot in IndexedDB
@@ -128,7 +177,7 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
       });
 
       if (Array.isArray(backupResult) && backupResult.length > 0) {
-        return backupResult;
+        return cleanLoadedWorkspaces(backupResult);
       }
     }
   } catch (err) {
@@ -141,7 +190,7 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return cleanLoadedWorkspaces(parsed);
       }
     }
   } catch (err) {
@@ -153,9 +202,12 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
 
 // Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation
 export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = {}) {
+  const wsId = options.workspaceId || 'ws_zrnl1fjb';
   const deletedSet = new Set(options.deletedLeadIds || []);
-  const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(l => l && (l.id || l.email) && !deletedSet.has(l.id));
-  const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(l => l && (l.id || l.email) && !deletedSet.has(l.id));
+  const isValid = (l) => l && (l.id || l.email) && !deletedSet.has(l.id) && !isLeadPermanentlyPurged(l, wsId);
+
+  const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(isValid);
+  const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(isValid);
 
   if (validLocal.length === 0) return validCloud;
   if (validCloud.length === 0) return validLocal;

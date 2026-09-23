@@ -56,8 +56,7 @@ export default function App() {
     setChatInteractiveToast,
     openChatWithContact,
     formSubmissions,
-    setActiveAdminTabRef,
-    restoreCgeAuthoritativeLeads
+    setActiveAdminTabRef
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');

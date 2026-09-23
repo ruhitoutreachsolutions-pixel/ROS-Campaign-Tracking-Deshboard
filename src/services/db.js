@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged } from './storage';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
@@ -153,6 +153,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             if (!leadErr && leadRow && Array.isArray(leadRow.leads)) {
               if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
                 leads = mergeWorkspaceLeads(localWs.leads, leadRow.leads, {
+                  workspaceId: item.id,
                   localWsUpdatedAt: localWs.updatedAt,
                   cloudWsUpdatedAt: item.updated_at,
                   deletedLeadIds: localWs.deletedLeadIds || []
@@ -190,7 +191,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             ? item.sequence_config.deletedLeadIds 
             : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
           activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
-          leads: Array.isArray(leads) ? leads : [],
+          leads: Array.isArray(leads) ? leads.filter(l => !isLeadPermanentlyPurged(l, item.id)) : [],
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString()
         };
@@ -247,15 +248,19 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
         if (!checkErr && existingRow) {
           const cloudTime = new Date(existingRow.updated_at || 0).getTime();
           const localTime = new Date(ws.updatedAt || 0).getTime();
+          const cleanCloudLeads = Array.isArray(existingRow.leads)
+            ? existingRow.leads.filter(l => !isLeadPermanentlyPurged(l, ws.id))
+            : [];
 
           // If bulk save and cloud already has newer/identical data and same/more leads, skip
-          if (!targetWorkspaceId && cloudTime >= localTime && Array.isArray(existingRow.leads) && existingRow.leads.length >= (ws.leads?.length || 0)) {
+          if (!targetWorkspaceId && cloudTime >= localTime && cleanCloudLeads.length >= (ws.leads?.length || 0)) {
             continue;
           }
 
           // If cloud has leads, merge local and cloud leads non-destructively
-          if (Array.isArray(existingRow.leads) && existingRow.leads.length > 0) {
-            leadsToSave = mergeWorkspaceLeads(ws.leads || [], existingRow.leads, {
+          if (cleanCloudLeads.length > 0) {
+            leadsToSave = mergeWorkspaceLeads(ws.leads || [], cleanCloudLeads, {
+              workspaceId: ws.id,
               localWsUpdatedAt: ws.updatedAt,
               cloudWsUpdatedAt: existingRow.updated_at,
               deletedLeadIds: [
@@ -270,11 +275,13 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
         console.warn('Supabase safety pre-check warning:', guardErr);
       }
 
-      // Cap deletedLeadIds to recent 50 to prevent accumulating 20,000+ IDs that bloat the row
+      leadsToSave = (leadsToSave || []).filter(l => !isLeadPermanentlyPurged(l, ws.id));
+
+      // Cap deletedLeadIds to recent 10000 to prevent unbounded bloat while retaining bulk deletions
       const rawDeleted = Array.isArray(ws.deletedLeadIds) 
         ? ws.deletedLeadIds 
         : (ws.sequenceConfig?.deletedLeadIds || []);
-      const cappedDeleted = rawDeleted.slice(-50);
+      const cappedDeleted = rawDeleted.slice(-10000);
 
       const payload = {
         id: ws.id,

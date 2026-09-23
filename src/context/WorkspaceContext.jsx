@@ -27,7 +27,7 @@ import {
   saveWarriorsToSupabase,
   getLastCloudError
 } from '../services/db';
-import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads } from '../services/storage';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged } from '../services/storage';
 import { 
   saveGlobalMetaToCloud, 
   fetchGlobalMetaFromCloud, 
@@ -171,7 +171,9 @@ export function sanitizeWorkspaceLeads(workspacesList) {
     if (!ws || !Array.isArray(ws.leads)) return ws;
     return {
       ...ws,
-      leads: ws.leads.map(sanitizeLeadState)
+      leads: ws.leads
+        .filter(l => !isLeadPermanentlyPurged(l, ws.id))
+        .map(sanitizeLeadState)
     };
   });
 }
@@ -524,6 +526,7 @@ export function WorkspaceProvider({ children }) {
 
               // SMART LEAD-LEVEL MERGE WITH AUTHORITATIVE CLOUD RECONCILIATION:
               const rawMergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
+                workspaceId: localWs.id,
                 localWsUpdatedAt: localWs.updatedAt,
                 cloudWsUpdatedAt: cloudWs.updatedAt,
                 deletedLeadIds: [
@@ -726,6 +729,7 @@ export function WorkspaceProvider({ children }) {
                     if (!target) return prev;
 
                     const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                      workspaceId: activeId,
                       localWsUpdatedAt: target.updatedAt,
                       cloudWsUpdatedAt: cloudRow.updated_at,
                       deletedLeadIds: [
@@ -1025,6 +1029,7 @@ export function WorkspaceProvider({ children }) {
           const next = prev.map(w => {
             if (w.id === targetWsId) {
               const mergedLeads = mergeWorkspaceLeads(w.leads || [], event.leads, {
+                workspaceId: targetWsId,
                 localWsUpdatedAt: w.updatedAt,
                 cloudWsUpdatedAt: event.updatedAt,
                 deletedLeadIds: w.deletedLeadIds || []
@@ -1058,6 +1063,7 @@ export function WorkspaceProvider({ children }) {
                   const target = prev.find(w => w.id === targetWsId);
                   if (!target) return prev;
                   const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                    workspaceId: targetWsId,
                     localWsUpdatedAt: target.updatedAt,
                     cloudWsUpdatedAt: cloudRow.updated_at,
                     deletedLeadIds: [
@@ -1487,6 +1493,7 @@ export function WorkspaceProvider({ children }) {
               if (!target) return prev;
 
               const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                workspaceId: targetId,
                 localWsUpdatedAt: target.updatedAt,
                 cloudWsUpdatedAt: cloudRow.updated_at,
                 deletedLeadIds: [
@@ -2244,7 +2251,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId])).slice(-100);
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId])).slice(-10000);
           return {
             ...w,
             leads: (w.leads || []).filter(l => l.id !== leadId),
@@ -2276,7 +2283,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds])).slice(-100);
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds])).slice(-10000);
           return {
             ...w,
             leads: (w.leads || []).filter(l => !delSet.has(l.id)),
@@ -3414,66 +3421,6 @@ export function WorkspaceProvider({ children }) {
     }
   }
 
-  // 17. Direct Instant Restore of CGE UK LTD 9,907 Authoritative Leads
-  async function restoreCgeAuthoritativeLeads() {
-    try {
-      const cgeModule = await import('../data/cgeLeadsBackup.json');
-      const leads = cgeModule.default || cgeModule;
-      if (Array.isArray(leads) && leads.length > 0) {
-        setWorkspaces(prev => {
-          const exists = prev.some(w => w.id === 'ws_zrnl1fjb');
-          let next;
-          if (exists) {
-            next = prev.map(w => {
-              if (w.id === 'ws_zrnl1fjb') {
-                return {
-                  ...w,
-                  leads: leads,
-                  updatedAt: '2026-09-22T12:00:00.000Z'
-                };
-              }
-              return w;
-            });
-          } else {
-            next = [
-              ...prev,
-              {
-                id: 'ws_zrnl1fjb',
-                name: 'CGE UK LTD',
-                clientName: 'CGE UK LTD',
-                clientEmail: 'contact@cgeuk.com',
-                campaignName: 'Banqueting-halls-UK-Campaign-1',
-                activeSendingAccount: 'hello@cgeenergy.co.uk',
-                sendingAccounts: ['hello@cgeenergy.co.uk', 's.hossen@getcge.co.uk'],
-                clientCredentials: { username: 'cgeuk', password: 'client2026' },
-                sequenceConfig: {
-                  email1Name: 'Initial Outreach',
-                  email2Name: 'Follow-up 1 (Value Add)',
-                  email3Name: 'Follow-up 2 (Breakup / Case Study)',
-                  daysBetween1and2: 3,
-                  daysBetween2and3: 4
-                },
-                activityLog: [],
-                leads: leads,
-                createdAt: '2026-09-14T19:09:27.088Z',
-                updatedAt: '2026-09-22T12:00:00.000Z'
-              }
-            ];
-          }
-          saveWorkspacesToLocal(next);
-          saveWorkspacesToCloud(next).catch(() => {});
-          return next;
-        });
-        isCloudSyncedRef.current = true;
-        return { success: true, count: leads.length, message: `Successfully restored ${leads.length} authoritative leads for CGE UK LTD!` };
-      }
-      return { success: false, message: 'Could not load backup dataset.' };
-    } catch (err) {
-      console.error('Failed to restore CGE authoritative leads:', err);
-      return { success: false, message: err.message };
-    }
-  }
-
   const value = {
     workspaces,
     currentWorkspaceId,
@@ -3589,8 +3536,7 @@ export function WorkspaceProvider({ children }) {
     saveSupabaseConfig,
     syncAllWorkspacesToCloud,
     restorePreviousBackup,
-    forceSyncFromCloud,
-    restoreCgeAuthoritativeLeads
+    forceSyncFromCloud
   };
 
   return (
