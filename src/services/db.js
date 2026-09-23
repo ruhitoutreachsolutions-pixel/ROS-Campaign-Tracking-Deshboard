@@ -96,8 +96,8 @@ function getLocalDeletedIds() {
   return [];
 }
 
-// 2. Fetch all workspaces and their thousands of leads from Supabase Cloud Database
-export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
+// 2. Fetch all workspaces from Supabase Cloud Database (Lightweight & Scalable)
+export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null) {
   const supabase = getSupabaseClient();
   if (!supabase) {
     lastCloudErrorMsg = 'Supabase client is not connected or anon key is missing.';
@@ -105,9 +105,11 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
   }
 
   try {
+    // Light query: Fetch workspace metadata (WITHOUT the heavy leads column)
+    // This reduces the bulk query size from 30MB down to ~20KB, preventing statement timeouts.
     const { data, error } = await supabase
       .from('workspaces')
-      .select('*')
+      .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, sequence_config, activity_log, created_at, updated_at')
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -126,28 +128,65 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = []) {
         !deletedIds.includes(item.id)
       );
 
-      return clientWorkspaces.map(item => ({
-        id: item.id,
-        name: item.name,
-        clientName: item.client_name || item.name,
-        clientEmail: item.client_email || '',
-        campaignName: item.campaign_name || 'Care Campaign',
-        activeSendingAccount: item.active_sending_account || '',
-        sendingAccounts: Array.isArray(item.sending_accounts) ? item.sending_accounts : (typeof item.sending_accounts === 'string' ? JSON.parse(item.sending_accounts) : [item.active_sending_account]),
-        clientCredentials: typeof item.client_credentials === 'object' && item.client_credentials !== null 
-          ? item.client_credentials 
-          : (typeof item.client_credentials === 'string' ? JSON.parse(item.client_credentials) : { username: item.username || item.name, password: item.password || 'client2026' }),
-        sequenceConfig: typeof item.sequence_config === 'object' && item.sequence_config !== null
-          ? item.sequence_config
-          : (typeof item.sequence_config === 'string' ? JSON.parse(item.sequence_config) : {}),
-        deletedLeadIds: Array.isArray(item.sequence_config?.deletedLeadIds) 
-          ? item.sequence_config.deletedLeadIds 
-          : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
-        activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
-        leads: Array.isArray(item.leads) ? item.leads : (typeof item.leads === 'string' ? JSON.parse(item.leads) : []),
-        createdAt: item.created_at || new Date().toISOString().split('T')[0],
-        updatedAt: item.updated_at || item.created_at || new Date().toISOString()
+      // Resolve leads for each workspace safely and fast:
+      // If local already has leads and local updatedAt is up-to-date, reuse local leads.
+      // Only fetch leads individually from cloud for the target workspace, or if cloud has newer updates.
+      const workspacesWithLeads = await Promise.all(clientWorkspaces.map(async (item) => {
+        const localWs = fallbackWorkspaces.find(w => w.id === item.id);
+        const cloudTime = new Date(item.updated_at || item.created_at || 0).getTime();
+        const localTime = new Date(localWs?.updatedAt || 0).getTime();
+
+        let leads = [];
+        const isTarget = targetWorkspaceId && targetWorkspaceId === item.id;
+        const needsCloudLeads = isTarget || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
+
+        if (needsCloudLeads) {
+          try {
+            const { data: leadRow, error: leadErr } = await supabase
+              .from('workspaces')
+              .select('id, leads')
+              .eq('id', item.id)
+              .maybeSingle();
+
+            if (!leadErr && leadRow && Array.isArray(leadRow.leads)) {
+              leads = leadRow.leads;
+            } else if (localWs && Array.isArray(localWs.leads)) {
+              leads = localWs.leads;
+            }
+          } catch (e) {
+            if (localWs && Array.isArray(localWs.leads)) {
+              leads = localWs.leads;
+            }
+          }
+        } else {
+          leads = localWs.leads;
+        }
+
+        return {
+          id: item.id,
+          name: item.name,
+          clientName: item.client_name || item.name,
+          clientEmail: item.client_email || '',
+          campaignName: item.campaign_name || 'Care Campaign',
+          activeSendingAccount: item.active_sending_account || '',
+          sendingAccounts: Array.isArray(item.sending_accounts) ? item.sending_accounts : (typeof item.sending_accounts === 'string' ? JSON.parse(item.sending_accounts) : [item.active_sending_account]),
+          clientCredentials: typeof item.client_credentials === 'object' && item.client_credentials !== null 
+            ? item.client_credentials 
+            : (typeof item.client_credentials === 'string' ? JSON.parse(item.client_credentials) : { username: item.username || item.name, password: item.password || 'client2026' }),
+          sequenceConfig: typeof item.sequence_config === 'object' && item.sequence_config !== null
+            ? item.sequence_config
+            : (typeof item.sequence_config === 'string' ? JSON.parse(item.sequence_config) : {}),
+          deletedLeadIds: Array.isArray(item.sequence_config?.deletedLeadIds) 
+            ? item.sequence_config.deletedLeadIds 
+            : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
+          activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
+          leads: Array.isArray(leads) ? leads : [],
+          createdAt: item.created_at || new Date().toISOString().split('T')[0],
+          updatedAt: item.updated_at || item.created_at || new Date().toISOString()
+        };
       }));
+
+      return workspacesWithLeads;
     }
   } catch (err) {
     console.warn('Cloud database fetch failed:', err);
@@ -162,8 +201,8 @@ export function getLastCloudError() {
   return lastCloudErrorMsg;
 }
 
-// 3. Save / Sync Workspaces (including all leads) to Supabase Cloud Database
-export async function saveWorkspacesToCloud(workspaces) {
+// 3. Save / Sync Workspaces (including leads) to Supabase Cloud Database (Targeted & Efficient)
+export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null) {
   if (!workspaces || !Array.isArray(workspaces) || workspaces.length === 0) return false;
 
   const supabase = getSupabaseClient();
@@ -174,39 +213,38 @@ export async function saveWorkspacesToCloud(workspaces) {
 
   try {
     let hasError = false;
-    let lastError = null;
 
     for (const ws of workspaces) {
       if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
 
-      // SAFETY GUARD: Never overwrite a cloud workspace that has thousands of authoritative leads (e.g. 9907) with stale truncated local state (e.g. 50)
+      // If a specific targetWorkspaceId was requested, only save that workspace
+      if (targetWorkspaceId && ws.id !== targetWorkspaceId) continue;
+
+      // Fast timestamp check (WITHOUT downloading the heavy leads column!)
       try {
-        const { data: existingRow } = await supabase
+        const { data: existingRow, error: checkErr } = await supabase
           .from('workspaces')
-          .select('id, updated_at, leads')
+          .select('id, updated_at')
           .eq('id', ws.id)
           .maybeSingle();
 
-        if (existingRow && Array.isArray(existingRow.leads)) {
-          const cloudLeadCount = existingRow.leads.length;
-          const localLeadCount = ws.leads?.length || 0;
-          const cloudTime = new Date(existingRow.updated_at || 0).getTime();
-          const localTime = new Date(ws.updatedAt || 0).getTime();
-
-          const explicitlyDeletedCount = ws.deletedLeadIds?.length || 0;
-          if (cloudLeadCount > 500 && localLeadCount < cloudLeadCount / 2 && explicitlyDeletedCount < (cloudLeadCount - localLeadCount)) {
-            console.warn(`[Supabase Guard] Protected cloud workspace ${ws.id} (${cloudLeadCount} leads in cloud) from being overwritten by stale local state (${localLeadCount} leads).`);
-            continue;
-          }
-
-          if (cloudTime > localTime && cloudLeadCount >= localLeadCount) {
-            console.warn(`[Supabase Guard] Cloud is newer (${existingRow.updated_at} vs ${ws.updatedAt}). Skipping overwrite of ${ws.id}.`);
+        if (!checkErr && existingRow && existingRow.updated_at && ws.updatedAt) {
+          const cloudTime = new Date(existingRow.updated_at).getTime();
+          const localTime = new Date(ws.updatedAt).getTime();
+          // If cloud has identical or newer timestamp, and this wasn't an explicit forced target save, skip to save bandwidth & prevent timeouts
+          if (!targetWorkspaceId && cloudTime >= localTime) {
             continue;
           }
         }
       } catch (guardErr) {
         console.warn('Supabase safety pre-check warning:', guardErr);
       }
+
+      // Cap deletedLeadIds to recent 50 to prevent accumulating 20,000+ IDs that bloat the row
+      const rawDeleted = Array.isArray(ws.deletedLeadIds) 
+        ? ws.deletedLeadIds 
+        : (ws.sequenceConfig?.deletedLeadIds || []);
+      const cappedDeleted = rawDeleted.slice(-50);
 
       const payload = {
         id: ws.id,
@@ -219,7 +257,7 @@ export async function saveWorkspacesToCloud(workspaces) {
         client_credentials: ws.clientCredentials || { username: ws.name, password: 'client2026' },
         sequence_config: {
           ...(ws.sequenceConfig || {}),
-          deletedLeadIds: Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || [])
+          deletedLeadIds: cappedDeleted
         },
         activity_log: ws.activityLog || [],
         leads: ws.leads || [],
@@ -233,7 +271,6 @@ export async function saveWorkspacesToCloud(workspaces) {
       if (error) {
         console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
         hasError = true;
-        lastError = error;
         lastCloudErrorMsg = error.message || error.details || String(error);
       }
     }
@@ -276,7 +313,7 @@ export async function fetchSystemMetaFromSupabase() {
   try {
     const { data, error } = await supabase
       .from('workspaces')
-      .select('*')
+      .select('id, client_credentials, sequence_config, activity_log, updated_at')
       .eq('id', SYSTEM_META_ID)
       .maybeSingle();
 
@@ -321,7 +358,7 @@ export async function saveSystemMetaToSupabase(meta) {
     // Fetch raw existing row to preserve client_credentials (chat, etc.) and sequence_config
     const { data: rawData } = await supabase
       .from('workspaces')
-      .select('*')
+      .select('id, client_credentials, sequence_config, activity_log')
       .eq('id', SYSTEM_META_ID)
       .maybeSingle();
 

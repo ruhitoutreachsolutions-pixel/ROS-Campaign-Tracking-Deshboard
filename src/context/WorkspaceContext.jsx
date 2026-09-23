@@ -479,18 +479,7 @@ export function WorkspaceProvider({ children }) {
             // If IndexedDB has more or equal leads, or newer updates, adopt it
             if (idbTotalLeads >= prevTotalLeads) {
               const deletedIds = getDeletedWorkspaceIds();
-              const valid = sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
-              
-              // AUTO-UPGRADE: If CGE UK LTD does not have the authentic 9,907 leads (e.g. stale 50 or corrupted 16k), upgrade immediately!
-              const cge = valid.find(w => w.id === 'ws_zrnl1fjb');
-              if (cge && (cge.leads?.length || 0) !== 9907) {
-                console.log('[Auto-Upgrade] CGE UK LTD has', cge.leads?.length, 'leads. Upgrading to authentic 9,907 leads...');
-                setTimeout(() => {
-                  restoreCgeAuthoritativeLeads();
-                }, 80);
-              }
-
-              return valid;
+              return sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
             }
             return prev;
           });
@@ -575,14 +564,6 @@ export function WorkspaceProvider({ children }) {
 
           // Save merged result safely to IndexedDB
           saveWorkspacesToLocal(cleanMerged);
-
-          // AUTO-UPGRADE: If CGE UK LTD does not have the authentic 9,907 leads, upgrade immediately!
-          const cgeMerged = cleanMerged.find(w => w.id === 'ws_zrnl1fjb');
-          if (cgeMerged && (cgeMerged.leads?.length || 0) !== 9907) {
-            setTimeout(() => {
-              restoreCgeAuthoritativeLeads();
-            }, 80);
-          }
 
           isCloudSyncedRef.current = true;
           return cleanMerged;
@@ -682,8 +663,7 @@ export function WorkspaceProvider({ children }) {
       saveWorkspacesToCloud(workspaces).catch(err => {
         console.warn('Auto cloud sync notice:', err);
       });
-      saveGlobalMetaToCloud({ workspaces }).catch(() => {});
-    }, 800);
+    }, 2500);
 
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
@@ -2093,7 +2073,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId]));
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId])).slice(-100);
           return {
             ...w,
             leads: (w.leads || []).filter(l => l.id !== leadId),
@@ -2125,7 +2105,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds]));
+          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds])).slice(-100);
           return {
             ...w,
             leads: (w.leads || []).filter(l => !delSet.has(l.id)),
@@ -3247,27 +3227,18 @@ export function WorkspaceProvider({ children }) {
           cloudData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
         );
         if (valid.length > 0) {
-          const cgeCloud = valid.find(w => w.id === 'ws_zrnl1fjb');
-          if (cgeCloud && (cgeCloud.leads?.length || 0) !== 9907) {
-            console.warn('Cloud CGE does not match 9,907 leads, merging authentic bundled backup...');
-            const cgeModule = await import('../data/cgeLeadsBackup.json');
-            const leads = cgeModule.default || cgeModule;
-            cgeCloud.leads = leads;
-            cgeCloud.updatedAt = '2026-09-22T12:00:00.000Z';
-          }
           setWorkspaces(valid);
           saveWorkspacesToLocal(valid);
-          saveWorkspacesToCloud(valid).catch(() => {});
           isCloudSyncedRef.current = true;
           const total = valid.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
           return { success: true, count: total, message: `Successfully pulled & restored ${total} leads cleanly from Cloud Database!` };
         }
       }
-      console.warn('Cloud fetch empty or failed, falling back to authentic recovery bundle...');
-      return await restoreCgeAuthoritativeLeads();
+      const err = getLastCloudError();
+      return { success: false, message: err ? `Cloud pull failed: ${err}` : 'No workspaces found in Cloud Database.' };
     } catch (err) {
-      console.warn('Cloud sync error, falling back to recovery bundle:', err);
-      return await restoreCgeAuthoritativeLeads();
+      console.warn('Cloud sync error:', err);
+      return { success: false, message: err.message };
     }
   }
 
