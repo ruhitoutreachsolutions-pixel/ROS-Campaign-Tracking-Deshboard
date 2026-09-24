@@ -642,6 +642,8 @@ export function WorkspaceProvider({ children }) {
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
               const localSent = (localWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
               const cloudSent = (cloudWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
+              const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
+              const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
               if (localSent > cloudSent || localTime > cloudTime) {
                 needsPushToCloud = true;
               }
