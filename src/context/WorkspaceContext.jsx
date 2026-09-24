@@ -51,6 +51,20 @@ import {
   fetchChatPermissionsFromCloud,
   saveChatPermissionsToCloud
 } from '../services/chatService';
+import {
+  getGoogleSheetsConfig,
+  saveGoogleSheetsConfig,
+  isGoogleSheetsConfigured,
+  getPendingSyncQueue,
+  clearPendingSyncQueue,
+  subscribeToQueueChange,
+  syncLeadsBatchToGoogleSheet,
+  syncFullWorkspaceToGoogleSheet,
+  pushAllToGoogleSheet,
+  verifyCredentialsWithGoogleSheet,
+  fetchWorkspaceLeadsFromGoogleSheet,
+  getLastSheetsSyncTime
+} from '../services/googleSheetsService';
 
 const WorkspaceContext = createContext(null);
 
@@ -464,6 +478,94 @@ export function WorkspaceProvider({ children }) {
   // 13. AUTO-SYNC STATUS & HEARTBEAT
   const [lastSyncedTime, setLastSyncedTime] = useState(new Date());
   const [isAutoSyncing, setIsAutoSyncing] = useState(false);
+
+  // 14. GOOGLE SHEETS LIVE REDUNDANCY & FAILOVER ENGINE
+  const [sheetsSyncStatus, setSheetsSyncStatus] = useState(() => {
+    if (typeof localStorage === 'undefined') return 'synced';
+    const q = getPendingSyncQueue();
+    if (q.length > 0) return 'out_of_sync';
+    return isGoogleSheetsConfigured() ? 'synced' : 'unconfigured';
+  });
+  const [pendingSheetsChangesCount, setPendingSheetsChangesCount] = useState(() => {
+    return getPendingSyncQueue().length;
+  });
+  const [sheetsSyncError, setSheetsSyncError] = useState(null);
+  const [showSheetsAlert, setShowSheetsAlert] = useState(false);
+  const [lastSheetsSyncTime, setLastSheetsSyncTimeState] = useState(() => getLastSheetsSyncTime());
+
+  // Subscribe to pending queue changes
+  useEffect(() => {
+    const unsub = subscribeToQueueChange((q) => {
+      const count = q.length;
+      setPendingSheetsChangesCount(count);
+      if (count > 0) {
+        setSheetsSyncStatus('out_of_sync');
+        setShowSheetsAlert(true);
+      } else {
+        setSheetsSyncStatus(isGoogleSheetsConfigured() ? 'synced' : 'unconfigured');
+        setShowSheetsAlert(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const refreshSheetsStatus = () => {
+    const q = getPendingSyncQueue();
+    const count = q.length;
+    setPendingSheetsChangesCount(count);
+    if (count > 0) {
+      setSheetsSyncStatus('out_of_sync');
+      setShowSheetsAlert(true);
+    } else {
+      setSheetsSyncStatus(isGoogleSheetsConfigured() ? 'synced' : 'unconfigured');
+      setShowSheetsAlert(false);
+    }
+    setLastSheetsSyncTimeState(getLastSheetsSyncTime());
+  };
+
+  async function pushPendingToGoogleSheet(targetWorkspaceId = null) {
+    if (!isGoogleSheetsConfigured()) {
+      return { success: false, message: 'Google Sheets Web App URL is not configured. Please open Sheet Settings.' };
+    }
+
+    setSheetsSyncStatus('syncing');
+    setSheetsSyncError(null);
+
+    try {
+      const wsToSync = targetWorkspaceId 
+        ? workspacesRef.current.filter(w => w.id === targetWorkspaceId)
+        : (currentWorkspace ? [currentWorkspace] : workspacesRef.current);
+
+      let anyError = null;
+      for (const ws of wsToSync) {
+        const res = await syncFullWorkspaceToGoogleSheet(ws);
+        if (!res.success) {
+          anyError = res.error || 'Failed to sync workspace to Google Sheet';
+        }
+      }
+
+      if (anyError) {
+        setSheetsSyncStatus('out_of_sync');
+        setSheetsSyncError(anyError);
+        return { success: false, message: anyError };
+      }
+
+      clearPendingSyncQueue();
+      setPendingSheetsChangesCount(0);
+      setSheetsSyncStatus('synced');
+      setShowSheetsAlert(false);
+      setLastSheetsSyncTimeState(new Date().toISOString());
+
+      return {
+        success: true,
+        message: `Successfully synchronized ${wsToSync.map(w => w.name).join(', ')} to Google Sheets!`
+      };
+    } catch (err) {
+      setSheetsSyncStatus('out_of_sync');
+      setSheetsSyncError(err.message);
+      return { success: false, message: err.message };
+    }
+  }
 
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
@@ -1803,6 +1905,56 @@ export function WorkspaceProvider({ children }) {
       return { success: true, role: 'client', workspaceId: matchedWs.id };
     }
 
+    // 4. SECONDARY REDUNDANCY: Check Google Sheets _Auth_Credentials if Supabase was unreachable or credentials were added to Google Sheet
+    try {
+      const sheetAuth = await verifyCredentialsWithGoogleSheet(usernameClean, pwdClean);
+      if (sheetAuth && sheetAuth.success && sheetAuth.user) {
+        const u = sheetAuth.user;
+        if (u.role === 'admin') {
+          const adminUser = {
+            role: 'admin',
+            username: u.username || 'admin',
+            name: u.name || 'Ruhit (Agency Admin)',
+            email: u.email || ADMIN_CREDENTIALS.email,
+            workspaceId: null
+          };
+          setCurrentUser(adminUser);
+          setAdminViewingAsClient(false);
+          return { success: true, role: 'admin' };
+        }
+
+        if (u.role === 'warrior') {
+          const warriorUser = {
+            ...u,
+            role: 'warrior'
+          };
+          setCurrentUser(warriorUser);
+          setAdminViewingAsClient(false);
+          if (u.allowedWorkspaceIds && u.allowedWorkspaceIds.length > 0) {
+            setCurrentWorkspaceId(u.allowedWorkspaceIds[0]);
+          }
+          logWarriorAction('login', `Logged in via Google Sheets Auth Redundancy`);
+          return { success: true, role: 'warrior', user: warriorUser };
+        }
+
+        if (u.role === 'client' || u.workspaceId) {
+          const clientUser = {
+            role: 'client',
+            username: u.username,
+            name: u.name,
+            email: u.email,
+            workspaceId: u.workspaceId
+          };
+          setCurrentUser(clientUser);
+          setCurrentWorkspaceId(u.workspaceId);
+          setAdminViewingAsClient(false);
+          return { success: true, role: 'client', workspaceId: u.workspaceId };
+        }
+      }
+    } catch (err) {
+      console.warn('Google Sheets fallback auth error:', err);
+    }
+
     return { success: false, message: 'Invalid username or password.' };
   }
 
@@ -1913,9 +2065,25 @@ export function WorkspaceProvider({ children }) {
       console.warn('Direct cloud save notice in applyBatchSentStatus:', err);
     });
 
-    logWarriorAction('batch_sent', `Marked ${leadIds.length} leads as Sent: ${assignedCampaign} (${seqLabel})`);
-
     const dispatchedLeads = updatedLeads.filter(l => leadIds.includes(l.id));
+
+    // Asynchronously push to Google Sheets secondary redundant store
+    syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, dispatchedLeads, newActivity).then(res => {
+      if (res && res.success) {
+        setSheetsSyncStatus('synced');
+        setSheetsSyncError(null);
+      } else if (res && !res.success) {
+        setSheetsSyncStatus('out_of_sync');
+        setShowSheetsAlert(true);
+        if (res.error) setSheetsSyncError(res.error);
+      }
+    }).catch(err => {
+      setSheetsSyncStatus('out_of_sync');
+      setShowSheetsAlert(true);
+      setSheetsSyncError(err.message);
+    });
+
+    logWarriorAction('batch_sent', `Marked ${leadIds.length} leads as Sent: ${assignedCampaign} (${seqLabel})`);
     broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
       workspaceId: currentWorkspaceId,
       leads: dispatchedLeads,
@@ -3639,7 +3807,18 @@ export function WorkspaceProvider({ children }) {
     saveSupabaseConfig,
     syncAllWorkspacesToCloud,
     restorePreviousBackup,
-    forceSyncFromCloud
+    forceSyncFromCloud,
+    // Google Sheets Dual-Cloud Redundancy
+    sheetsSyncStatus,
+    pendingSheetsChangesCount,
+    sheetsSyncError,
+    showSheetsAlert,
+    setShowSheetsAlert,
+    dismissSheetsAlert: () => setShowSheetsAlert(false),
+    lastSheetsSyncTime,
+    isGoogleSheetsConfigured,
+    pushPendingToGoogleSheet,
+    refreshSheetsStatus
   };
 
   return (

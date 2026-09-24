@@ -13,6 +13,8 @@ import WorkspaceModal from './components/WorkspaceModal';
 import LeadDetailModal from './components/LeadDetailModal';
 import ImportLeadsModal from './components/ImportLeadsModal';
 import CloudSyncModal from './components/CloudSyncModal';
+import GoogleSheetsSyncBanner from './components/GoogleSheetsSyncBanner';
+import GoogleSheetsSyncPopup from './components/GoogleSheetsSyncPopup';
 import EmailCopiesNotes from './components/EmailCopiesNotes';
 import PaymentsInvoices from './components/PaymentsInvoices';
 import TasksAndReports from './components/TasksAndReports';
@@ -56,7 +58,9 @@ export default function App() {
     setChatInteractiveToast,
     openChatWithContact,
     formSubmissions,
-    setActiveAdminTabRef
+    setActiveAdminTabRef,
+    showSheetsAlert,
+    setShowSheetsAlert
   } = useWorkspace();
 
   const [activeAdminTab, setActiveAdminTab] = useState('dispatcher');
@@ -64,6 +68,7 @@ export default function App() {
   const [workspaceEditMode, setWorkspaceEditMode] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
+  const [cloudSyncInitialTab, setCloudSyncInitialTab] = useState('supabase');
   const [selectedLeadForModal, setSelectedLeadForModal] = useState(null);
 
   // Unconditional Hooks (Must be called before any return statements)
@@ -250,10 +255,23 @@ export default function App() {
       <Navbar 
         onOpenNewWorkspace={handleOpenNewWorkspace}
         onOpenWorkspaceSettings={handleOpenWorkspaceSettings}
-        onOpenCloudSync={() => setCloudSyncModalOpen(true)}
+        onOpenCloudSync={(tab = 'supabase') => {
+          setCloudSyncInitialTab(tab);
+          setCloudSyncModalOpen(true);
+        }}
         onNavigateToTasks={() => setActiveAdminTab('tasks')}
         onNavigateToChat={() => setActiveAdminTab('chat')}
       />
+
+      {/* Google Sheets Dual-Cloud Redundancy & Out-of-Sync Banner (Admin & Warrior) */}
+      {effectiveRole !== 'client' && (
+        <GoogleSheetsSyncBanner 
+          onOpenSettings={() => {
+            setCloudSyncInitialTab('sheets');
+            setCloudSyncModalOpen(true);
+          }} 
+        />
+      )}
 
       {/* Admin Preview Banner when viewing client view */}
       {adminViewingAsClient && (
@@ -413,7 +431,21 @@ export default function App() {
       <CloudSyncModal
         isOpen={cloudSyncModalOpen}
         onClose={() => setCloudSyncModalOpen(false)}
+        initialTab={cloudSyncInitialTab}
       />
+
+      {/* Interactive Google Sheet Out-of-Sync Popup (Admin & Warrior) */}
+      {effectiveRole !== 'client' && (
+        <GoogleSheetsSyncPopup
+          isOpen={showSheetsAlert}
+          onClose={() => setShowSheetsAlert(false)}
+          onOpenSettings={() => {
+            setShowSheetsAlert(false);
+            setCloudSyncInitialTab('sheets');
+            setCloudSyncModalOpen(true);
+          }}
+        />
+      )}
 
       {/* Brand Footer */}
       <footer className="w-full border-t border-[#1E3A5F] bg-[#0A0A0A] py-6 sm:py-8 text-xs text-[#7B7B7B]">

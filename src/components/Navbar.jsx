@@ -20,7 +20,8 @@ import {
   Bell,
   Shield,
   CheckCircle2,
-  MessageSquare
+  MessageSquare,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync, onNavigateToTasks, onNavigateToChat }) {
@@ -38,7 +39,10 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
     syncAllWorkspacesToCloud,
     tasks,
     chatUnreadCount,
-    canUserAccessChat
+    canUserAccessChat,
+    sheetsSyncStatus,
+    pendingSheetsChangesCount,
+    isGoogleSheetsConfigured
   } = useWorkspace();
 
   const [wsDropdownOpen, setWsDropdownOpen] = useState(false);
@@ -266,6 +270,47 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
             <span className="text-[11px] font-semibold text-[#00E5A0] group-hover:text-white transition-colors">
               {isAutoSyncing ? 'In progress' : timeAgoStr}
             </span>
+          </button>
+
+          {/* GOOGLE SHEETS LIVE REDUNDANCY STATUS PILL */}
+          <button
+            onClick={() => {
+              if (onOpenCloudSync) onOpenCloudSync('sheets');
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-all cursor-pointer shadow-sm ${
+              sheetsSyncStatus === 'out_of_sync' || pendingSheetsChangesCount > 0
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25 animate-pulse'
+                : sheetsSyncStatus === 'synced'
+                ? 'bg-[#111827] border-[#1E3A5F] text-gray-300 hover:border-[#00E5A0]/60'
+                : 'bg-[#111827] border-[#1E3A5F] text-gray-400 hover:border-[#00C2FF]/60'
+            }`}
+            title={
+              sheetsSyncStatus === 'out_of_sync'
+                ? `Google Sheet is out of sync (${pendingSheetsChangesCount} changes pending). Click to push or configure.`
+                : isGoogleSheetsConfigured()
+                ? 'Google Sheet Dual-Cloud Redundancy: Live & Synced'
+                : 'Google Sheet Redundancy: Click to configure Web App'
+            }
+          >
+            <FileSpreadsheet className={`w-3.5 h-3.5 ${
+              sheetsSyncStatus === 'out_of_sync' 
+                ? 'text-amber-400' 
+                : isGoogleSheetsConfigured() 
+                ? 'text-[#00E5A0]' 
+                : 'text-gray-400'
+            }`} />
+            <span className="hidden sm:inline text-[11px] font-semibold">
+              {sheetsSyncStatus === 'out_of_sync' 
+                ? 'Sheets: Out of Sync' 
+                : isGoogleSheetsConfigured() 
+                ? 'Sheets: Synced' 
+                : 'Sheets: Setup'}
+            </span>
+            {pendingSheetsChangesCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-black font-black text-[10px]">
+                {pendingSheetsChangesCount}
+              </span>
+            )}
           </button>
 
           {/* ADMIN: PENDING APPROVAL NOTIFICATION BADGE */}
