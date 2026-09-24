@@ -538,9 +538,13 @@ export function WorkspaceProvider({ children }) {
                 ]
               });
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
-              const localTime = new Date(localWs.updatedAt || 0).getTime();
-              const cloudTime = new Date(cloudWs.updatedAt || 0).getTime();
-              const isCloudAuth = cloudTime >= localTime;
+              const localSent = (localWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
+              const cloudSent = (cloudWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
+              if (localSent > cloudSent || localTime > cloudTime) {
+                needsPushToCloud = true;
+              }
+
+              const isCloudAuth = cloudTime >= localTime && cloudSent >= localSent;
 
               return {
                 ...(isCloudAuth ? localWs : cloudWs),
@@ -681,33 +685,27 @@ export function WorkspaceProvider({ children }) {
   // 4a2. CGE UK LTD (ws_zrnl1fjb) Dedicated State Sentinel & Auto-Healer
   const hasHealedCgeRef = useRef(false);
   useEffect(() => {
+    // CRITICAL: Must wait for IndexedDB to finish loading before checking lead counts!
+    if (!idbLoadedRef.current) return;
     if (!workspaces || workspaces.length === 0) return;
     const cge = workspaces.find(w => w.id === 'ws_zrnl1fjb');
     if (!cge) return;
 
     // Only heal if baseline lead count dropped below 3,804 (e.g. data loss)
     // Never reset sent metrics or valid dispatches across any dates!
-    const needsHeal = (cge.leads || []).length < 3804;
+    const needsHeal = (cge.leads || []).length > 0 && (cge.leads || []).length < 3804;
 
     if (needsHeal && !hasHealedCgeRef.current) {
       hasHealedCgeRef.current = true;
-      console.log('[AutoHeal] Restoring ws_zrnl1fjb baseline leads while preserving sent status');
+      console.log('[AutoHeal] Restoring ws_zrnl1fjb missing baseline leads while preserving sent status');
       const existingMap = new Map((cge.leads || []).map(l => [l.id, l]));
-      const healedLeads = cgeAuthoritative3804.leads.map(authLead => {
-        const existing = existingMap.get(authLead.id);
-        if (existing) {
-          return {
-            ...authLead,
-            ...existing,
-            email1: existing.email1 || authLead.email1 || '',
-            email2: existing.email2 || authLead.email2 || '',
-            email3: existing.email3 || authLead.email3 || '',
-            status: existing.status || authLead.status || 'pending',
-            stage: existing.stage || authLead.stage || '',
-            updatedAt: existing.updatedAt || authLead.updatedAt || new Date().toISOString()
-          };
+      // Only append missing leads, never overwrite existing leads in state!
+      const healedLeads = [...(cge.leads || [])];
+      cgeAuthoritative3804.leads.forEach(al => {
+        if (!existingMap.has(al.id)) {
+          healedLeads.push({ ...al });
+          existingMap.set(al.id, al);
         }
-        return { ...authLead };
       });
 
       const healedCge = {
@@ -725,19 +723,30 @@ export function WorkspaceProvider({ children }) {
   // 4a3. Crewlix UK Ltd (ws_crewlixukltd) Dedicated State Sentinel & Auto-Healer
   const hasHealedCrewlixRef = useRef(false);
   useEffect(() => {
+    // CRITICAL: Must wait for IndexedDB to finish loading before checking lead counts!
+    if (!idbLoadedRef.current) return;
     if (!workspaces || workspaces.length === 0) return;
     const crewlix = workspaces.find(w => w.id === 'ws_crewlixukltd');
     if (!crewlix) return;
 
-    const needsHeal = (crewlix.leads || []).length < 20113;
+    const needsHeal = (crewlix.leads || []).length > 0 && (crewlix.leads || []).length < 20113;
 
     if (needsHeal && !hasHealedCrewlixRef.current) {
       hasHealedCrewlixRef.current = true;
-      console.log('[AutoHeal] Restoring ws_crewlixukltd to authoritative 20,113 leads');
-      const cleanLeads = crewlixAuthoritative20113.leads.map(l => ({ ...l }));
+      console.log('[AutoHeal] Restoring ws_crewlixukltd missing baseline leads');
+      const existingMap = new Map((crewlix.leads || []).map(l => [l.id, l]));
+      // Only append missing leads, never overwrite existing leads in state!
+      const healedLeads = [...(crewlix.leads || [])];
+      crewlixAuthoritative20113.leads.forEach(al => {
+        if (!existingMap.has(al.id)) {
+          healedLeads.push({ ...al });
+          existingMap.set(al.id, al);
+        }
+      });
+
       const healedCrewlix = {
         ...crewlix,
-        leads: cleanLeads,
+        leads: healedLeads,
         updatedAt: new Date().toISOString()
       };
       const nextWorkspaces = workspaces.map(w => w.id === 'ws_crewlixukltd' ? healedCrewlix : w);
@@ -1884,25 +1893,24 @@ export function WorkspaceProvider({ children }) {
       description: `${assignedCampaign} ${seqLabel} Sent: ${leadIds.length} (${formattedStatus})`
     };
 
-    setWorkspaces(prev => {
-      const next = prev.map(w => {
-        if (w.id === currentWorkspaceId) {
-          return {
-            ...w,
-            leads: updatedLeads,
-            activityLog: [newActivity, ...(w.activityLog || [])],
-            updatedAt: nowIso
-          };
-        }
-        return w;
-      });
-      // Synchronously write to LocalStorage & IndexedDB to survive immediate page refresh
-      saveWorkspacesToLocal(next);
-      // Immediately push to Supabase Cloud
-      saveWorkspacesToCloud(next, currentWorkspaceId).catch(err => {
-        console.warn('Direct cloud save notice in applyBatchSentStatus:', err);
-      });
-      return next;
+    const nextWorkspaces = workspaces.map(w => {
+      if (w.id === currentWorkspaceId) {
+        return {
+          ...w,
+          leads: updatedLeads,
+          activityLog: [newActivity, ...(w.activityLog || [])],
+          updatedAt: nowIso
+        };
+      }
+      return w;
+    });
+
+    setWorkspaces(nextWorkspaces);
+    // Synchronously write to LocalStorage & IndexedDB to survive immediate page refresh
+    saveWorkspacesToLocal(nextWorkspaces);
+    // Immediately push to Supabase Cloud
+    saveWorkspacesToCloud(nextWorkspaces, currentWorkspaceId).catch(err => {
+      console.warn('Direct cloud save notice in applyBatchSentStatus:', err);
     });
 
     logWarriorAction('batch_sent', `Marked ${leadIds.length} leads as Sent: ${assignedCampaign} (${seqLabel})`);

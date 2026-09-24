@@ -144,16 +144,32 @@ export async function saveWorkspacesToLocal(workspaces) {
   // 2. Secondary Save to localStorage (with quota safety check)
   try {
     const serialized = JSON.stringify(sanitized);
-    // If under 4.5MB, save to localStorage
+    // If under 4.5MB, save full data to localStorage
     if (serialized.length < 4.5 * 1024 * 1024) {
       localStorage.setItem(BACKUP_KEY, serialized);
     } else {
-      // If large, save lightweight metadata in localStorage
-      const lightWorkspaces = sanitized.map(w => ({
-        ...w,
-        leads: (w.leads || []).slice(0, 50) // only sample in localStorage to prevent quota error
-      }));
-      localStorage.setItem(BACKUP_KEY, JSON.stringify(lightWorkspaces));
+      // Smart quota preservation: Keep 100% of leads for standard workspaces (like CGE with 3,804 leads),
+      // and only sample massive archives (>5,000 leads like Crewlix historical) in localStorage!
+      const smartWorkspaces = sanitized.map(w => {
+        if ((w.leads || []).length > 5000) {
+          return {
+            ...w,
+            leads: (w.leads || []).slice(0, 100),
+            isTruncatedForQuota: true
+          };
+        }
+        return w;
+      });
+      const smartSerialized = JSON.stringify(smartWorkspaces);
+      if (smartSerialized.length < 4.5 * 1024 * 1024) {
+        localStorage.setItem(BACKUP_KEY, smartSerialized);
+      } else {
+        const lightWorkspaces = sanitized.map(w => ({
+          ...w,
+          leads: (w.leads || []).slice(0, 50)
+        }));
+        localStorage.setItem(BACKUP_KEY, JSON.stringify(lightWorkspaces));
+      }
       localStorage.setItem('ros_using_indexeddb', 'true');
     }
   } catch (err) {
