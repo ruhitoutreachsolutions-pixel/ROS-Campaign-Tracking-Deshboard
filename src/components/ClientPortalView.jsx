@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import MetricCards from './MetricCards';
 import InterestedPipeline from './InterestedPipeline';
@@ -43,18 +43,21 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
   const lastDayCampaignStats = metrics?.lastDayCampaignStats || [];
   const lastActiveDate = metrics?.lastActiveDate || '25/08/26';
 
-  const filteredLeads = leads.filter(l => {
-    if (selectedCampaignFilter !== 'all' && (l.campaignName || currentWorkspace?.campaignName) !== selectedCampaignFilter) {
-      return false;
-    }
-    if (!searchLead.trim()) return true;
-    const q = searchLead.toLowerCase();
-    return (l.firstName || '').toLowerCase().includes(q) ||
-           (l.companyName || '').toLowerCase().includes(q) ||
-           (l.email || '').toLowerCase().includes(q) ||
-           (l.city || '').toLowerCase().includes(q) ||
-           (l.campaignName || '').toLowerCase().includes(q);
-  });
+  const filteredLeads = useMemo(() => {
+    if (activeTab !== 'leads') return [];
+    return leads.filter(l => {
+      if (selectedCampaignFilter !== 'all' && (l.campaignName || currentWorkspace?.campaignName) !== selectedCampaignFilter) {
+        return false;
+      }
+      if (!searchLead.trim()) return true;
+      const q = searchLead.toLowerCase();
+      return (l.firstName || '').toLowerCase().includes(q) ||
+             (l.companyName || '').toLowerCase().includes(q) ||
+             (l.email || '').toLowerCase().includes(q) ||
+             (l.city || '').toLowerCase().includes(q) ||
+             (l.campaignName || '').toLowerCase().includes(q);
+    });
+  }, [leads, activeTab, selectedCampaignFilter, searchLead, currentWorkspace?.campaignName]);
 
   return (
     <div className="w-full space-y-6 sm:space-y-8">

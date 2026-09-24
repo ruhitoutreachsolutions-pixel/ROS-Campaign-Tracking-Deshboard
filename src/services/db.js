@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from './storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
+import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
 // Default Supabase project for ROS Outreach Dashboard
 const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
@@ -205,6 +206,17 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
                 });
               }
             }
+            if (item.id === 'ws_crewlixukltd') {
+              if (sanitizedLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
+                const idSet = new Set(sanitizedLeads.map(l => l.id));
+                crewlixAuthoritative20113.leads.forEach(al => {
+                  if (!idSet.has(al.id)) {
+                    sanitizedLeads.push(al);
+                    idSet.add(al.id);
+                  }
+                });
+              }
+            }
             return sanitizedLeads;
           })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
@@ -301,6 +313,23 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
               idSet.add(al.id);
             }
           });
+        }
+      }
+
+      if (ws.id === 'ws_crewlixukltd') {
+        if (leadsToSave.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
+          const idSet = new Set(leadsToSave.map(l => l.id));
+          crewlixAuthoritative20113.leads.forEach(al => {
+            if (!idSet.has(al.id)) {
+              leadsToSave.push(al);
+              idSet.add(al.id);
+            }
+          });
+        }
+        // Skip uploading 6.2MB massive historical lead archive to Supabase during standard auto-saves
+        // to prevent statement timeouts and bandwidth exhaustion on Supabase nano instance
+        if (leadsToSave.length >= 20000) {
+          continue;
         }
       }
 

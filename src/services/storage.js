@@ -8,6 +8,7 @@ const BACKUP_KEY = 'ros_workspaces_prod_v3';
 const BACKUP_SNAPSHOT_KEY = 'ros_workspaces_snapshot_v1';
 
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
+import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
 // Open or initialize IndexedDB
 function openDB() {
@@ -195,6 +196,17 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
         if (cleanLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
           const idSet = new Set(cleanLeads.map(l => l.id));
           cgeAuthoritative3804.leads.forEach(al => {
+            if (!idSet.has(al.id)) {
+              cleanLeads.push(al);
+              idSet.add(al.id);
+            }
+          });
+        }
+      }
+      if (w.id === 'ws_crewlixukltd') {
+        if (cleanLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
+          const idSet = new Set(cleanLeads.map(l => l.id));
+          crewlixAuthoritative20113.leads.forEach(al => {
             if (!idSet.has(al.id)) {
               cleanLeads.push(al);
               idSet.add(al.id);
@@ -425,6 +437,16 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
   if (wsId === 'ws_zrnl1fjb' && mergedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
     const idSet = new Set(mergedLeads.map(l => l.id));
     cgeAuthoritative3804.leads.forEach(al => {
+      if (!idSet.has(al.id)) {
+        mergedLeads.push(al);
+        idSet.add(al.id);
+      }
+    });
+  }
+
+  if (wsId === 'ws_crewlixukltd' && mergedLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
+    const idSet = new Set(mergedLeads.map(l => l.id));
+    crewlixAuthoritative20113.leads.forEach(al => {
       if (!idSet.has(al.id)) {
         mergedLeads.push(al);
         idSet.add(al.id);

@@ -29,6 +29,7 @@ import {
 } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
+import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 import { 
   saveGlobalMetaToCloud, 
   fetchGlobalMetaFromCloud, 
@@ -678,16 +679,18 @@ export function WorkspaceProvider({ children }) {
   }, [workspaces]);
 
   // 4a2. CGE UK LTD (ws_zrnl1fjb) Dedicated State Sentinel & Auto-Healer
+  const hasHealedCgeRef = useRef(false);
   useEffect(() => {
     if (!workspaces || workspaces.length === 0) return;
     const cge = workspaces.find(w => w.id === 'ws_zrnl1fjb');
     if (!cge) return;
 
-    const metrics = calculateWorkspaceMetrics(cge);
+    const cgeMetrics = calculateWorkspaceMetrics(cge);
     const hasCorruptOctLeads = (cge.leads || []).some(l => l.campaignName === 'BNQ UK October List 1' && (l.email1 || l.email2 || l.email3));
-    const needsHeal = (cge.leads || []).length !== 3804 || metrics.totalEmailsSent !== 600 || hasCorruptOctLeads;
+    const needsHeal = (cge.leads || []).length !== 3804 || (cgeMetrics && cgeMetrics.totalSent !== 600) || hasCorruptOctLeads;
 
-    if (needsHeal) {
+    if (needsHeal && !hasHealedCgeRef.current) {
+      hasHealedCgeRef.current = true;
       console.log('[AutoHeal] Restoring ws_zrnl1fjb to authoritative 3,804 leads and 600 sent');
       const cleanLeads = cgeAuthoritative3804.leads.map(l => ({ ...l }));
       const healedCge = {
@@ -702,9 +705,34 @@ export function WorkspaceProvider({ children }) {
     }
   }, [workspaces]);
 
-  // 4b. CONTINUOUS 20-SECOND CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
+  // 4a3. Crewlix UK Ltd (ws_crewlixukltd) Dedicated State Sentinel & Auto-Healer
+  const hasHealedCrewlixRef = useRef(false);
+  useEffect(() => {
+    if (!workspaces || workspaces.length === 0) return;
+    const crewlix = workspaces.find(w => w.id === 'ws_crewlixukltd');
+    if (!crewlix) return;
+
+    const needsHeal = (crewlix.leads || []).length < 20113;
+
+    if (needsHeal && !hasHealedCrewlixRef.current) {
+      hasHealedCrewlixRef.current = true;
+      console.log('[AutoHeal] Restoring ws_crewlixukltd to authoritative 20,113 leads');
+      const cleanLeads = crewlixAuthoritative20113.leads.map(l => ({ ...l }));
+      const healedCrewlix = {
+        ...crewlix,
+        leads: cleanLeads,
+        updatedAt: new Date().toISOString()
+      };
+      const nextWorkspaces = workspaces.map(w => w.id === 'ws_crewlixukltd' ? healedCrewlix : w);
+      setWorkspaces(nextWorkspaces);
+      saveWorkspacesToLocal(nextWorkspaces);
+    }
+  }, [workspaces]);
+
+  // 4b. CONTINUOUS CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
   useEffect(() => {
     const autoReconcileInterval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       try {
         setIsAutoSyncing(true);
         const cloudMeta = await fetchGlobalMetaFromCloud();
@@ -798,7 +826,7 @@ export function WorkspaceProvider({ children }) {
       } finally {
         setTimeout(() => setIsAutoSyncing(false), 1000);
       }
-    }, 20000); // 20 seconds
+    }, 45000); // 45 seconds to preserve Supabase quota
 
     return () => clearInterval(autoReconcileInterval);
   }, []);
@@ -1157,8 +1185,9 @@ export function WorkspaceProvider({ children }) {
       }
     }
 
-    // C. 5-Second Active Polling Backup (Local Server API /api/sync)
+    // C. 45-Second Active Polling Backup (Local Server API /api/sync)
     const backupPollingInterval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       try {
         const cloudMeta = await fetchGlobalMetaFromCloud();
         if (isCancelled || !cloudMeta) return;
@@ -1265,7 +1294,7 @@ export function WorkspaceProvider({ children }) {
           }
         }
       } catch (e) {}
-    }, 4000);
+    }, 45000); // 45s interval to preserve Supabase quota
 
     return () => {
       isCancelled = true;

@@ -137,20 +137,30 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     return lead[key] || '';
   };
 
-  // Compute Unique Values and Counts for each column
+  // Compute Unique Values and Counts on demand for active/filtered columns in a single fast pass
   const columnUniqueValues = useMemo(() => {
-    const map = {};
-    columns.forEach(col => {
-      const counts = {};
-      leads.forEach(lead => {
-        const val = getLeadValue(lead, col.key);
+    const activeKeys = new Set(Object.keys(columnFilters));
+    if (activeFilterCol) activeKeys.add(activeFilterCol);
+    if (activeKeys.size === 0) return {};
+
+    const countsMap = {};
+    activeKeys.forEach(k => { countsMap[k] = {}; });
+
+    for (let i = 0; i < leads.length; i++) {
+      const lead = leads[i];
+      activeKeys.forEach(k => {
+        const val = getLeadValue(lead, k);
         const displayVal = val.trim() === '' ? '(Blanks / Unsent)' : val.trim();
-        counts[displayVal] = (counts[displayVal] || 0) + 1;
+        countsMap[k][displayVal] = (countsMap[k][displayVal] || 0) + 1;
       });
-      map[col.key] = Object.entries(counts).map(([value, count]) => ({ value, count }));
+    }
+
+    const map = {};
+    activeKeys.forEach(k => {
+      map[k] = Object.entries(countsMap[k]).map(([value, count]) => ({ value, count }));
     });
     return map;
-  }, [leads, currentWorkspace]);
+  }, [leads, columnFilters, activeFilterCol]);
 
   // Apply Global Search, Column Filters, and Sorting
   const filteredAndSortedLeads = useMemo(() => {
