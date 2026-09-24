@@ -685,17 +685,34 @@ export function WorkspaceProvider({ children }) {
     const cge = workspaces.find(w => w.id === 'ws_zrnl1fjb');
     if (!cge) return;
 
-    const cgeMetrics = calculateWorkspaceMetrics(cge);
-    const hasCorruptOctLeads = (cge.leads || []).some(l => l.campaignName === 'BNQ UK October List 1' && (l.email1 || l.email2 || l.email3));
-    const needsHeal = (cge.leads || []).length !== 3804 || (cgeMetrics && cgeMetrics.totalSent !== 600) || hasCorruptOctLeads;
+    // Only heal if baseline lead count dropped below 3,804 (e.g. data loss)
+    // Never reset sent metrics or valid dispatches across any dates!
+    const needsHeal = (cge.leads || []).length < 3804;
 
     if (needsHeal && !hasHealedCgeRef.current) {
       hasHealedCgeRef.current = true;
-      console.log('[AutoHeal] Restoring ws_zrnl1fjb to authoritative 3,804 leads and 600 sent');
-      const cleanLeads = cgeAuthoritative3804.leads.map(l => ({ ...l }));
+      console.log('[AutoHeal] Restoring ws_zrnl1fjb baseline leads while preserving sent status');
+      const existingMap = new Map((cge.leads || []).map(l => [l.id, l]));
+      const healedLeads = cgeAuthoritative3804.leads.map(authLead => {
+        const existing = existingMap.get(authLead.id);
+        if (existing) {
+          return {
+            ...authLead,
+            ...existing,
+            email1: existing.email1 || authLead.email1 || '',
+            email2: existing.email2 || authLead.email2 || '',
+            email3: existing.email3 || authLead.email3 || '',
+            status: existing.status || authLead.status || 'pending',
+            stage: existing.stage || authLead.stage || '',
+            updatedAt: existing.updatedAt || authLead.updatedAt || new Date().toISOString()
+          };
+        }
+        return { ...authLead };
+      });
+
       const healedCge = {
         ...cge,
-        leads: cleanLeads,
+        leads: healedLeads,
         updatedAt: new Date().toISOString()
       };
       const nextWorkspaces = workspaces.map(w => w.id === 'ws_zrnl1fjb' ? healedCge : w);
@@ -783,20 +800,15 @@ export function WorkspaceProvider({ children }) {
                     const target = prev.find(w => w.id === activeId);
                     if (!target) return prev;
 
-                    let mergedLeads;
-                    if (activeId === 'ws_zrnl1fjb' && cloudRow.leads.length === 3804) {
-                      mergedLeads = cloudRow.leads.map(l => sanitizeLeadForWorkspace(l, activeId)).filter(Boolean);
-                    } else {
-                      mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                        workspaceId: activeId,
-                        localWsUpdatedAt: target.updatedAt,
-                        cloudWsUpdatedAt: cloudRow.updated_at,
-                        deletedLeadIds: [
-                          ...(target.deletedLeadIds || []),
-                          ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                        ]
-                      }).map(sanitizeLeadState);
-                    }
+                    const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                      workspaceId: activeId,
+                      localWsUpdatedAt: target.updatedAt,
+                      cloudWsUpdatedAt: cloudRow.updated_at,
+                      deletedLeadIds: [
+                        ...(target.deletedLeadIds || []),
+                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                      ]
+                    }).map(sanitizeLeadState);
 
                     const next = prev.map(w => {
                       if (w.id === activeId) {
@@ -1122,20 +1134,15 @@ export function WorkspaceProvider({ children }) {
                 setWorkspaces(prev => {
                   const target = prev.find(w => w.id === targetWsId);
                   if (!target) return prev;
-                  let mergedLeads;
-                  if (targetWsId === 'ws_zrnl1fjb' && cloudRow.leads.length === 3804) {
-                    mergedLeads = cloudRow.leads.map(l => sanitizeLeadForWorkspace(l, targetWsId)).filter(Boolean);
-                  } else {
-                    mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                      workspaceId: targetWsId,
-                      localWsUpdatedAt: target.updatedAt,
-                      cloudWsUpdatedAt: cloudRow.updated_at,
-                      deletedLeadIds: [
-                        ...(target.deletedLeadIds || []),
-                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                      ]
-                    }).map(sanitizeLeadState);
-                  }
+                  const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+                    workspaceId: targetWsId,
+                    localWsUpdatedAt: target.updatedAt,
+                    cloudWsUpdatedAt: cloudRow.updated_at,
+                    deletedLeadIds: [
+                      ...(target.deletedLeadIds || []),
+                      ...(cloudRow.sequence_config?.deletedLeadIds || [])
+                    ]
+                  }).map(sanitizeLeadState);
 
                   const next = prev.map(w => {
                     if (w.id === targetWsId) {
@@ -1849,6 +1856,7 @@ export function WorkspaceProvider({ children }) {
     const account = sendingAccount || currentWorkspace.activeSendingAccount || currentWorkspace.sendingAccounts[0] || '';
     const formattedStatus = `Email Sent - ${dateStr}`;
     const assignedCampaign = (campaignName || currentWorkspace.campaignName || 'General Outbound').trim();
+    const nowIso = new Date().toISOString();
 
     const updatedLeads = currentWorkspace.leads.map(lead => {
       if (leadIds.includes(lead.id)) {
@@ -1858,7 +1866,7 @@ export function WorkspaceProvider({ children }) {
           campaignName: assignedCampaign || lead.campaignName || currentWorkspace.campaignName || 'General Outbound',
           accountName: (sendingAccount && sendingAccount.trim()) ? sendingAccount.trim() : (lead.accountName || account),
           status: lead.status === 'interested' ? 'interested' : `sent_${sequenceKey.replace('email', '')}`,
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso
         };
       }
       return lead;
@@ -1867,7 +1875,7 @@ export function WorkspaceProvider({ children }) {
     const seqLabel = sequenceKey === 'email1' ? 'Initial Outreach' : sequenceKey === 'email2' ? 'Follow Up 1' : 'Follow Up 2';
     const newActivity = {
       id: 'act_' + Date.now(),
-      timestamp: new Date().toISOString(),
+      timestamp: nowIso,
       type: 'batch_sent',
       sequence: sequenceKey,
       campaignName: assignedCampaign,
@@ -1876,19 +1884,40 @@ export function WorkspaceProvider({ children }) {
       description: `${assignedCampaign} ${seqLabel} Sent: ${leadIds.length} (${formattedStatus})`
     };
 
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === currentWorkspaceId) {
-        return {
-          ...w,
-          leads: updatedLeads,
-          activityLog: [newActivity, ...(w.activityLog || [])],
-          updatedAt: new Date().toISOString()
-        };
-      }
-      return w;
-    }));
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === currentWorkspaceId) {
+          return {
+            ...w,
+            leads: updatedLeads,
+            activityLog: [newActivity, ...(w.activityLog || [])],
+            updatedAt: nowIso
+          };
+        }
+        return w;
+      });
+      // Synchronously write to LocalStorage & IndexedDB to survive immediate page refresh
+      saveWorkspacesToLocal(next);
+      // Immediately push to Supabase Cloud
+      saveWorkspacesToCloud(next, currentWorkspaceId).catch(err => {
+        console.warn('Direct cloud save notice in applyBatchSentStatus:', err);
+      });
+      return next;
+    });
 
     logWarriorAction('batch_sent', `Marked ${leadIds.length} leads as Sent: ${assignedCampaign} (${seqLabel})`);
+
+    const dispatchedLeads = updatedLeads.filter(l => leadIds.includes(l.id));
+    broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+      workspaceId: currentWorkspaceId,
+      leads: dispatchedLeads,
+      updatedAt: nowIso
+    }).catch(() => {});
+
+    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
+      workspaceId: currentWorkspaceId,
+      updatedAt: nowIso
+    }).catch(() => {});
 
     return true;
   }

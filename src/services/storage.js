@@ -80,30 +80,9 @@ export function sanitizeLeadForWorkspace(lead, workspaceId) {
       };
     }
 
-    // 3. BNQ UK October List 1: Brand new pending outreach pool (no sent emails)
-    if (camp === 'BNQ UK October List 1') {
-      return {
-        ...lead,
-        email1: '',
-        email2: '',
-        email3: '',
-        status: 'pending',
-        stage: ''
-      };
-    }
-
-    // 4. BNQ Google Maps: Only keep the 600 sends from 23/09/26
-    if (camp === 'BNQ Google Maps') {
-      const isSent23 = Boolean(lead.email1 && lead.email1.includes('23/09/26'));
-      return {
-        ...lead,
-        email1: isSent23 ? 'Email Sent - 23/09/26' : '',
-        email2: '',
-        email3: '',
-        status: isSent23 ? 'sent_1' : 'pending',
-        stage: ''
-      };
-    }
+    // 3. Active Campaigns (BNQ UK October List 1, BNQ Google Maps, etc.):
+    // Preserve all lead information, including dispatched emails across any dates (23/09/26, 25/09/26, etc.)
+    return lead;
   }
 
   // ALL OTHER WORKSPACES: Return lead completely untouched!
@@ -298,24 +277,9 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     if (!leadB) return leadA;
 
     // For ws_zrnl1fjb: strictly guard against reviving old emails or invalid campaigns
+    // For ws_zrnl1fjb: strictly guard against reviving old invalid campaigns or losing interested leads
     if (wsId === 'ws_zrnl1fjb') {
       const camp = (leadB.campaignName || leadA.campaignName || '').trim();
-      if (camp === 'BNQ UK October List 1') {
-        return {
-          ...leadA,
-          ...leadB,
-          email1: '',
-          email2: '',
-          email3: '',
-          status: 'pending',
-          stage: '',
-          updatedAt: new Date(Math.max(
-            new Date(leadA.updatedAt || 0).getTime(),
-            new Date(leadB.updatedAt || 0).getTime(),
-            Date.now()
-          )).toISOString()
-        };
-      }
       if (camp === 'Banqueting-halls-UK-Campaign-1') {
         return {
           ...leadA,
@@ -332,29 +296,22 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
           )).toISOString()
         };
       }
-      if (camp === 'BNQ Google Maps') {
-        const isSent23 = Boolean((leadB.email1 && leadB.email1.includes('23/09/26')) || (leadA.email1 && leadA.email1.includes('23/09/26')));
-        return {
-          ...leadA,
-          ...leadB,
-          email1: isSent23 ? 'Email Sent - 23/09/26' : '',
-          email2: '',
-          email3: '',
-          status: isSent23 ? 'sent_1' : 'pending',
-          stage: '',
-          updatedAt: new Date(Math.max(
-            new Date(leadA.updatedAt || 0).getTime(),
-            new Date(leadB.updatedAt || 0).getTime(),
-            Date.now()
-          )).toISOString()
-        };
-      }
     }
 
-    // Email sending progress: always union and preserve all sent emails
-    const email1 = leadB.email1 || leadA.email1 || '';
-    const email2 = leadB.email2 || leadA.email2 || '';
-    const email3 = leadB.email3 || leadA.email3 || '';
+    const timeA = new Date(leadA.updatedAt || leadA.importedAt || 0).getTime();
+    const timeB = new Date(leadB.updatedAt || leadB.importedAt || 0).getTime();
+
+    // Email sending progress: always pick the latest sent date/status
+    const pickNewestEmail = (valA, valB) => {
+      if (!valA) return valB || '';
+      if (!valB) return valA || '';
+      if (valA === valB) return valA;
+      return timeB >= timeA ? valB : valA;
+    };
+
+    const email1 = pickNewestEmail(leadA.email1, leadB.email1);
+    const email2 = pickNewestEmail(leadA.email2, leadB.email2);
+    const email3 = pickNewestEmail(leadA.email3, leadB.email3);
 
     // Advanced stages: preserve interested, meeting booked, won, dnc
     const aAdv = isAdvancedStage(leadA);
@@ -370,8 +327,6 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       stage = leadA.stage;
       status = leadA.status;
     } else {
-      const timeA = new Date(leadA.updatedAt || leadA.importedAt || 0).getTime();
-      const timeB = new Date(leadB.updatedAt || leadB.importedAt || 0).getTime();
       if (timeB >= timeA) {
         stage = leadB.stage || leadA.stage;
         status = leadB.status || leadA.status;
@@ -389,9 +344,6 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     const notes = (leadB.notes && leadB.notes.length >= (leadA.notes?.length || 0))
       ? leadB.notes
       : (leadA.notes || leadB.notes || '');
-
-    const timeA = new Date(leadA.updatedAt || leadA.importedAt || 0).getTime();
-    const timeB = new Date(leadB.updatedAt || leadB.importedAt || 0).getTime();
     const primary = timeB >= timeA ? leadB : leadA;
     const secondary = timeB >= timeA ? leadA : leadB;
 
