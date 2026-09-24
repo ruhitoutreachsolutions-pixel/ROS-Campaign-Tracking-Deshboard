@@ -2157,17 +2157,31 @@ export function WorkspaceProvider({ children }) {
         description: `Moved ${targetLead.firstName} (${targetLead.companyName}) to "${newStage}"`
       };
 
-      setWorkspaces(prev => prev.map(w => {
+      const nowIso = new Date().toISOString();
+      const nextWorkspaces = workspaces.map(w => {
         if (w.id === currentWorkspaceId) {
           return {
             ...w,
             leads: updatedLeads,
             activityLog: [newActivity, ...(w.activityLog || [])],
-            updatedAt: new Date().toISOString()
+            updatedAt: nowIso
           };
         }
         return w;
-      }));
+      });
+
+      setWorkspaces(nextWorkspaces);
+      saveWorkspacesToLocal(nextWorkspaces);
+      saveWorkspacesToCloud(nextWorkspaces, currentWorkspaceId).catch(err => {
+        console.warn('Direct cloud save notice in updateLeadStage:', err);
+      });
+
+      syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, [targetLead], newActivity).catch(() => {});
+      broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+        workspaceId: currentWorkspaceId,
+        leads: [targetLead],
+        updatedAt: nowIso
+      }).catch(() => {});
 
       logWarriorAction('stage_change', `Moved ${targetLead.firstName || targetLead.email} to "${newStage}" (${targetLead.companyName || 'No Company'})`);
     }
@@ -2184,15 +2198,18 @@ export function WorkspaceProvider({ children }) {
 
   // 5. Generic Lead Update
   function updateLead(leadId, updates) {
-    if (!currentWorkspace) return false;
+    if (!currentWorkspace || !leadId) return false;
     const today = getTodayFormatted();
-    setWorkspaces(prev => prev.map(w => {
+    const nowIso = new Date().toISOString();
+    let updatedLeadObj = null;
+
+    const nextWorkspaces = workspaces.map(w => {
       if (w.id === currentWorkspaceId) {
         return {
           ...w,
-          leads: w.leads.map(l => {
+          leads: (w.leads || []).map(l => {
             if (l.id !== leadId) return l;
-            const next = { ...l, ...updates, updatedAt: new Date().toISOString() };
+            const next = { ...l, ...updates, updatedAt: nowIso };
             if (next.stage !== undefined) {
               const isPos = isPositivePipelineStage(next.stage);
               const isDnc = isLeadDNC(next);
@@ -2219,14 +2236,33 @@ export function WorkspaceProvider({ children }) {
               }
             } else if (next.status === 'interested') {
               if (!next.replyDate) next.replyDate = today;
+            } else {
+              next.status = deriveLeadStatus(next);
             }
-            return sanitizeLeadState(next);
+            updatedLeadObj = sanitizeLeadState(next);
+            return updatedLeadObj;
           }),
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso
         };
       }
       return w;
-    }));
+    });
+
+    setWorkspaces(nextWorkspaces);
+    saveWorkspacesToLocal(nextWorkspaces);
+    saveWorkspacesToCloud(nextWorkspaces, currentWorkspaceId).catch(err => {
+      console.warn('Direct cloud save notice in updateLead:', err);
+    });
+
+    if (updatedLeadObj) {
+      syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, [updatedLeadObj]).catch(() => {});
+      broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+        workspaceId: currentWorkspaceId,
+        leads: [updatedLeadObj],
+        updatedAt: nowIso
+      }).catch(() => {});
+    }
+
     return true;
   }
 
@@ -2235,110 +2271,154 @@ export function WorkspaceProvider({ children }) {
     if (!currentWorkspace || !leadIds || leadIds.length === 0 || !updates) return 0;
 
     const targetSet = new Set(leadIds);
-    const updatedLeads = currentWorkspace.leads.map(lead => {
-      if (!targetSet.has(lead.id)) return lead;
+    const nowIso = new Date().toISOString();
+    const today = getTodayFormatted();
+    const editedLeads = [];
 
-      const next = { ...lead };
-
-      if (updates.campaignName !== undefined && updates.campaignName !== '') {
-        next.campaignName = updates.campaignName.trim();
-      }
-
-      if (updates.stage !== undefined && updates.stage !== '') {
-        next.stage = updates.stage;
-        const isPos = isPositivePipelineStage(updates.stage);
-        const isDnc = updates.stage.toLowerCase().includes('dnc') || 
-                      updates.stage.toLowerCase().includes('unsub') || 
-                      updates.stage.toLowerCase().includes('not interested');
-        const isInProgress = updates.stage.toLowerCase().includes('progress') || updates.stage.toLowerCase().includes('pending');
-        const isLost = updates.stage.toLowerCase().includes('lost') || 
-                       updates.stage.toLowerCase().includes('not a fit') || 
-                       updates.stage.toLowerCase().includes('disqual');
-
-        if (isDnc) {
-          next.status = 'dnc';
-          next.isDNC = true;
-          next.replyDate = '';
-          next.dealValue = 0;
-        } else if (isInProgress) {
-          next.status = deriveLeadStatus(next);
-          next.replyDate = '';
-          next.dealValue = 0;
-          next.isDNC = false;
-        } else if (isPos) {
-          next.status = 'interested';
-          next.isDNC = false;
-          if (!next.replyDate) next.replyDate = getTodayFormatted();
-        } else if (isLost) {
-          next.status = 'lost';
-          next.isDNC = false;
-        }
-      }
-
-      if (updates.dealValue !== undefined && updates.dealValue !== '') {
-        next.dealValue = Number(updates.dealValue) || 0;
-      }
-
-      if (updates.accountName !== undefined && updates.accountName !== '') {
-        next.accountName = updates.accountName.trim();
-      }
-
-      if (updates.city !== undefined && updates.city !== '') {
-        next.city = updates.city.trim();
-      }
-
-      if (updates.email1 !== undefined && updates.email1 !== null) {
-        next.email1 = updates.email1;
-      }
-
-      if (updates.email2 !== undefined && updates.email2 !== null) {
-        next.email2 = updates.email2;
-      }
-
-      if (updates.email3 !== undefined && updates.email3 !== null) {
-        next.email3 = updates.email3;
-      }
-
-      if (updates.status !== undefined && updates.status !== '') {
-        next.status = updates.status;
-      }
-
-      if (updates.dateAdded !== undefined && updates.dateAdded !== '') {
-        next.dateAdded = updates.dateAdded.trim();
-      }
-
-      if (updates.notes !== undefined && updates.notes !== '') {
-        if (updates.notesMode === 'append') {
-          next.notes = next.notes ? `${next.notes} | ${updates.notes.trim()}` : updates.notes.trim();
-        } else {
-          next.notes = updates.notes.trim();
-        }
-      }
-
-      next.updatedAt = new Date().toISOString();
-      return sanitizeLeadState(next);
-    });
-
-    const newActivity = {
-      id: 'act_' + Date.now(),
-      timestamp: new Date().toISOString(),
-      type: 'bulk_edit',
-      count: leadIds.length,
-      description: `Bulk updated ${leadIds.length} selected leads`
-    };
-
-    setWorkspaces(prev => prev.map(w => {
+    const nextWorkspaces = workspaces.map(w => {
       if (w.id === currentWorkspaceId) {
+        const updatedLeads = (w.leads || []).map(lead => {
+          if (!targetSet.has(lead.id)) return lead;
+
+          const next = { ...lead };
+
+          if (updates.campaignName !== undefined && updates.campaignName !== '') {
+            next.campaignName = updates.campaignName.trim();
+          }
+
+          if (updates.stage !== undefined && updates.stage !== '') {
+            next.stage = updates.stage;
+            const isPos = isPositivePipelineStage(updates.stage);
+            const isDnc = updates.stage.toLowerCase().includes('dnc') || 
+                          updates.stage.toLowerCase().includes('unsub') || 
+                          updates.stage.toLowerCase().includes('not interested');
+            const isInProgress = updates.stage.toLowerCase().includes('progress') || updates.stage.toLowerCase().includes('pending');
+            const isLost = updates.stage.toLowerCase().includes('lost') || 
+                           updates.stage.toLowerCase().includes('not a fit') || 
+                           updates.stage.toLowerCase().includes('disqual');
+
+            if (isDnc) {
+              next.status = 'dnc';
+              next.isDNC = true;
+              next.replyDate = '';
+              next.dealValue = 0;
+            } else if (isInProgress) {
+              next.status = deriveLeadStatus(next);
+              next.replyDate = '';
+              next.dealValue = 0;
+              next.isDNC = false;
+            } else if (isPos) {
+              next.status = 'interested';
+              next.isDNC = false;
+              if (!next.replyDate) next.replyDate = today;
+            } else if (isLost) {
+              next.status = 'lost';
+              next.isDNC = false;
+            }
+          }
+
+          if (updates.dealValue !== undefined && updates.dealValue !== '') {
+            next.dealValue = Number(updates.dealValue) || 0;
+          }
+
+          if (updates.accountName !== undefined && updates.accountName !== '') {
+            next.accountName = updates.accountName.trim();
+          }
+
+          if (updates.city !== undefined && updates.city !== '') {
+            next.city = updates.city.trim();
+          }
+
+          if (updates.email1 !== undefined && updates.email1 !== null) {
+            next.email1 = updates.email1;
+          }
+
+          if (updates.email2 !== undefined && updates.email2 !== null) {
+            next.email2 = updates.email2;
+          }
+
+          if (updates.email3 !== undefined && updates.email3 !== null) {
+            next.email3 = updates.email3;
+          }
+
+          if (updates.status !== undefined && updates.status !== '') {
+            next.status = updates.status;
+          } else {
+            // Automatically derive status so clearing emails immediately changes sent_1 -> pending
+            const isPos = isPositivePipelineStage(next.stage);
+            const isDnc = isLeadDNC(next);
+            if (!isPos && !isDnc) {
+              next.status = deriveLeadStatus(next);
+            }
+          }
+
+          if (updates.dateAdded !== undefined && updates.dateAdded !== '') {
+            next.dateAdded = updates.dateAdded.trim();
+          }
+
+          if (updates.notes !== undefined && updates.notes !== '') {
+            if (updates.notesMode === 'append') {
+              next.notes = next.notes ? `${next.notes} | ${updates.notes.trim()}` : updates.notes.trim();
+            } else {
+              next.notes = updates.notes.trim();
+            }
+          }
+
+          next.updatedAt = nowIso;
+          const sanitized = sanitizeLeadState(next);
+          editedLeads.push(sanitized);
+          return sanitized;
+        });
+
+        const newActivity = {
+          id: 'act_' + Date.now(),
+          timestamp: nowIso,
+          type: 'bulk_edit',
+          count: leadIds.length,
+          description: `Bulk updated ${leadIds.length} selected leads`
+        };
+
         return {
           ...w,
           leads: updatedLeads,
           activityLog: [newActivity, ...(w.activityLog || [])],
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso
         };
       }
       return w;
-    }));
+    });
 
+    setWorkspaces(nextWorkspaces);
+    // 1. Synchronously persist to local storage (IndexedDB & localStorage)
+    saveWorkspacesToLocal(nextWorkspaces);
+
+    // 2. Immediately push to Supabase Cloud
+    saveWorkspacesToCloud(nextWorkspaces, currentWorkspaceId).catch(err => {
+      console.warn('Direct cloud save notice in bulkUpdateLeads:', err);
+    });
+
+    // 3. Immediately push changed leads to Google Sheets
+    syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, editedLeads, {
+      id: 'act_' + Date.now(),
+      timestamp: nowIso,
+      type: 'bulk_edit',
+      count: leadIds.length,
+      description: `Bulk updated ${leadIds.length} selected leads`
+    }).catch(() => {});
+
+    // 4. Broadcast realtime updates across all devices
+    broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+      workspaceId: currentWorkspaceId,
+      leads: editedLeads,
+      updatedAt: nowIso
+    }).catch(() => {});
+
+    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
+      workspaceId: currentWorkspaceId,
+      updatedAt: nowIso
+    }).catch(() => {});
+
+    logWarriorAction('bulk_edit', `Bulk updated ${leadIds.length} selected leads in workspace`);
     return leadIds.length;
   }
 
@@ -2347,16 +2427,23 @@ export function WorkspaceProvider({ children }) {
     if (!currentWorkspace || !leadIds || leadIds.length === 0 || !newAccount) return 0;
     const clean = newAccount.trim();
     const idSet = new Set(leadIds);
-    setWorkspaces(prev => prev.map(w => {
+    const nowIso = new Date().toISOString();
+
+    const nextWorkspaces = workspaces.map(w => {
       if (w.id === currentWorkspaceId) {
         return {
           ...w,
-          leads: w.leads.map(l => idSet.has(l.id) ? { ...l, accountName: clean, updatedAt: new Date().toISOString() } : l),
-          updatedAt: new Date().toISOString()
+          leads: (w.leads || []).map(l => idSet.has(l.id) ? { ...l, accountName: clean, updatedAt: nowIso } : l),
+          updatedAt: nowIso
         };
       }
       return w;
-    }));
+    });
+
+    setWorkspaces(nextWorkspaces);
+    saveWorkspacesToLocal(nextWorkspaces);
+    saveWorkspacesToCloud(nextWorkspaces, currentWorkspaceId).catch(() => {});
+
     return leadIds.length;
   }
 

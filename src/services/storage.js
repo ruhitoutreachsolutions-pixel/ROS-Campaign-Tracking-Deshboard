@@ -319,10 +319,17 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
 
     // Email sending progress: always pick the latest sent date/status
     const pickNewestEmail = (valA, valB) => {
-      if (!valA) return valB || '';
-      if (!valB) return valA || '';
-      if (valA === valB) return valA;
-      return timeB >= timeA ? valB : valA;
+      if (valA === valB) return valA || '';
+      // If timeA > timeB, leadA is newer and its value is authoritative (even if cleared to '')
+      if (timeA > timeB) {
+        return valA !== undefined ? (valA || '') : (valB || '');
+      }
+      // If timeB > timeA, leadB is newer
+      if (timeB > timeA) {
+        return valB !== undefined ? (valB || '') : (valA || '');
+      }
+      // If timestamps identical, pick non-empty
+      return (valA && valA.trim()) ? valA : (valB || '');
     };
 
     const email1 = pickNewestEmail(leadA.email1, leadB.email1);
@@ -355,6 +362,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       if (email3 && email3.trim()) status = 'sent_3';
       else if (email2 && email2.trim()) status = 'sent_2';
       else if (email1 && email1.trim()) status = 'sent_1';
+      else status = 'pending';
     }
 
     const notes = (leadB.notes && leadB.notes.length >= (leadA.notes?.length || 0))
