@@ -100,7 +100,8 @@ function getLocalDeletedIds() {
 }
 
 // 2. Fetch all workspaces from Supabase Cloud Database (Lightweight & Scalable)
-export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null) {
+export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null, mergeOptions = {}) {
+  const unionSentEmailsFor = Array.isArray(mergeOptions.unionSentEmailsFor) ? mergeOptions.unionSentEmailsFor : [];
   const safeFallback = Array.isArray(fallbackWorkspaces) ? fallbackWorkspaces : [];
   const supabase = getSupabaseClient();
   if (!supabase) {
@@ -142,7 +143,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 
         let leads = [];
         const isTarget = targetWorkspaceId && targetWorkspaceId === item.id;
-        const needsCloudLeads = isTarget || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
+        const needsCloudLeads = isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
 
         if (needsCloudLeads) {
           try {
@@ -158,7 +159,8 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
                   workspaceId: item.id,
                   localWsUpdatedAt: localWs.updatedAt,
                   cloudWsUpdatedAt: item.updated_at,
-                  deletedLeadIds: localWs.deletedLeadIds || []
+                  deletedLeadIds: localWs.deletedLeadIds || [],
+                  unionSentEmails: unionSentEmailsFor.includes(item.id)
                 });
               } else {
                 leads = leadRow.leads;
@@ -239,6 +241,234 @@ export function getLastCloudError() {
   return lastCloudErrorMsg;
 }
 
+// Crewlix (20k+ leads) ships its authoritative baseline in the bundle, so the cloud row only needs
+// the leads that differ from it. Every read path already backfills baseline leads by id.
+let crewlixBaselineMap = null;
+function getCrewlixBaselineMap() {
+  if (!crewlixBaselineMap) {
+    crewlixBaselineMap = new Map(
+      (crewlixAuthoritative20113?.leads || []).filter(l => l && l.id).map(l => [String(l.id), l])
+    );
+  }
+  return crewlixBaselineMap;
+}
+
+const DIFF_IGNORED_KEYS = new Set(['updatedAt', 'importedAt']);
+function leadDiffersFromBaseline(lead, base) {
+  if (!base) return true;
+  const keys = new Set([...Object.keys(lead), ...Object.keys(base)]);
+  for (const k of keys) {
+    if (DIFF_IGNORED_KEYS.has(k)) continue;
+    const a = lead[k] === undefined || lead[k] === null ? '' : lead[k];
+    const b = base[k] === undefined || base[k] === null ? '' : base[k];
+    if (typeof a === 'object' || typeof b === 'object') {
+      if (JSON.stringify(a) !== JSON.stringify(b)) return true;
+    } else if (String(a) !== String(b)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toCrewlixCloudDelta(leads, previousCloudLeads = []) {
+  const baseline = getCrewlixBaselineMap();
+  // Leads the cloud already stored as changed stay in the delta, so reverting a field back to its
+  // baseline value still propagates (with its newer timestamp) instead of silently dropping out.
+  const previouslyChanged = new Set(
+    (previousCloudLeads || [])
+      .filter(l => l && l.id && leadDiffersFromBaseline(l, baseline.get(String(l.id))))
+      .map(l => String(l.id))
+  );
+  return leads.filter(l => {
+    if (!l || !l.id) return true;
+    const id = String(l.id);
+    return previouslyChanged.has(id) || leadDiffersFromBaseline(l, baseline.get(id));
+  });
+}
+
+export function mergeActivityLogs(localLog = [], cloudLog = []) {
+  const map = new Map();
+  [...(Array.isArray(cloudLog) ? cloudLog : []), ...(Array.isArray(localLog) ? localLog : [])].forEach(a => {
+    if (!a) return;
+    map.set(a.id || `${a.timestamp}_${a.description}`, a);
+  });
+  return Array.from(map.values())
+    .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
+    .slice(0, 500);
+}
+
+// Result of the most recent successful save per workspace: the fully merged state that is now in
+// the cloud. The context applies it locally so changes merged in from other portals show up at once.
+const lastSavedRows = new Map();
+export function getLastSavedRow(wsId) {
+  return lastSavedRows.get(wsId) || null;
+}
+
+// Saves for the same workspace run one at a time so two saves from this device never race each other.
+const workspaceSaveQueues = new Map();
+function enqueueWorkspaceSave(wsId, task) {
+  const prev = workspaceSaveQueues.get(wsId) || Promise.resolve();
+  const next = prev.catch(() => {}).then(task);
+  workspaceSaveQueues.set(wsId, next.catch(() => {}));
+  return next;
+}
+
+// Lightweight header poll: which workspaces changed in the cloud (no leads payload).
+export async function fetchWorkspaceHeadersFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.from('workspaces').select('id, updated_at');
+    if (error || !Array.isArray(data)) return null;
+    const deletedIds = getLocalDeletedIds();
+    return data.filter(r =>
+      r && r.id && !r.id.startsWith('__ros_') &&
+      !PERMANENTLY_PURGED_WS_IDS.includes(r.id) &&
+      !deletedIds.includes(r.id)
+    );
+  } catch (err) {
+    return null;
+  }
+}
+
+const MAX_SAVE_ATTEMPTS = 4;
+
+async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
+  for (let attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt++) {
+    const { data: existingRow, error: checkErr } = await supabase
+      .from('workspaces')
+      .select('id, updated_at, leads, sequence_config, activity_log')
+      .eq('id', ws.id)
+      .maybeSingle();
+
+    if (checkErr) {
+      lastCloudErrorMsg = checkErr.message || String(checkErr);
+      return false;
+    }
+
+    const cloudDeleted = Array.isArray(existingRow?.sequence_config?.deletedLeadIds) ? existingRow.sequence_config.deletedLeadIds : [];
+    const localDeleted = Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || []);
+    const mergedDeleted = Array.from(new Set([...cloudDeleted, ...localDeleted])).slice(-10000);
+
+    let leadsToSave = ws.leads || [];
+    if (existingRow) {
+      const cloudTime = new Date(existingRow.updated_at || 0).getTime();
+      const localTime = new Date(ws.updatedAt || 0).getTime();
+      const cleanCloudLeads = Array.isArray(existingRow.leads)
+        ? existingRow.leads.filter(l => !isLeadPermanentlyPurged(l, ws.id))
+        : [];
+
+      // Bulk (untargeted) save: skip when the cloud already holds everything this device has
+      if (!isTargeted && cloudTime >= localTime && cleanCloudLeads.length >= (ws.leads?.length || 0)) {
+        return true;
+      }
+
+      if (cleanCloudLeads.length > 0) {
+        leadsToSave = mergeWorkspaceLeads(ws.leads || [], cleanCloudLeads, {
+          workspaceId: ws.id,
+          localWsUpdatedAt: ws.updatedAt,
+          cloudWsUpdatedAt: existingRow.updated_at,
+          deletedLeadIds: mergedDeleted
+        });
+      }
+    }
+
+    leadsToSave = (leadsToSave || []).map(l => sanitizeLeadForWorkspace(l, ws.id)).filter(Boolean);
+
+    if (ws.id === 'ws_zrnl1fjb' && leadsToSave.length < 3804 && Array.isArray(cgeAuthoritative3804?.leads)) {
+      const idSet = new Set(leadsToSave.map(l => l.id));
+      cgeAuthoritative3804.leads.forEach(al => {
+        if (!idSet.has(al.id)) {
+          leadsToSave.push(al);
+          idSet.add(al.id);
+        }
+      });
+    }
+
+    let cloudLeadsPayload = leadsToSave;
+    if (ws.id === 'ws_crewlixukltd') {
+      if (leadsToSave.length < 20113 && Array.isArray(crewlixAuthoritative20113?.leads)) {
+        const idSet = new Set(leadsToSave.map(l => l.id));
+        crewlixAuthoritative20113.leads.forEach(al => {
+          if (!idSet.has(al.id)) {
+            leadsToSave.push(al);
+            idSet.add(al.id);
+          }
+        });
+      }
+      // Previously Crewlix was skipped entirely (payload too large), so its edits never left the
+      // device. Upload only the leads that differ from the bundled baseline.
+      cloudLeadsPayload = toCrewlixCloudDelta(leadsToSave, existingRow?.leads);
+    }
+
+    const mergedActivity = mergeActivityLogs(ws.activityLog || [], existingRow?.activity_log || []);
+    const nowIso = new Date().toISOString();
+
+    const payload = {
+      id: ws.id,
+      name: ws.name,
+      client_name: ws.clientName || ws.name,
+      client_email: ws.clientEmail || '',
+      campaign_name: ws.campaignName || 'Care Campaign',
+      active_sending_account: ws.activeSendingAccount || ws.sendingAccounts?.[0] || '',
+      sending_accounts: ws.sendingAccounts || [ws.activeSendingAccount],
+      client_credentials: ws.clientCredentials || { username: ws.name, password: 'client2026' },
+      sequence_config: {
+        ...(existingRow?.sequence_config || {}),
+        ...(ws.sequenceConfig || {}),
+        deletedLeadIds: mergedDeleted
+      },
+      activity_log: mergedActivity,
+      leads: cloudLeadsPayload,
+      updated_at: nowIso
+    };
+
+    let writeError = null;
+    let conflict = false;
+
+    if (existingRow) {
+      // Compare-and-swap: only write if nobody else saved since we read. Otherwise re-read,
+      // re-merge and retry, so concurrent saves from two portals can't erase each other's edits.
+      let casQuery = supabase.from('workspaces').update(payload).eq('id', ws.id);
+      casQuery = existingRow.updated_at
+        ? casQuery.eq('updated_at', existingRow.updated_at)
+        : casQuery.is('updated_at', null);
+      const { data: updatedRows, error } = await casQuery.select('id');
+      writeError = error;
+      conflict = !error && (!Array.isArray(updatedRows) || updatedRows.length === 0);
+    } else {
+      const { error } = await supabase.from('workspaces').upsert(payload, { onConflict: 'id' });
+      writeError = error;
+    }
+
+    if (writeError) {
+      console.warn(`Error syncing workspace ${ws.id} to Supabase:`, writeError);
+      lastCloudErrorMsg = writeError.message || writeError.details || String(writeError);
+      return false;
+    }
+
+    if (conflict) {
+      if (attempt < MAX_SAVE_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, 150 * attempt + Math.random() * 200));
+        continue;
+      }
+      lastCloudErrorMsg = `Workspace ${ws.id} kept changing in the cloud during save; will retry on next sync.`;
+      return false;
+    }
+
+    lastSavedRows.set(ws.id, {
+      id: ws.id,
+      leads: leadsToSave,
+      activity_log: mergedActivity,
+      sequence_config: payload.sequence_config,
+      updated_at: nowIso,
+      savedLocalUpdatedAt: ws.updatedAt
+    });
+    return true;
+  }
+  return false;
+}
+
 // 3. Save / Sync Workspaces (including leads) to Supabase Cloud Database (Targeted & Efficient)
 export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null) {
   if (!workspaces || !Array.isArray(workspaces) || workspaces.length === 0) return false;
@@ -249,140 +479,24 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
   const deletedIds = getLocalDeletedIds();
   lastCloudErrorMsg = null;
 
-  try {
-    let hasError = false;
+  let hasError = false;
+  for (const ws of workspaces) {
+    if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
+    if (targetWorkspaceId && ws.id !== targetWorkspaceId) continue;
 
-    for (const ws of workspaces) {
-      if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
+    // Skip massive historical archives during untargeted bulk saves to avoid statement timeouts
+    if (!targetWorkspaceId && ws.leads && ws.leads.length > 5000) continue;
 
-      // If a specific targetWorkspaceId was requested, only save that workspace
-      if (targetWorkspaceId && ws.id !== targetWorkspaceId) continue;
-
-      // Skip massive historical archives (e.g. 5,000+ leads) during bulk saves to avoid statement timeouts
-      if (!targetWorkspaceId && ws.leads && ws.leads.length > 5000) {
-        continue;
-      }
-
-      // Pre-save safety & merge: fetch existing cloud row to prevent blind overwrite
-      let leadsToSave = ws.leads || [];
-      try {
-        const { data: existingRow, error: checkErr } = await supabase
-          .from('workspaces')
-          .select('id, updated_at, leads, sequence_config')
-          .eq('id', ws.id)
-          .maybeSingle();
-
-        if (!checkErr && existingRow) {
-          const cloudTime = new Date(existingRow.updated_at || 0).getTime();
-          const localTime = new Date(ws.updatedAt || 0).getTime();
-          const cleanCloudLeads = Array.isArray(existingRow.leads)
-            ? existingRow.leads.filter(l => !isLeadPermanentlyPurged(l, ws.id))
-            : [];
-
-          // If bulk save and cloud already has newer/identical data and same/more leads, skip
-          if (!targetWorkspaceId && cloudTime >= localTime && cleanCloudLeads.length >= (ws.leads?.length || 0)) {
-            continue;
-          }
-
-          // If cloud has leads, merge local and cloud leads non-destructively
-          if (cleanCloudLeads.length > 0) {
-            leadsToSave = mergeWorkspaceLeads(ws.leads || [], cleanCloudLeads, {
-              workspaceId: ws.id,
-              localWsUpdatedAt: ws.updatedAt,
-              cloudWsUpdatedAt: existingRow.updated_at,
-              deletedLeadIds: [
-                ...(ws.deletedLeadIds || []),
-                ...(existingRow.sequence_config?.deletedLeadIds || [])
-              ]
-            });
-            ws.leads = leadsToSave;
-          }
-        }
-      } catch (guardErr) {
-        console.warn('Supabase safety pre-check warning:', guardErr);
-      }
-
-      leadsToSave = (leadsToSave || []).map(l => sanitizeLeadForWorkspace(l, ws.id)).filter(Boolean);
-
-      if (ws.id === 'ws_zrnl1fjb') {
-        if (leadsToSave.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
-          const idSet = new Set(leadsToSave.map(l => l.id));
-          cgeAuthoritative3804.leads.forEach(al => {
-            if (!idSet.has(al.id)) {
-              leadsToSave.push(al);
-              idSet.add(al.id);
-            }
-          });
-        }
-      }
-
-      if (ws.id === 'ws_crewlixukltd') {
-        if (leadsToSave.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
-          const idSet = new Set(leadsToSave.map(l => l.id));
-          crewlixAuthoritative20113.leads.forEach(al => {
-            if (!idSet.has(al.id)) {
-              leadsToSave.push(al);
-              idSet.add(al.id);
-            }
-          });
-        }
-        // Skip uploading 6.2MB massive historical lead archive to Supabase during standard auto-saves
-        // to prevent statement timeouts and bandwidth exhaustion on Supabase nano instance
-        if (leadsToSave.length >= 20000) {
-          continue;
-        }
-      }
-
-      // Cap deletedLeadIds to recent 10000 to prevent unbounded bloat while retaining bulk deletions
-      const rawDeleted = Array.isArray(ws.deletedLeadIds) 
-        ? ws.deletedLeadIds 
-        : (ws.sequenceConfig?.deletedLeadIds || []);
-      const cappedDeleted = rawDeleted.slice(-10000);
-
-      const payload = {
-        id: ws.id,
-        name: ws.name,
-        client_name: ws.clientName || ws.name,
-        client_email: ws.clientEmail || '',
-        campaign_name: ws.campaignName || 'Care Campaign',
-        active_sending_account: ws.activeSendingAccount || ws.sendingAccounts?.[0] || '',
-        sending_accounts: ws.sendingAccounts || [ws.activeSendingAccount],
-        client_credentials: ws.clientCredentials || { username: ws.name, password: 'client2026' },
-        sequence_config: {
-          ...(ws.sequenceConfig || {}),
-          deletedLeadIds: cappedDeleted
-        },
-        activity_log: ws.activityLog || [],
-        leads: leadsToSave,
-        updated_at: new Date().toISOString()
-      };
-
-      try {
-        const { error } = await supabase
-          .from('workspaces')
-          .upsert(payload, { onConflict: 'id' });
-
-        if (error) {
-          console.warn(`Error syncing workspace ${ws.id} to Supabase:`, error);
-          lastCloudErrorMsg = error.message || error.details || String(error);
-          if (!targetWorkspaceId || ws.id === targetWorkspaceId) {
-            hasError = true;
-          }
-        }
-      } catch (upsertErr) {
-        console.warn(`Upsert exception for ${ws.id}:`, upsertErr);
-        lastCloudErrorMsg = upsertErr.message || String(upsertErr);
-        if (!targetWorkspaceId || ws.id === targetWorkspaceId) {
-          hasError = true;
-        }
-      }
+    try {
+      const ok = await enqueueWorkspaceSave(ws.id, () => saveSingleWorkspaceToCloud(supabase, ws, !!targetWorkspaceId));
+      if (!ok) hasError = true;
+    } catch (err) {
+      console.warn(`Save exception for ${ws.id}:`, err);
+      lastCloudErrorMsg = err.message || String(err);
+      hasError = true;
     }
-    return !hasError;
-  } catch (err) {
-    console.warn('Supabase save failed:', err);
-    lastCloudErrorMsg = err.message || String(err);
-    return false;
   }
+  return !hasError;
 }
 
 // 3b. Delete Workspace from Supabase Cloud Database

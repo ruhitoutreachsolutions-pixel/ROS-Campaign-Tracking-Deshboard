@@ -307,8 +307,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
           stage: 'Interested',
           updatedAt: new Date(Math.max(
             new Date(leadA.updatedAt || 0).getTime(),
-            new Date(leadB.updatedAt || 0).getTime(),
-            Date.now()
+            new Date(leadB.updatedAt || 0).getTime()
           )).toISOString()
         };
       }
@@ -332,9 +331,23 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       return (valA && valA.trim()) ? valA : (valB || '');
     };
 
-    const email1 = pickNewestEmail(leadA.email1, leadB.email1);
-    const email2 = pickNewestEmail(leadA.email2, leadB.email2);
-    const email3 = pickNewestEmail(leadA.email3, leadB.email3);
+    // One-time migration mode: keep any recorded send (either side). Used only where lead
+    // timestamps can't be trusted yet, so a stale copy can never erase a real sent date.
+    const pickUnionEmail = (valA, valB) => {
+      const a = (valA || '').trim();
+      const b = (valB || '').trim();
+      if (a && b) return timeA >= timeB ? valA : valB;
+      return a ? valA : (b ? valB : '');
+    };
+    const pickEmail = options.unionSentEmails ? pickUnionEmail : pickNewestEmail;
+
+    const email1 = pickEmail(leadA.email1, leadB.email1);
+    const email2 = pickEmail(leadA.email2, leadB.email2);
+    const email3 = pickEmail(leadA.email3, leadB.email3);
+    const newerLead = timeA >= timeB ? leadA : leadB;
+    const repairedSend = options.unionSentEmails && (
+      email1 !== (newerLead.email1 || '') || email2 !== (newerLead.email2 || '') || email3 !== (newerLead.email3 || '')
+    );
 
     // Advanced stages: preserve interested, meeting booked, won, dnc
     const aAdv = isAdvancedStage(leadA);
@@ -343,17 +356,23 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     let stage = leadA.stage || leadB.stage || '';
     let status = leadA.status || leadB.status || 'pending';
 
-    if (bAdv && !aAdv) {
+    // Newer edit wins so a lead can be moved OUT of Interested/DNC and that change syncs.
+    // Advanced stage only breaks ties (e.g. legacy leads without timestamps).
+    if (timeA > timeB) {
+      stage = leadA.stage !== undefined ? leadA.stage : leadB.stage;
+      status = leadA.status || leadB.status;
+    } else if (timeB > timeA) {
+      stage = leadB.stage !== undefined ? leadB.stage : leadA.stage;
+      status = leadB.status || leadA.status;
+    } else if (bAdv && !aAdv) {
       stage = leadB.stage;
       status = leadB.status;
     } else if (aAdv && !bAdv) {
       stage = leadA.stage;
       status = leadA.status;
     } else {
-      if (timeB >= timeA) {
-        stage = leadB.stage || leadA.stage;
-        status = leadB.status || leadA.status;
-      }
+      stage = leadB.stage || leadA.stage;
+      status = leadB.status || leadA.status;
     }
 
     const isDnc = status === 'dnc' || (stage && stage.toLowerCase().includes('dnc'));
@@ -381,8 +400,11 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       status,
       notes,
       dealValue: primary.dealValue !== undefined ? primary.dealValue : (secondary.dealValue || 0),
-      replyDate: primary.replyDate || secondary.replyDate || '',
-      updatedAt: new Date(Math.max(timeA, timeB, Date.now())).toISOString()
+      replyDate: primary.replyDate !== undefined ? (primary.replyDate || '') : (secondary.replyDate || ''),
+      // Keep the real edit time. Stamping Date.now() here made every merged copy look
+      // "newest", so a stale portal could overwrite a genuinely newer edit from another portal.
+      // A repaired send is stamped now so it wins everywhere it propagates
+      updatedAt: new Date(repairedSend ? Date.now() : (Math.max(timeA, timeB) || Date.now())).toISOString()
     };
   };
 

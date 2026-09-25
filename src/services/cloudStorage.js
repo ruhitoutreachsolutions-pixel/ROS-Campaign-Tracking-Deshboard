@@ -139,20 +139,32 @@ export function subscribeRealtimeEvents(onEventReceived) {
   }
 
   // 2. Listen to Supabase Global Realtime Broadcast (all devices globally)
-  const channel = getGlobalRealtimeChannel();
-  let supabaseHandler = null;
-  if (channel) {
-    supabaseHandler = ({ payload }) => {
-      if (payload) handleEvent(payload);
-    };
-    channel.on('broadcast', { event: 'ros_event' }, supabaseHandler);
-  }
+  // The channel binding is registered once; subscribers come and go via the listener set.
+  // (Re-binding per subscribe leaked handlers on every login/role change, so each event
+  // was processed several times.)
+  ensureSupabaseBroadcastBinding();
+  supabaseListeners.add(handleEvent);
 
   return () => {
+    supabaseListeners.delete(handleEvent);
     if (broadcastChannel && channelHandler) {
       broadcastChannel.removeEventListener('message', channelHandler);
     }
   };
+}
+
+const supabaseListeners = new Set();
+let supabaseBindingChannel = null;
+function ensureSupabaseBroadcastBinding() {
+  const channel = getGlobalRealtimeChannel();
+  if (!channel || supabaseBindingChannel === channel) return;
+  supabaseBindingChannel = channel;
+  channel.on('broadcast', { event: 'ros_event' }, ({ payload }) => {
+    if (!payload) return;
+    supabaseListeners.forEach(fn => {
+      try { fn(payload); } catch (e) {}
+    });
+  });
 }
 
 // 3. Historical Events Catch-Up (From Supabase Timeline)

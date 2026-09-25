@@ -14,8 +14,11 @@ import {
 } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested } from '../utils/helpers';
 import { 
-  fetchWorkspacesFromCloud, 
-  saveWorkspacesToCloud, 
+  fetchWorkspacesFromCloud,
+  saveWorkspacesToCloud as saveWorkspacesToCloudRaw,
+  getLastSavedRow,
+  fetchWorkspaceHeadersFromCloud,
+  mergeActivityLogs,
   deleteWorkspaceFromCloud,
   getSupabaseConfig, 
   saveSupabaseConfig, 
@@ -84,6 +87,7 @@ const STORAGE_KEY_TIMELINE = 'ros_warrior_timeline_v1';
 const STORAGE_KEY_DELETED_WORKSPACES = 'ros_deleted_workspaces_v1';
 const STORAGE_KEY_FORM_SUBMISSIONS = 'ros_form_submissions_v1';
 const STORAGE_KEY_DELETED_FORM_IDS = 'ros_deleted_form_submissions_v1';
+const STORAGE_KEY_CREWLIX_UNION_DONE = 'ros_sync_v3_crewlix_union_done';
 
 export function getDeletedWorkspaceIds() {
   try {
@@ -626,6 +630,107 @@ export function WorkspaceProvider({ children }) {
   const currentWorkspaceIdRef = useRef(currentWorkspaceId);
   currentWorkspaceIdRef.current = currentWorkspaceId;
 
+  // ---------------------------------------------------------------------------
+  // CROSS-PORTAL SYNC BOOKKEEPING
+  // cleanStampRef:     per workspace, the local updatedAt that is known to be in the cloud.
+  //                    A workspace is "dirty" (needs upload) only when its updatedAt is newer.
+  // knownCloudTimeRef: per workspace, the newest cloud updated_at already merged locally.
+  //                    The poller pulls only when the cloud header is newer than this.
+  // Without this, every pull re-uploaded the workspace, bumping updated_at and making every
+  // other portal pull + re-upload in turn (endless ping-pong of full lead payloads).
+  // ---------------------------------------------------------------------------
+  const cleanStampRef = useRef({});
+  const knownCloudTimeRef = useRef({});
+  const tsOf = (v) => {
+    const t = new Date(v || 0).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const isWorkspaceDirty = (ws) => !!ws && tsOf(ws.updatedAt) > (cleanStampRef.current[ws.id] || 0);
+
+  // Merge a cloud row (or realtime lead delta) into local state. If the local copy had no
+  // unsaved edits, the result is marked clean so it is not uploaded back.
+  function applyCloudRowToState(wsId, cloudRow) {
+    if (!wsId || !cloudRow || !Array.isArray(cloudRow.leads)) return;
+    const cloudTime = tsOf(cloudRow.updated_at);
+    knownCloudTimeRef.current[wsId] = Math.max(knownCloudTimeRef.current[wsId] || 0, cloudTime);
+
+    setWorkspaces(prev => {
+      const target = prev.find(w => w.id === wsId);
+      if (!target) return prev;
+      const wasClean = !isWorkspaceDirty(target);
+      const cloudDeleted = Array.isArray(cloudRow.sequence_config?.deletedLeadIds) ? cloudRow.sequence_config.deletedLeadIds : [];
+      const deletedLeadIds = Array.from(new Set([...(target.deletedLeadIds || []), ...cloudDeleted])).slice(-10000);
+
+      const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
+        workspaceId: wsId,
+        localWsUpdatedAt: target.updatedAt,
+        cloudWsUpdatedAt: cloudRow.updated_at,
+        deletedLeadIds
+      }).map(sanitizeLeadState);
+
+      const nextUpdated = Math.max(tsOf(target.updatedAt), cloudTime);
+      if (wasClean) {
+        cleanStampRef.current[wsId] = Math.max(cleanStampRef.current[wsId] || 0, nextUpdated);
+      }
+
+      // Workspace settings (name, sending accounts, client login) follow the cloud when this
+      // portal has no unsaved edits of its own
+      const meta = {};
+      if (wasClean && cloudTime >= tsOf(target.updatedAt)) {
+        if (cloudRow.name) meta.name = cloudRow.name;
+        if (cloudRow.client_name) meta.clientName = cloudRow.client_name;
+        if (cloudRow.client_email !== undefined) meta.clientEmail = cloudRow.client_email || '';
+        if (cloudRow.campaign_name) meta.campaignName = cloudRow.campaign_name;
+        if (cloudRow.active_sending_account !== undefined) meta.activeSendingAccount = cloudRow.active_sending_account || '';
+        if (Array.isArray(cloudRow.sending_accounts)) meta.sendingAccounts = cloudRow.sending_accounts;
+        if (cloudRow.client_credentials && typeof cloudRow.client_credentials === 'object') meta.clientCredentials = cloudRow.client_credentials;
+      }
+
+      const next = prev.map(w => w.id !== wsId ? w : {
+        ...w,
+        ...meta,
+        leads: mergedLeads,
+        deletedLeadIds,
+        activityLog: Array.isArray(cloudRow.activity_log)
+          ? mergeActivityLogs(w.activityLog || [], cloudRow.activity_log)
+          : (w.activityLog || []),
+        updatedAt: new Date(nextUpdated).toISOString()
+      });
+      saveWorkspacesToLocal(next);
+      return next;
+    });
+  }
+
+  async function fetchAndApplyCloudWorkspace(wsId) {
+    const supabase = getSupabaseClient();
+    if (!supabase || !wsId) return;
+    const { data: cloudRow, error } = await supabase
+      .from('workspaces')
+      .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, activity_log, sequence_config, updated_at')
+      .eq('id', wsId)
+      .maybeSingle();
+    if (!error && cloudRow) applyCloudRowToState(wsId, cloudRow);
+  }
+
+  // Wraps the raw cloud save: after a targeted save succeeds, marks the saved state clean,
+  // pulls the merged result (which may include other portals' edits) into local state, and
+  // tells every other portal to pull it.
+  async function saveWorkspacesToCloud(list, targetId = null) {
+    if (!targetId) return saveWorkspacesToCloudRaw(list);
+    const ws = (list || []).find(w => w && w.id === targetId);
+    const ok = await saveWorkspacesToCloudRaw(list, targetId);
+    if (ok && ws) {
+      cleanStampRef.current[targetId] = Math.max(cleanStampRef.current[targetId] || 0, tsOf(ws.updatedAt));
+      const saved = getLastSavedRow(targetId);
+      if (saved) applyCloudRowToState(targetId, saved);
+      broadcastRealtimeEvent('WORKSPACE_SAVED', {
+        workspaceId: targetId,
+        updatedAt: saved?.updated_at || new Date().toISOString()
+      }).catch(() => {});
+    }
+    return ok;
+  }
+
   // 2. Durable Local Storage Load (IndexedDB has NO 5MB limit and stores full 50k+ leads safely)
   useEffect(() => {
     let isMounted = true;
@@ -661,21 +766,27 @@ export function WorkspaceProvider({ children }) {
     let isMounted = true;
     async function syncFromCloud() {
       try {
-        const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, currentWorkspaceIdRef.current);
+        // Crewlix edits never reached the cloud before, and lead timestamps were unreliable, so
+        // this device's first merge keeps every recorded send from either side (once per device).
+        let needsCrewlixUnionMigration = false;
+        try { needsCrewlixUnionMigration = localStorage.getItem(STORAGE_KEY_CREWLIX_UNION_DONE) !== 'true'; } catch (e) {}
+
+        const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, currentWorkspaceIdRef.current, {
+          unionSentEmailsFor: needsCrewlixUnionMigration ? ['ws_crewlixukltd'] : []
+        });
         if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
 
         const deletedIds = getDeletedWorkspaceIds();
         const validCloudData = cloudData.filter(c => c && c.id && !c.id.startsWith('__ros_') && !deletedIds.includes(c.id));
 
         setWorkspaces(prev => {
-          let needsPushToCloud = false;
-
           const merged = prev
             .filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
             .map(localWs => {
               const cloudWs = validCloudData.find(c => c.id === localWs.id);
               if (!cloudWs) {
-                needsPushToCloud = true;
+                // Local-only workspace: mark dirty so the autosave uploads it
+                cleanStampRef.current[localWs.id] = -1;
                 return localWs;
               }
 
@@ -687,18 +798,23 @@ export function WorkspaceProvider({ children }) {
                 deletedLeadIds: [
                   ...(localWs.deletedLeadIds || []),
                   ...(cloudWs.deletedLeadIds || [])
-                ]
+                ],
+                unionSentEmails: localWs.id === 'ws_crewlixukltd' && needsCrewlixUnionMigration
               });
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
               const localSent = (localWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
               const cloudSent = (cloudWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
-              if (localSent > cloudSent || localTime > cloudTime) {
-                needsPushToCloud = true;
-              }
 
               const isCloudAuth = cloudTime >= localTime && cloudSent >= localSent;
+              // Any local lead edited after the cloud's last write cannot be in the cloud yet
+              const hasUnsyncedLeadEdits = (localWs.leads || []).some(l => l && tsOf(l.updatedAt) > cloudTime);
+
+              knownCloudTimeRef.current[localWs.id] = Math.max(knownCloudTimeRef.current[localWs.id] || 0, cloudTime);
+              if (isCloudAuth && !hasUnsyncedLeadEdits) {
+                cleanStampRef.current[localWs.id] = tsOf(cloudWs.updatedAt);
+              }
 
               return {
                 ...(isCloudAuth ? localWs : cloudWs),
@@ -719,19 +835,22 @@ export function WorkspaceProvider({ children }) {
           validCloudData.forEach(cWs => {
             if (!merged.some(m => m.id === cWs.id) && !deletedIds.includes(cWs.id)) {
               merged.push(cWs);
+              knownCloudTimeRef.current[cWs.id] = tsOf(cWs.updatedAt);
+              cleanStampRef.current[cWs.id] = tsOf(cWs.updatedAt);
             }
           });
 
           // Filter out internal system metadata and deleted workspaces
           const cleanMerged = sanitizeWorkspaceLeads(merged.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
 
-          // If local has newer follow-ups/updates, push them back to Supabase so all devices stay updated!
-          if (needsPushToCloud) {
-            saveWorkspacesToCloud(cleanMerged).catch(err => console.warn('Cloud sync push notice:', err));
-          }
+          // Workspaces left dirty above (local newer / local-only) are uploaded one by one,
+          // targeted, by the autosave effect once isCloudSyncedRef flips.
 
           // Save merged result safely to IndexedDB
           saveWorkspacesToLocal(cleanMerged);
+          if (needsCrewlixUnionMigration && validCloudData.some(c => c.id === 'ws_crewlixukltd')) {
+            try { localStorage.setItem(STORAGE_KEY_CREWLIX_UNION_DONE, 'true'); } catch (e) {}
+          }
 
           isCloudSyncedRef.current = true;
           return cleanMerged;
@@ -827,9 +946,14 @@ export function WorkspaceProvider({ children }) {
       return;
     }
 
+    // Upload only workspaces with local edits the cloud hasn't seen (any workspace, not just the
+    // open one: metadata edits and auto-heals on other workspaces used to be lost).
     const cloudTimer = setTimeout(() => {
-      saveWorkspacesToCloud(workspaces, currentWorkspaceId).catch(err => {
-        console.warn('Auto cloud sync notice:', err);
+      const latest = workspacesRef.current || [];
+      latest.filter(isWorkspaceDirty).forEach(ws => {
+        saveWorkspacesToCloud(latest, ws.id).catch(err => {
+          console.warn('Auto cloud sync notice:', err);
+        });
       });
     }, 2500);
 
@@ -935,64 +1059,50 @@ export function WorkspaceProvider({ children }) {
           }
         }
 
-        // Active Workspace Auto-Reconcile: Check Supabase for workspace lead updates
-        const activeId = currentWorkspaceIdRef.current;
-        if (activeId && !activeId.startsWith('__ros_')) {
-          const supabase = getSupabaseClient();
-          if (supabase) {
-            const { data: cloudHeader, error: headErr } = await supabase
-              .from('workspaces')
-              .select('id, updated_at')
-              .eq('id', activeId)
-              .maybeSingle();
+        // All-Workspace Auto-Reconcile: one light header query, then pull only workspaces
+        // whose cloud copy changed since we last merged it. (Previously only the open workspace
+        // was checked, so overview numbers for every other workspace went stale per portal.)
+        const headers = await fetchWorkspaceHeadersFromCloud();
+        if (Array.isArray(headers)) {
+          const deletedIds = getDeletedWorkspaceIds();
+          const localIds = new Set((workspacesRef.current || []).map(w => w.id));
+          let hasUnknownCloudWorkspace = false;
 
-            if (!headErr && cloudHeader && cloudHeader.updated_at) {
-              const currentWs = (workspacesRef.current || []).find(w => w.id === activeId);
-              const localTime = new Date(currentWs?.updatedAt || 0).getTime();
-              const cloudTime = new Date(cloudHeader.updated_at).getTime();
-
-              if (cloudTime > localTime + 1500) {
-                const { data: cloudRow, error: rowErr } = await supabase
-                  .from('workspaces')
-                  .select('id, leads, activity_log, sequence_config, updated_at')
-                  .eq('id', activeId)
-                  .maybeSingle();
-
-                if (!rowErr && cloudRow && Array.isArray(cloudRow.leads)) {
-                  setWorkspaces(prev => {
-                    const target = prev.find(w => w.id === activeId);
-                    if (!target) return prev;
-
-                    const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                      workspaceId: activeId,
-                      localWsUpdatedAt: target.updatedAt,
-                      cloudWsUpdatedAt: cloudRow.updated_at,
-                      deletedLeadIds: [
-                        ...(target.deletedLeadIds || []),
-                        ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                      ]
-                    }).map(sanitizeLeadState);
-
-                    const next = prev.map(w => {
-                      if (w.id === activeId) {
-                        return {
-                          ...w,
-                          leads: mergedLeads,
-                          activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
-                            ? cloudRow.activity_log
-                            : (w.activityLog || []),
-                          updatedAt: cloudRow.updated_at
-                        };
-                      }
-                      return w;
-                    });
-                    saveWorkspacesToLocal(next);
-                    return next;
-                  });
-                }
-              }
+          for (const h of headers) {
+            if (deletedIds.includes(h.id)) continue;
+            if (!localIds.has(h.id)) {
+              hasUnknownCloudWorkspace = true;
+              continue;
+            }
+            if (tsOf(h.updated_at) > (knownCloudTimeRef.current[h.id] || 0) + 1000) {
+              await fetchAndApplyCloudWorkspace(h.id);
             }
           }
+
+          // Workspace created on another portal: pull it in
+          if (hasUnknownCloudWorkspace) {
+            const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, null);
+            const fresh = (cloudData || []).filter(c => c && c.id && !localIds.has(c.id) && !deletedIds.includes(c.id) && !c.id.startsWith('__ros_'));
+            if (fresh.length > 0) {
+              fresh.forEach(c => {
+                knownCloudTimeRef.current[c.id] = tsOf(c.updatedAt);
+                cleanStampRef.current[c.id] = tsOf(c.updatedAt);
+              });
+              setWorkspaces(prev => {
+                const next = [...prev, ...sanitizeWorkspaceLeads(fresh.filter(c => !prev.some(p => p.id === c.id)))];
+                saveWorkspacesToLocal(next);
+                return next;
+              });
+            }
+          }
+        }
+
+        // Retry uploads that failed earlier (offline, conflict exhaustion, etc.)
+        if (isCloudSyncedRef.current) {
+          const latest = workspacesRef.current || [];
+          latest.filter(isWorkspaceDirty).forEach(ws => {
+            saveWorkspacesToCloud(latest, ws.id).catch(() => {});
+          });
         }
 
         setLastSyncedTime(new Date());
@@ -1245,6 +1355,13 @@ export function WorkspaceProvider({ children }) {
         const targetWsId = event.workspaceId;
         const delSet = new Set(event.deletedLeadIds);
         setWorkspaces(prev => {
+          const target = prev.find(w => w.id === targetWsId);
+          if (!target) return prev;
+          // The sender uploads this change itself; don't re-upload it from here unless we
+          // already had our own unsaved edits.
+          const wasClean = !isWorkspaceDirty(target);
+          const nextUpdated = Math.max(tsOf(target.updatedAt), tsOf(event.updatedAt));
+          if (wasClean) cleanStampRef.current[targetWsId] = Math.max(cleanStampRef.current[targetWsId] || 0, nextUpdated);
           const next = prev.map(w => {
             if (w.id === targetWsId) {
               const updatedDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...event.deletedLeadIds]));
@@ -1252,7 +1369,7 @@ export function WorkspaceProvider({ children }) {
                 ...w,
                 leads: (w.leads || []).filter(l => !delSet.has(l.id)),
                 deletedLeadIds: updatedDeleted,
-                updatedAt: event.updatedAt || new Date().toISOString()
+                updatedAt: new Date(nextUpdated).toISOString()
               };
             }
             return w;
@@ -1266,6 +1383,11 @@ export function WorkspaceProvider({ children }) {
       if (event.type === 'WORKSPACE_LEADS_UPDATED' && event.workspaceId && Array.isArray(event.leads)) {
         const targetWsId = event.workspaceId;
         setWorkspaces(prev => {
+          const target = prev.find(w => w.id === targetWsId);
+          if (!target) return prev;
+          const wasClean = !isWorkspaceDirty(target);
+          const nextUpdated = Math.max(tsOf(target.updatedAt), tsOf(event.updatedAt));
+          if (wasClean) cleanStampRef.current[targetWsId] = Math.max(cleanStampRef.current[targetWsId] || 0, nextUpdated);
           const next = prev.map(w => {
             if (w.id === targetWsId) {
               const mergedLeads = mergeWorkspaceLeads(w.leads || [], event.leads, {
@@ -1273,11 +1395,11 @@ export function WorkspaceProvider({ children }) {
                 localWsUpdatedAt: w.updatedAt,
                 cloudWsUpdatedAt: event.updatedAt,
                 deletedLeadIds: w.deletedLeadIds || []
-              });
+              }).map(sanitizeLeadState);
               return {
                 ...w,
                 leads: mergedLeads,
-                updatedAt: event.updatedAt || new Date().toISOString()
+                updatedAt: new Date(nextUpdated).toISOString()
               };
             }
             return w;
@@ -1287,50 +1409,12 @@ export function WorkspaceProvider({ children }) {
         });
       }
 
-      // 8d. Realtime Workspace Reconcile Trigger
+      // 8d. Realtime Workspace Reconcile Trigger (sender finished saving → pull the merged row)
       if ((event.type === 'WORKSPACE_RECONCILE_NEEDED' || event.type === 'WORKSPACE_SAVED') && event.workspaceId) {
-        const targetWsId = event.workspaceId;
-        const supabase = getSupabaseClient();
-        if (supabase) {
-          supabase
-            .from('workspaces')
-            .select('id, leads, activity_log, sequence_config, updated_at')
-            .eq('id', targetWsId)
-            .maybeSingle()
-            .then(({ data: cloudRow, error: cErr }) => {
-              if (!cErr && cloudRow && Array.isArray(cloudRow.leads)) {
-                setWorkspaces(prev => {
-                  const target = prev.find(w => w.id === targetWsId);
-                  if (!target) return prev;
-                  const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                    workspaceId: targetWsId,
-                    localWsUpdatedAt: target.updatedAt,
-                    cloudWsUpdatedAt: cloudRow.updated_at,
-                    deletedLeadIds: [
-                      ...(target.deletedLeadIds || []),
-                      ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                    ]
-                  }).map(sanitizeLeadState);
-
-                  const next = prev.map(w => {
-                    if (w.id === targetWsId) {
-                      return {
-                        ...w,
-                        leads: mergedLeads,
-                        activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
-                          ? cloudRow.activity_log
-                          : (w.activityLog || []),
-                        updatedAt: cloudRow.updated_at
-                      };
-                    }
-                    return w;
-                  });
-                  saveWorkspacesToLocal(next);
-                  return next;
-                });
-              }
-            }).catch(() => {});
+        if (event.type === 'WORKSPACE_SAVED' && tsOf(event.updatedAt) && tsOf(event.updatedAt) <= (knownCloudTimeRef.current[event.workspaceId] || 0)) {
+          return;
         }
+        fetchAndApplyCloudWorkspace(event.workspaceId).catch(() => {});
       }
 
       // 9. Notes Updated
@@ -1719,52 +1803,16 @@ export function WorkspaceProvider({ children }) {
       const targetId = currentWorkspace?.id || currentWorkspaceId;
 
       // 1. Pull latest cloud data for this workspace first to ensure true bidirectional sync
-      const supabase = getSupabaseClient();
-      if (supabase && targetId) {
+      if (targetId) {
         try {
-          const { data: cloudRow } = await supabase
-            .from('workspaces')
-            .select('id, leads, activity_log, sequence_config, updated_at')
-            .eq('id', targetId)
-            .maybeSingle();
-
-          if (cloudRow && Array.isArray(cloudRow.leads)) {
-            setWorkspaces(prev => {
-              const target = prev.find(w => w.id === targetId);
-              if (!target) return prev;
-
-              const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
-                workspaceId: targetId,
-                localWsUpdatedAt: target.updatedAt,
-                cloudWsUpdatedAt: cloudRow.updated_at,
-                deletedLeadIds: [
-                  ...(target.deletedLeadIds || []),
-                  ...(cloudRow.sequence_config?.deletedLeadIds || [])
-                ]
-              }).map(sanitizeLeadState);
-
-              const next = prev.map(w => {
-                if (w.id === targetId) {
-                  return {
-                    ...w,
-                    leads: mergedLeads,
-                    activityLog: (cloudRow.activity_log?.length || 0) >= (w.activityLog?.length || 0)
-                      ? cloudRow.activity_log
-                      : (w.activityLog || []),
-                    updatedAt: new Date().toISOString()
-                  };
-                }
-                return w;
-              });
-              saveWorkspacesToLocal(next);
-              return next;
-            });
-          }
+          await fetchAndApplyCloudWorkspace(targetId);
         } catch (pullErr) {
           console.warn('Pre-sync pull notice:', pullErr);
         }
       }
 
+      // Manual sync always pushes, even if nothing is marked dirty; the save itself merges
+      // with the cloud row, so local state and cloud end up identical either way.
       const ok = await saveWorkspacesToCloud(workspacesRef.current, targetId);
       if (ok) {
         setLastSyncedTime(new Date());
@@ -2160,6 +2208,7 @@ export function WorkspaceProvider({ children }) {
     if (!currentWorkspace) return false;
 
     let targetLead = null;
+    let updatedTargetLead = null;
     const isPos = isPositivePipelineStage(newStage);
     const isDnc = isLeadDNC({ stage: newStage });
     const isInProgress = !newStage || newStage.toLowerCase().includes('progress') || newStage.toLowerCase().includes('pending');
@@ -2187,7 +2236,7 @@ export function WorkspaceProvider({ children }) {
           finalStatus = 'lost';
         }
 
-        return {
+        updatedTargetLead = {
           ...l,
           stage: newStage,
           status: finalStatus,
@@ -2197,6 +2246,7 @@ export function WorkspaceProvider({ children }) {
           dealValue: finalDealValue,
           updatedAt: new Date().toISOString()
         };
+        return updatedTargetLead;
       }
       return l;
     });
@@ -2231,10 +2281,12 @@ export function WorkspaceProvider({ children }) {
         console.warn('Direct cloud save notice in updateLeadStage:', err);
       });
 
-      syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, [targetLead], newActivity).catch(() => {});
+      // Send the UPDATED lead (this used to send the pre-change copy, so other portals and the
+      // Google Sheet never received stage changes until the next full reconcile)
+      syncLeadsBatchToGoogleSheet(currentWorkspaceId, currentWorkspace.name, [updatedTargetLead], newActivity).catch(() => {});
       broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
         workspaceId: currentWorkspaceId,
-        leads: [targetLead],
+        leads: [updatedTargetLead],
         updatedAt: nowIso
       }).catch(() => {});
 
@@ -2753,7 +2805,8 @@ export function WorkspaceProvider({ children }) {
           description: `Client workspace "${wsData.name}" created`
         }
       ],
-      leads: []
+      leads: [],
+      updatedAt: new Date().toISOString()
     };
 
     setWorkspaces(prev => [...prev, newWsTemplate]);
@@ -2764,7 +2817,7 @@ export function WorkspaceProvider({ children }) {
   function updateWorkspace(wsId, updates) {
     setWorkspaces(prev => prev.map(w => {
       if (w.id === wsId) {
-        const updated = { ...w, ...updates };
+        const updated = { ...w, ...updates, updatedAt: new Date().toISOString() };
         if (updates.name && !updates.clientName) {
           updated.clientName = updates.name;
         }
@@ -2793,7 +2846,8 @@ export function WorkspaceProvider({ children }) {
           clientCredentials: {
             username: (newUsername || '').trim(),
             password: (newPassword || '').trim()
-          }
+          },
+          updatedAt: new Date().toISOString()
         };
       }
       return w;
@@ -3799,6 +3853,8 @@ export function WorkspaceProvider({ children }) {
     try {
       const backup = await loadWorkspacesFromLocal(null);
       if (Array.isArray(backup) && backup.length > 0) {
+        // Mark every restored workspace dirty so the autosave pushes each one (targeted, merged)
+        backup.forEach(w => { if (w && w.id) cleanStampRef.current[w.id] = -1; });
         setWorkspaces(backup);
         saveWorkspacesToCloud(backup);
         const total = backup.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
@@ -3821,6 +3877,10 @@ export function WorkspaceProvider({ children }) {
           cloudData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
         );
         if (valid.length > 0) {
+          valid.forEach(w => {
+            knownCloudTimeRef.current[w.id] = tsOf(w.updatedAt);
+            cleanStampRef.current[w.id] = tsOf(w.updatedAt);
+          });
           setWorkspaces(valid);
           saveWorkspacesToLocal(valid);
           isCloudSyncedRef.current = true;
