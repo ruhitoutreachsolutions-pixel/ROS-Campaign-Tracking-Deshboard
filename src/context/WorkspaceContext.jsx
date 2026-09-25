@@ -577,7 +577,7 @@ export function WorkspaceProvider({ children }) {
     };
   }, [currentUser?.role]);
 
-  async function pushPendingToGoogleSheet(targetWorkspaceId = null) {
+  async function pushPendingToGoogleSheet(targetWorkspaceId = null, onProgress = null) {
     if (!isGoogleSheetsConfigured()) {
       return { success: false, message: 'Google Sheets Web App URL is not configured. Please open Sheet Settings.' };
     }
@@ -592,7 +592,9 @@ export function WorkspaceProvider({ children }) {
 
       let anyError = null;
       for (const ws of wsToSync) {
-        const res = await syncFullWorkspaceToGoogleSheet(ws);
+        const res = await syncFullWorkspaceToGoogleSheet(ws, onProgress
+          ? (done, total) => onProgress({ workspaceName: ws.name, done, total })
+          : null);
         if (!res.success) {
           anyError = res.error || 'Failed to sync workspace to Google Sheet';
         }

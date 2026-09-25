@@ -270,24 +270,24 @@ export async function syncLeadsBatchToGoogleSheet(workspaceId, workspaceName, le
   if (!leads || leads.length === 0) return { success: true };
 
   const tabName = getWorkspaceTabName({ name: workspaceName, id: workspaceId });
-
-  const payload = {
-    action: 'sync_workspace_leads',
-    workspaceId,
-    tabName,
-    leads,
-    activity,
-    fullSync: false
-  };
+  const chunks = chunkArray(leads, DELTA_CHUNK_SIZE);
 
   try {
-    const res = await sendSheetsRequest(payload, 10000);
-    if (res && res.success) {
-      setLastSheetsSyncTime();
-      return { success: true, count: res.count || leads.length };
-    } else {
-      throw new Error(res?.error || 'Failed to update workspace tab in Google Sheet');
+    for (let i = 0; i < chunks.length; i++) {
+      const res = await sendSheetsRequest({
+        action: 'sync_workspace_leads',
+        workspaceId,
+        tabName,
+        leads: chunks[i],
+        activity: i === 0 ? activity : null,
+        fullSync: false
+      }, DELTA_CHUNK_TIMEOUT_MS);
+      if (!res || !res.success) {
+        throw new Error(res?.error || 'Failed to update workspace tab in Google Sheet');
+      }
     }
+    setLastSheetsSyncTime();
+    return { success: true, count: leads.length };
   } catch (err) {
     console.warn('[GoogleSheetSync] Batch delta sync error:', err.message);
     addPendingSyncItem({
@@ -415,29 +415,48 @@ export async function syncWorkspacesMetaToGoogleSheet(workspaces = []) {
 /**
  * Synchronize full workspace (full lead roster + tab creation)
  */
-export async function syncFullWorkspaceToGoogleSheet(workspace) {
+// Large workspaces (Crewlix: 20k+ leads) can't be cleared and rewritten by Apps Script in one
+// request before the timeout, so full syncs go in chunks: the first chunk clears the tab and
+// writes the header (fullSync), the rest append via the script's existing upsert path.
+// Works with the already-deployed Apps Script; no redeploy needed.
+const FULL_SYNC_CHUNK_SIZE = 2000;
+const FULL_SYNC_CHUNK_TIMEOUT_MS = 90000;
+// The script updates existing rows one at a time, so delta batches stay small
+const DELTA_CHUNK_SIZE = 250;
+const DELTA_CHUNK_TIMEOUT_MS = 45000;
+
+function chunkArray(list, size) {
+  const chunks = [];
+  for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
+  return chunks;
+}
+
+export async function syncFullWorkspaceToGoogleSheet(workspace, onProgress = null) {
   if (!workspace || !isGoogleSheetsConfigured()) {
     return { success: false, reason: 'unconfigured' };
   }
 
   const tabName = getWorkspaceTabName(workspace);
   const leads = workspace.leads || [];
-
-  const payload = {
-    action: 'sync_workspace_leads',
-    workspaceId: workspace.id,
-    tabName,
-    leads,
-    fullSync: true
-  };
+  const chunks = leads.length > 0 ? chunkArray(leads, FULL_SYNC_CHUNK_SIZE) : [[]];
 
   try {
-    const res = await sendSheetsRequest(payload, 25000);
-    if (res && res.success) {
-      setLastSheetsSyncTime();
-      return { success: true, count: leads.length, tabName };
+    for (let i = 0; i < chunks.length; i++) {
+      if (onProgress) onProgress(i, chunks.length);
+      const res = await sendSheetsRequest({
+        action: 'sync_workspace_leads',
+        workspaceId: workspace.id,
+        tabName,
+        leads: chunks[i],
+        fullSync: i === 0
+      }, FULL_SYNC_CHUNK_TIMEOUT_MS);
+      if (!res || !res.success) {
+        throw new Error(res?.error || `Full workspace sync rejected at batch ${i + 1}/${chunks.length}`);
+      }
     }
-    throw new Error(res?.error || 'Full workspace sync rejected');
+    if (onProgress) onProgress(chunks.length, chunks.length);
+    setLastSheetsSyncTime();
+    return { success: true, count: leads.length, tabName };
   } catch (err) {
     console.warn(`[GoogleSheetSync] Full sync for ${workspace.name} failed:`, err.message);
     addPendingSyncItem({

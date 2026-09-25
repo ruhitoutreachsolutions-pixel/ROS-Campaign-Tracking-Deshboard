@@ -14,6 +14,7 @@ export default function GoogleSheetsSyncPopup({ isOpen, onClose, onOpenSettings 
   const [isPushing, setIsPushing] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errMsg, setErrMsg] = useState('');
+  const [progress, setProgress] = useState(null);
 
   if (!isOpen) return null;
 
@@ -21,9 +22,10 @@ export default function GoogleSheetsSyncPopup({ isOpen, onClose, onOpenSettings 
     setIsPushing(true);
     setSuccessMsg('');
     setErrMsg('');
+    setProgress(null);
 
     try {
-      const res = await pushPendingToGoogleSheet();
+      const res = await pushPendingToGoogleSheet(null, setProgress);
       if (res && res.success) {
         setSuccessMsg(res.message || 'Successfully synced data to Google Sheet!');
         setTimeout(() => {
@@ -37,8 +39,15 @@ export default function GoogleSheetsSyncPopup({ isOpen, onClose, onOpenSettings 
       setErrMsg(err.message || 'Failed to push to Google Sheet.');
     } finally {
       setIsPushing(false);
+      setProgress(null);
     }
   };
+
+  const pushLabel = isPushing
+    ? (progress && progress.total > 1
+        ? `Pushing batch ${Math.min(progress.done + 1, progress.total)} of ${progress.total}...`
+        : 'Pushing Data...')
+    : '⚡ Push to Google Sheet Now';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
@@ -127,7 +136,7 @@ export default function GoogleSheetsSyncPopup({ isOpen, onClose, onOpenSettings 
             }`}
           >
             <RefreshCw className={`w-4 h-4 ${isPushing ? 'animate-spin' : ''}`} />
-            <span>{isPushing ? 'Pushing Data...' : '⚡ Push to Google Sheet Now'}</span>
+            <span>{pushLabel}</span>
           </button>
 
           {onOpenSettings && (
