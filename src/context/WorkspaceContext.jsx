@@ -25,7 +25,9 @@ import {
   saveSystemMetaToSupabase,
   fetchWarriorsFromSupabase,
   saveWarriorsToSupabase,
-  getLastCloudError
+  getLastCloudError,
+  fetchSheetsConfigFromCloud,
+  saveSheetsConfigToCloud
 } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
@@ -492,6 +494,7 @@ export function WorkspaceProvider({ children }) {
   const [sheetsSyncError, setSheetsSyncError] = useState(null);
   const [showSheetsAlert, setShowSheetsAlert] = useState(false);
   const [lastSheetsSyncTime, setLastSheetsSyncTimeState] = useState(() => getLastSheetsSyncTime());
+  const [sheetsConfigVersion, setSheetsConfigVersion] = useState(0);
 
   // Subscribe to pending queue changes
   useEffect(() => {
@@ -522,6 +525,53 @@ export function WorkspaceProvider({ children }) {
     }
     setLastSheetsSyncTimeState(getLastSheetsSyncTime());
   };
+
+  // Sheets config lives in a shared Supabase partition so every portal (admin, warrior, client)
+  // picks up the admin's Web App URL + token instead of relying on per-browser localStorage.
+  const applySheetsConfig = (cfg) => {
+    if (!cfg || !cfg.url) return false;
+    const local = getGoogleSheetsConfig();
+    const nextToken = cfg.token || local.token;
+    if (local.url === cfg.url.trim() && local.token === (nextToken || '').trim()) return false;
+    saveGoogleSheetsConfig(cfg.url, nextToken);
+    refreshSheetsStatus();
+    setSheetsConfigVersion(v => v + 1);
+    return true;
+  };
+
+  async function saveSheetsConfigGlobally(url, token) {
+    saveGoogleSheetsConfig(url, token);
+    refreshSheetsStatus();
+    const ok = await saveSheetsConfigToCloud({ url, token });
+    if (ok) {
+      broadcastRealtimeEvent({ type: 'SHEETS_CONFIG_UPDATED', config: { url: (url || '').trim(), token: (token || '').trim() } });
+    }
+    return ok;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    const pullSheetsConfig = async () => {
+      const cloudCfg = await fetchSheetsConfigFromCloud();
+      if (cancelled) return;
+      if (cloudCfg) {
+        applySheetsConfig(cloudCfg);
+      } else if (currentUser?.role === 'admin' && isGoogleSheetsConfigured()) {
+        // One-time seed: admin configured Sheets before the shared partition existed
+        const local = getGoogleSheetsConfig();
+        saveSheetsConfigToCloud(local).then(ok => {
+          if (ok) broadcastRealtimeEvent({ type: 'SHEETS_CONFIG_UPDATED', config: local });
+        });
+      }
+    };
+    pullSheetsConfig();
+    const onVisible = () => { if (!document.hidden) pullSheetsConfig(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [currentUser?.role]);
 
   async function pushPendingToGoogleSheet(targetWorkspaceId = null) {
     if (!isGoogleSheetsConfigured()) {
@@ -1172,6 +1222,11 @@ export function WorkspaceProvider({ children }) {
       // 7. Chat Permissions Updated
       if (event.type === 'CHAT_PERMISSIONS_UPDATED' && event.permissions) {
         setChatPermissions(event.permissions);
+      }
+
+      // 7b. Google Sheets Config Updated by Admin
+      if (event.type === 'SHEETS_CONFIG_UPDATED' && event.config?.url) {
+        applySheetsConfig(event.config);
       }
 
       // 8. Workspace Deleted
@@ -3907,7 +3962,9 @@ export function WorkspaceProvider({ children }) {
     lastSheetsSyncTime,
     isGoogleSheetsConfigured,
     pushPendingToGoogleSheet,
-    refreshSheetsStatus
+    refreshSheetsStatus,
+    saveSheetsConfigGlobally,
+    sheetsConfigVersion
   };
 
   return (

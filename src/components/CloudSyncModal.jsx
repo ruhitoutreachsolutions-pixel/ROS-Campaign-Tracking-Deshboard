@@ -49,7 +49,8 @@ export default function CloudSyncModal({ isOpen, onClose, initialTab = 'supabase
     forceSyncFromCloud,
     sheetsSyncStatus,
     pendingSheetsChangesCount,
-    refreshSheetsStatus
+    refreshSheetsStatus,
+    saveSheetsConfigGlobally
   } = useWorkspace();
 
   const [activeTab, setActiveTab] = useState(initialTab); // 'supabase' | 'sheets'
@@ -217,7 +218,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     setTimeout(() => setCopiedGasCode(false), 3000);
   };
 
-  const handleSaveSheetsConfig = (e) => {
+  const handleSaveSheetsConfig = async (e) => {
     if (e) e.preventDefault();
     setSheetsMessage('');
     setSheetsError('');
@@ -232,8 +233,12 @@ create policy "Allow all access" on workspaces for all using (true) with check (
       return;
     }
 
-    saveGoogleSheetsConfig(sheetsUrl.trim(), sheetsToken.trim());
-    setSheetsMessage('Google Sheets configuration saved! You can now test the connection or push all data.');
+    const sharedOk = await saveSheetsConfigGlobally(sheetsUrl.trim(), sheetsToken.trim());
+    if (sharedOk) {
+      setSheetsMessage('Google Sheets configuration saved and applied to all Admin, Warrior & Client portals.');
+    } else {
+      setSheetsError('Saved on this device only — could not publish to the cloud, so other portals will not pick it up yet. Check the Supabase connection and save again.');
+    }
     if (refreshSheetsStatus) refreshSheetsStatus();
     setTimeout(() => setSheetsMessage(''), 4000);
   };
@@ -249,9 +254,9 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     setSheetsError('');
 
     try {
-      saveGoogleSheetsConfig(sheetsUrl.trim(), sheetsToken.trim());
       const res = await testGoogleSheetsConnection(sheetsUrl.trim(), sheetsToken.trim());
       if (res.success) {
+        await saveSheetsConfigGlobally(sheetsUrl.trim(), sheetsToken.trim());
         setSheetsMessage(res.message);
         if (refreshSheetsStatus) refreshSheetsStatus();
       } else {
@@ -276,7 +281,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     setSheetsError('');
 
     try {
-      saveGoogleSheetsConfig(sheetsUrl.trim(), sheetsToken.trim());
+      await saveSheetsConfigGlobally(sheetsUrl.trim(), sheetsToken.trim());
       const res = await pushAllToGoogleSheet(workspaces, warriors, (prog) => {
         setSheetsProgress(prog);
       });

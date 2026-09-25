@@ -543,6 +543,65 @@ export async function saveWarriorsToSupabase(warriors) {
 // ============================================================================
 export const FORM_SUBMISSIONS_ID = '__ros_form_submissions_v1__';
 export const CHAT_DATA_ID = '__ros_chat_messages_v1__';
+export const SHEETS_CONFIG_ID = '__ros_sheets_config_v1__';
+
+// 6b. Dedicated Google Sheets Config Partition (shared by Admin, Warrior & Client portals)
+export async function fetchSheetsConfigFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('sequence_config, updated_at')
+      .eq('id', SHEETS_CONFIG_ID)
+      .maybeSingle();
+
+    if (error || !data?.sequence_config) return null;
+    const { url, token, updatedAt } = data.sequence_config;
+    if (!url) return null;
+    return { url, token, updatedAt: updatedAt || data.updated_at };
+  } catch (err) {
+    console.warn('fetchSheetsConfigFromCloud notice:', err);
+    return null;
+  }
+}
+
+export async function saveSheetsConfigToCloud({ url, token }) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  try {
+    const now = new Date().toISOString();
+    const payload = {
+      id: SHEETS_CONFIG_ID,
+      name: 'ROS Google Sheets Config Partition',
+      client_name: 'System Partition',
+      client_email: 'sheets@rosoutreach.com',
+      campaign_name: 'Google Sheets Config',
+      active_sending_account: 'system',
+      sending_accounts: ['system'],
+      client_credentials: {},
+      sequence_config: { url: (url || '').trim(), token: (token || '').trim(), updatedAt: now },
+      activity_log: [],
+      leads: [],
+      updated_at: now
+    };
+
+    const { error } = await supabase
+      .from('workspaces')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('saveSheetsConfigToCloud error:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('saveSheetsConfigToCloud exception:', err);
+    return false;
+  }
+}
 
 // 7. Dedicated Form Submissions Partition
 export async function fetchFormSubmissionsFromCloud() {
