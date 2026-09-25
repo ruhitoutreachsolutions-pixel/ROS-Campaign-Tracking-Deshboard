@@ -3,6 +3,7 @@ import { useWorkspace } from '../context/WorkspaceContext';
 import { exportLeadsToCSV, isLeadDNC } from '../utils/helpers';
 import BulkEditModal from './BulkEditModal';
 import AddLeadModal from './AddLeadModal';
+import BulkSearchModal from './BulkSearchModal';
 import { 
   Search, 
   Filter, 
@@ -35,7 +36,8 @@ import {
   Ban,
   ShieldCheck,
   UserPlus,
-  Plus
+  Plus,
+  Layers
 } from 'lucide-react';
 
 export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
@@ -52,11 +54,15 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     syncAllWorkspacesToCloud
   } = useWorkspace();
 
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = currentUser?.role === 'admin' || (currentUser?.role === 'warrior' && currentUser?.accessLevel !== 'view');
   const leads = currentWorkspace?.leads || [];
 
   // Global Search
   const [globalSearch, setGlobalSearch] = useState('');
+
+  // Bulk Email Search State
+  const [isBulkSearchModalOpen, setIsBulkSearchModalOpen] = useState(false);
+  const [bulkSearchFilter, setBulkSearchFilter] = useState(null); // { emails: [], emailSet: Set, leadIds: [], totalSearched, unmatchedCount, unmatchedList }
   
   // Column Filters State: { [colKey]: string[] | null } -> null or empty array means all selected
   const [columnFilters, setColumnFilters] = useState({});
@@ -162,9 +168,17 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     return map;
   }, [leads, columnFilters, activeFilterCol]);
 
-  // Apply Global Search, Column Filters, and Sorting
+  // Apply Global Search, Bulk Email Search, Column Filters, and Sorting
   const filteredAndSortedLeads = useMemo(() => {
     let result = leads.filter(lead => {
+      // 0. Bulk Email Search Filter
+      if (bulkSearchFilter && bulkSearchFilter.emailSet) {
+        const leadEmail = (lead.email || '').trim().toLowerCase();
+        if (!bulkSearchFilter.emailSet.has(leadEmail)) {
+          return false;
+        }
+      }
+
       // 1. Global Search
       if (globalSearch.trim()) {
         const q = globalSearch.toLowerCase();
@@ -204,7 +218,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     }
 
     return result;
-  }, [leads, globalSearch, columnFilters, sortConfig, currentWorkspace]);
+  }, [leads, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
 
   // Pagination
   const totalPages = Math.ceil(filteredAndSortedLeads.length / pageSize) || 1;
@@ -254,8 +268,26 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const handleClearAllFilters = () => {
     setColumnFilters({});
     setGlobalSearch('');
+    setBulkSearchFilter(null);
     setSortConfig({ key: null, direction: null });
     setPage(1);
+  };
+
+  const handleApplyBulkSearchMatches = ({ emails, leadIds, autoSelect, totalSearched, unmatchedCount, unmatchedList }) => {
+    const emailSet = new Set((emails || []).map(e => e.trim().toLowerCase()));
+    setBulkSearchFilter({
+      emails,
+      emailSet,
+      leadIds,
+      totalSearched,
+      unmatchedCount,
+      unmatchedList
+    });
+    setPage(1);
+
+    if (autoSelect && leadIds && leadIds.length > 0) {
+      setSelectedLeadIds(leadIds);
+    }
   };
 
   const handleSort = (colKey, direction) => {
@@ -451,7 +483,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
         <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
           
           {/* Quick Search */}
-          <div className="relative w-full sm:w-64">
+          <div className="relative w-full sm:w-60">
             <Search className="w-4 h-4 text-[#7B7B7B] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -464,6 +496,54 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               className="w-full pl-9 pr-3 py-1.5 bg-[#0A0A0A] border border-[#1E3A5F] rounded-xl text-white text-xs outline-none focus:border-[#00C2FF]"
             />
           </div>
+
+          {/* Bulk Email Search Trigger Button */}
+          <button
+            onClick={() => setIsBulkSearchModalOpen(true)}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              bulkSearchFilter 
+                ? 'bg-[#00C2FF]/20 text-[#00C2FF] border-[#00C2FF] shadow-lg shadow-[#00C2FF]/20' 
+                : 'bg-[#0A0A0A] hover:bg-[#1E3A5F] text-gray-200 hover:text-white border-[#1E3A5F]'
+            }`}
+            title="Paste custom list of multiple email addresses (10, 50, 100+) to search and match in bulk"
+          >
+            <Layers className="w-3.5 h-3.5 text-[#00C2FF]" />
+            <span>Bulk Search</span>
+            {bulkSearchFilter && (
+              <span className="px-1.5 py-0.2 rounded-full bg-[#00C2FF] text-[#0A0A0A] text-[10px] font-mono font-bold">
+                {bulkSearchFilter.emails.length}
+              </span>
+            )}
+          </button>
+
+          {/* Active Bulk Search Filter Pill */}
+          {bulkSearchFilter && (
+            <div className="flex items-center gap-1.5 bg-[#00C2FF]/15 border border-[#00C2FF]/40 px-2.5 py-1 rounded-xl text-xs text-white shadow-md animate-fade-in">
+              <Sparkles className="w-3.5 h-3.5 text-[#00C2FF]" />
+              <span>
+                Bulk: <strong className="text-[#00C2FF] font-mono">{bulkSearchFilter.emails.length}</strong> matched
+              </span>
+              {bulkSearchFilter.unmatchedCount > 0 && (
+                <span className="text-amber-400 font-mono text-[10px] bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/30">
+                  {bulkSearchFilter.unmatchedCount} missing
+                </span>
+              )}
+              <button
+                onClick={() => setSelectedLeadIds(bulkSearchFilter.leadIds)}
+                className="ml-1 text-[11px] text-[#00E5A0] hover:underline font-bold cursor-pointer"
+                title="Select all matched lead checkboxes for bulk action"
+              >
+                Select All
+              </button>
+              <button
+                onClick={() => setBulkSearchFilter(null)}
+                className="ml-1 p-0.5 hover:text-white rounded cursor-pointer"
+                title="Clear bulk search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Active Column Filter Indicators */}
           {activeFiltersCount > 0 && (
@@ -1044,6 +1124,15 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
           setAddLeadToast(`✓ Successfully added lead ${newLead.email} (${newLead.companyName || newLead.campaignName}) to sheet!`);
           setTimeout(() => setAddLeadToast(null), 5000);
         }}
+      />
+
+      {/* BULK EMAIL SEARCH MODAL */}
+      <BulkSearchModal
+        isOpen={isBulkSearchModalOpen}
+        onClose={() => setIsBulkSearchModalOpen(false)}
+        leads={leads}
+        currentWorkspaceName={currentWorkspace?.name}
+        onApplyMatches={handleApplyBulkSearchMatches}
       />
 
     </div>
