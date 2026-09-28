@@ -254,13 +254,25 @@ function getCrewlixBaselineMap() {
 }
 
 const DIFF_IGNORED_KEYS = new Set(['updatedAt', 'importedAt']);
+// Statuses derived purely from the email1-3 fields (which are compared directly). Merges
+// recompute these, so comparing them flagged almost every lead as changed.
+const DERIVED_SEND_STATUSES = new Set(['', 'pending', 'sent_1', 'sent_2', 'sent_3']);
+// Empty defaults the merge fills in (dealValue: 0, isDNC: false, email3: '') equal "missing"
+const normalizeDiffValue = (v) => (v === undefined || v === null || v === 0 || v === false || v === '0' || v === 'false') ? '' : v;
+
 function leadDiffersFromBaseline(lead, base) {
   if (!base) return true;
   const keys = new Set([...Object.keys(lead), ...Object.keys(base)]);
   for (const k of keys) {
     if (DIFF_IGNORED_KEYS.has(k)) continue;
-    const a = lead[k] === undefined || lead[k] === null ? '' : lead[k];
-    const b = base[k] === undefined || base[k] === null ? '' : base[k];
+    if (k === 'status') {
+      const sa = String(lead.status || '').toLowerCase();
+      const sb = String(base.status || '').toLowerCase();
+      if (sa !== sb && !(DERIVED_SEND_STATUSES.has(sa) && DERIVED_SEND_STATUSES.has(sb))) return true;
+      continue;
+    }
+    const a = normalizeDiffValue(lead[k]);
+    const b = normalizeDiffValue(base[k]);
     if (typeof a === 'object' || typeof b === 'object') {
       if (JSON.stringify(a) !== JSON.stringify(b)) return true;
     } else if (String(a) !== String(b)) {
