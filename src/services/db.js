@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from './storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
@@ -196,34 +196,14 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             : (typeof item.sequence_config === 'string' ? (JSON.parse(item.sequence_config)?.deletedLeadIds || []) : []),
           activityLog: Array.isArray(item.activity_log) ? item.activity_log : (typeof item.activity_log === 'string' ? JSON.parse(item.activity_log) : []),
           leads: (() => {
-            let sanitizedLeads = Array.isArray(leads) ? leads.map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean) : [];
-            if (item.id === 'ws_zrnl1fjb') {
-              if (sanitizedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
-                const idSet = new Set(sanitizedLeads.map(l => l.id));
-                const cgeDeleted = new Set([
-                  ...((item.sequence_config && item.sequence_config.deletedLeadIds) || []),
-                  ...(localWs?.deletedLeadIds || [])
-                ]);
-                cgeAuthoritative3804.leads.forEach(al => {
-                  if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
-                    sanitizedLeads.push(al);
-                    idSet.add(al.id);
-                  }
-                });
-              }
-            }
-            if (item.id === 'ws_crewlixukltd') {
-              if (sanitizedLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
-                const idSet = new Set(sanitizedLeads.map(l => l.id));
-                crewlixAuthoritative20113.leads.forEach(al => {
-                  if (!idSet.has(al.id)) {
-                    sanitizedLeads.push(al);
-                    idSet.add(al.id);
-                  }
-                });
-              }
-            }
-            return sanitizedLeads;
+            const deleted = new Set([
+              ...((item.sequence_config && item.sequence_config.deletedLeadIds) || []),
+              ...(localWs?.deletedLeadIds || [])
+            ]);
+            const sanitizedLeads = Array.isArray(leads)
+              ? leads.filter(l => l && !deleted.has(l.id)).map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean)
+              : [];
+            return refillFromBaseline(sanitizedLeads, item.id, deleted);
           })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString()
@@ -364,7 +344,8 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
 
     const cloudDeleted = Array.isArray(existingRow?.sequence_config?.deletedLeadIds) ? existingRow.sequence_config.deletedLeadIds : [];
     const localDeleted = Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || []);
-    const mergedDeleted = Array.from(new Set([...cloudDeleted, ...localDeleted])).slice(-10000);
+    const mergedDeleted = capTombstones([...cloudDeleted, ...localDeleted], ws.id);
+    const mergedDeletedSet = new Set(mergedDeleted);
 
     let leadsToSave = ws.leads || [];
     if (existingRow) {
@@ -389,30 +370,14 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       }
     }
 
-    leadsToSave = (leadsToSave || []).map(l => sanitizeLeadForWorkspace(l, ws.id)).filter(Boolean);
-
-    if (ws.id === 'ws_zrnl1fjb' && leadsToSave.length < 3804 && Array.isArray(cgeAuthoritative3804?.leads)) {
-      const idSet = new Set(leadsToSave.map(l => l.id));
-      const cgeDeleted = new Set(mergedDeleted);
-      cgeAuthoritative3804.leads.forEach(al => {
-        if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
-          leadsToSave.push(al);
-          idSet.add(al.id);
-        }
-      });
-    }
+    leadsToSave = (leadsToSave || [])
+      .filter(l => l && !mergedDeletedSet.has(l.id))
+      .map(l => sanitizeLeadForWorkspace(l, ws.id))
+      .filter(Boolean);
+    leadsToSave = refillFromBaseline(leadsToSave, ws.id, mergedDeletedSet);
 
     let cloudLeadsPayload = leadsToSave;
     if (ws.id === 'ws_crewlixukltd') {
-      if (leadsToSave.length < 20113 && Array.isArray(crewlixAuthoritative20113?.leads)) {
-        const idSet = new Set(leadsToSave.map(l => l.id));
-        crewlixAuthoritative20113.leads.forEach(al => {
-          if (!idSet.has(al.id)) {
-            leadsToSave.push(al);
-            idSet.add(al.id);
-          }
-        });
-      }
       // Previously Crewlix was skipped entirely (payload too large), so its edits never left the
       // device. Upload only the leads that differ from the bundled baseline.
       cloudLeadsPayload = toCrewlixCloudDelta(leadsToSave, existingRow?.leads);

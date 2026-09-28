@@ -53,16 +53,63 @@ export const PERMANENTLY_PURGED_CAMPAIGNS = {
   ])
 };
 
+// ---------------------------------------------------------------------------
+// DELETION TOMBSTONES
+// A deleted lead's id is kept in deletedLeadIds so no merge, refill or stale portal can bring it
+// back. The old cap (last 10,000) silently dropped older tombstones, after which those leads
+// could reappear. Tombstones for baseline leads are always kept: without them the baseline
+// refill (CGE 3,804 / Crewlix 20,113) re-adds the lead.
+// ---------------------------------------------------------------------------
+export const MAX_TOMBSTONES = 50000;
+let baselineIdSets = null;
+function getBaselineIdSet(wsId) {
+  if (!baselineIdSets) {
+    baselineIdSets = {
+      ws_zrnl1fjb: new Set((cgeAuthoritative3804?.leads || []).map(l => String(l.id))),
+      ws_crewlixukltd: new Set((crewlixAuthoritative20113?.leads || []).map(l => String(l.id)))
+    };
+  }
+  return baselineIdSets[wsId] || null;
+}
+
+export function capTombstones(ids, wsId) {
+  const unique = Array.from(new Set((ids || []).filter(Boolean).map(String)));
+  if (unique.length <= MAX_TOMBSTONES) return unique;
+  const baseline = getBaselineIdSet(wsId);
+  const pinned = baseline ? unique.filter(id => baseline.has(id)) : [];
+  const pinnedSet = new Set(pinned);
+  const others = unique.filter(id => !pinnedSet.has(id));
+  const room = Math.max(0, MAX_TOMBSTONES - pinned.length);
+  return [...pinned, ...others.slice(-room)];
+}
+
+// Append baseline leads that are missing, EXCEPT ones the user deliberately deleted.
+export function refillFromBaseline(leads, wsId, deletedIds = []) {
+  const baseline = wsId === 'ws_zrnl1fjb' ? cgeAuthoritative3804 : wsId === 'ws_crewlixukltd' ? crewlixAuthoritative20113 : null;
+  // Checked by missing ids rather than total count, so imports can't mask a lost baseline lead
+  if (!baseline || !Array.isArray(baseline.leads)) return leads;
+  const idSet = new Set(leads.map(l => l.id));
+  const deleted = deletedIds instanceof Set ? deletedIds : new Set(deletedIds || []);
+  baseline.leads.forEach(al => {
+    if (!idSet.has(al.id) && !deleted.has(al.id)) {
+      leads.push(al);
+      idSet.add(al.id);
+    }
+  });
+  return leads;
+}
+
 export function sanitizeLeadForWorkspace(lead, workspaceId) {
   if (!lead) return null;
   const wsId = workspaceId || lead.workspaceId;
 
-  // STRICT PURGE & SANITIZATION FOR CGE UK LTD (ws_zrnl1fjb) ONLY
+  // PURGE & SANITIZATION FOR CGE UK LTD (ws_zrnl1fjb) ONLY
   if (wsId === 'ws_zrnl1fjb') {
     const camp = (lead.campaignName || '').trim();
 
-    // 1. Only BNQ Google Maps, BNQ UK October List 1, and Banqueting-halls-UK-Campaign-1 are allowed
-    if (camp !== 'BNQ Google Maps' && camp !== 'BNQ UK October List 1' && camp !== 'Banqueting-halls-UK-Campaign-1') {
+    // 1. Block only the historically deleted campaigns. (This used to be an allow-list of three
+    //    campaign names, which silently dropped every newly imported list under any other name.)
+    if (PERMANENTLY_PURGED_CAMPAIGNS.ws_zrnl1fjb.has(camp)) {
       return null;
     }
 
@@ -186,30 +233,12 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
     if (!Array.isArray(list)) return list;
     return list.map(w => {
       if (!w || !Array.isArray(w.leads)) return w;
-      let cleanLeads = w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean);
-      if (w.id === 'ws_zrnl1fjb') {
-        if (cleanLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
-          const idSet = new Set(cleanLeads.map(l => l.id));
-          const cgeDeleted = new Set([...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]);
-          cgeAuthoritative3804.leads.forEach(al => {
-            if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
-              cleanLeads.push(al);
-              idSet.add(al.id);
-            }
-          });
-        }
-      }
-      if (w.id === 'ws_crewlixukltd') {
-        if (cleanLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
-          const idSet = new Set(cleanLeads.map(l => l.id));
-          crewlixAuthoritative20113.leads.forEach(al => {
-            if (!idSet.has(al.id)) {
-              cleanLeads.push(al);
-              idSet.add(al.id);
-            }
-          });
-        }
-      }
+      const deleted = new Set([...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]);
+      let cleanLeads = w.leads
+        .filter(l => l && !deleted.has(l.id))
+        .map(l => sanitizeLeadForWorkspace(l, w.id))
+        .filter(Boolean);
+      cleanLeads = refillFromBaseline(cleanLeads, w.id, deleted);
       return {
         ...w,
         leads: cleanLeads
@@ -433,27 +462,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     .map(l => sanitizeLeadForWorkspace(l, wsId))
     .filter(Boolean);
 
-  if (wsId === 'ws_zrnl1fjb' && mergedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
-    const idSet = new Set(mergedLeads.map(l => l.id));
-    cgeAuthoritative3804.leads.forEach(al => {
-      // Deliberately deleted leads stay deleted (they used to be re-added from the baseline)
-      if (!idSet.has(al.id) && !deletedSet.has(al.id)) {
-        mergedLeads.push(al);
-        idSet.add(al.id);
-      }
-    });
-  }
-
-  if (wsId === 'ws_crewlixukltd' && mergedLeads.length < 20113 && crewlixAuthoritative20113 && Array.isArray(crewlixAuthoritative20113.leads)) {
-    const idSet = new Set(mergedLeads.map(l => l.id));
-    crewlixAuthoritative20113.leads.forEach(al => {
-      if (!idSet.has(al.id)) {
-        mergedLeads.push(al);
-        idSet.add(al.id);
-      }
-    });
-  }
-
-  return mergedLeads;
+  // Deliberately deleted leads stay deleted on every workspace (they used to be re-added)
+  return refillFromBaseline(mergedLeads, wsId, deletedSet);
 }
 

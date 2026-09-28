@@ -32,7 +32,7 @@ import {
   fetchSheetsConfigFromCloud,
   saveSheetsConfigToCloud
 } from '../services/db';
-import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace } from '../services/storage';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 import { 
@@ -661,7 +661,7 @@ export function WorkspaceProvider({ children }) {
       if (!target) return prev;
       const wasClean = !isWorkspaceDirty(target);
       const cloudDeleted = Array.isArray(cloudRow.sequence_config?.deletedLeadIds) ? cloudRow.sequence_config.deletedLeadIds : [];
-      const deletedLeadIds = Array.from(new Set([...(target.deletedLeadIds || []), ...cloudDeleted])).slice(-10000);
+      const deletedLeadIds = capTombstones([...(target.deletedLeadIds || []), ...cloudDeleted], wsId);
 
       const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
         workspaceId: wsId,
@@ -729,9 +729,24 @@ export function WorkspaceProvider({ children }) {
         workspaceId: targetId,
         updatedAt: saved?.updated_at || new Date().toISOString()
       }).catch(() => {});
+      delete saveFailureToastRef.current[targetId];
+    } else if (!ok && ws) {
+      // Failed saves used to be console-only, so imports/edits looked done but never reached
+      // other portals. Changes stay queued locally and retry every 45s; tell the user once.
+      const err = getLastCloudError() || 'Unknown cloud error';
+      const last = saveFailureToastRef.current[targetId];
+      if (!last || last.err !== err || Date.now() - last.at > 5 * 60 * 1000) {
+        saveFailureToastRef.current[targetId] = { err, at: Date.now() };
+        setLiveToast({
+          type: 'warning',
+          title: `⚠️ Cloud save failed: ${ws.name || targetId}`,
+          message: `${err}. Your changes are kept on this device and will retry automatically.`
+        });
+      }
     }
     return ok;
   }
+  const saveFailureToastRef = useRef({});
 
   // 2. Durable Local Storage Load (IndexedDB has NO 5MB limit and stores full 50k+ leads safely)
   useEffect(() => {
@@ -962,81 +977,35 @@ export function WorkspaceProvider({ children }) {
     return () => clearTimeout(cloudTimer);
   }, [workspaces]);
 
-  // 4a2. CGE UK LTD (ws_zrnl1fjb) Dedicated State Sentinel & Auto-Healer
-  const hasHealedCgeRef = useRef(false);
+  // 4a2. Baseline Auto-Healer (CGE UK LTD 3,804 / Crewlix UK Ltd 20,113)
+  // Restores baseline leads that went missing through data loss. Leads the user deliberately
+  // deleted (tombstoned in deletedLeadIds) are NOT data loss and stay deleted on every workspace.
+  const healedWorkspaceIdsRef = useRef(new Set());
   useEffect(() => {
     // CRITICAL: Must wait for IndexedDB to finish loading before checking lead counts!
     if (!idbLoadedRef.current) return;
     if (!workspaces || workspaces.length === 0) return;
-    const cge = workspaces.find(w => w.id === 'ws_zrnl1fjb');
-    if (!cge) return;
 
-    // Only heal if baseline lead count dropped below 3,804 (e.g. data loss)
-    // Never reset sent metrics or valid dispatches across any dates!
-    // Leads the user deliberately deleted are NOT data loss and must stay deleted.
-    const cgeDeleted = new Set(cge.deletedLeadIds || []);
-    const cgeIds = new Set((cge.leads || []).map(l => l.id));
-    const needsHeal = (cge.leads || []).length > 0 &&
-      cgeAuthoritative3804.leads.some(al => !cgeIds.has(al.id) && !cgeDeleted.has(al.id));
+    ['ws_zrnl1fjb', 'ws_crewlixukltd'].forEach(wsId => {
+      if (healedWorkspaceIdsRef.current.has(wsId)) return;
+      const ws = workspaces.find(w => w.id === wsId);
+      if (!ws || !(ws.leads || []).length) return;
 
-    if (needsHeal && !hasHealedCgeRef.current) {
-      hasHealedCgeRef.current = true;
-      console.log('[AutoHeal] Restoring ws_zrnl1fjb missing baseline leads while preserving sent status');
-      const existingMap = new Map((cge.leads || []).map(l => [l.id, l]));
-      // Only append missing leads, never overwrite existing leads in state!
-      const healedLeads = [...(cge.leads || [])];
-      cgeAuthoritative3804.leads.forEach(al => {
-        if (!existingMap.has(al.id) && !cgeDeleted.has(al.id)) {
-          healedLeads.push({ ...al });
-          existingMap.set(al.id, al);
-        }
+      const before = ws.leads.length;
+      // Only appends missing leads, never overwrites existing leads or their sent status
+      const healedLeads = refillFromBaseline([...ws.leads], wsId, new Set(ws.deletedLeadIds || []));
+      if (healedLeads.length === before) return;
+
+      healedWorkspaceIdsRef.current.add(wsId);
+      console.log(`[AutoHeal] Restored ${healedLeads.length - before} missing baseline leads in ${wsId}`);
+      setWorkspaces(prev => {
+        const next = prev.map(w => w.id === wsId
+          ? { ...w, leads: refillFromBaseline([...(w.leads || [])], wsId, new Set(w.deletedLeadIds || [])), updatedAt: new Date().toISOString() }
+          : w);
+        saveWorkspacesToLocal(next);
+        return next;
       });
-
-      const healedCge = {
-        ...cge,
-        leads: healedLeads,
-        updatedAt: new Date().toISOString()
-      };
-      const nextWorkspaces = workspaces.map(w => w.id === 'ws_zrnl1fjb' ? healedCge : w);
-      setWorkspaces(nextWorkspaces);
-      saveWorkspacesToLocal(nextWorkspaces);
-      saveWorkspacesToCloud(nextWorkspaces, 'ws_zrnl1fjb').catch(() => {});
-    }
-  }, [workspaces]);
-
-  // 4a3. Crewlix UK Ltd (ws_crewlixukltd) Dedicated State Sentinel & Auto-Healer
-  const hasHealedCrewlixRef = useRef(false);
-  useEffect(() => {
-    // CRITICAL: Must wait for IndexedDB to finish loading before checking lead counts!
-    if (!idbLoadedRef.current) return;
-    if (!workspaces || workspaces.length === 0) return;
-    const crewlix = workspaces.find(w => w.id === 'ws_crewlixukltd');
-    if (!crewlix) return;
-
-    const needsHeal = (crewlix.leads || []).length > 0 && (crewlix.leads || []).length < 20113;
-
-    if (needsHeal && !hasHealedCrewlixRef.current) {
-      hasHealedCrewlixRef.current = true;
-      console.log('[AutoHeal] Restoring ws_crewlixukltd missing baseline leads');
-      const existingMap = new Map((crewlix.leads || []).map(l => [l.id, l]));
-      // Only append missing leads, never overwrite existing leads in state!
-      const healedLeads = [...(crewlix.leads || [])];
-      crewlixAuthoritative20113.leads.forEach(al => {
-        if (!existingMap.has(al.id)) {
-          healedLeads.push({ ...al });
-          existingMap.set(al.id, al);
-        }
-      });
-
-      const healedCrewlix = {
-        ...crewlix,
-        leads: healedLeads,
-        updatedAt: new Date().toISOString()
-      };
-      const nextWorkspaces = workspaces.map(w => w.id === 'ws_crewlixukltd' ? healedCrewlix : w);
-      setWorkspaces(nextWorkspaces);
-      saveWorkspacesToLocal(nextWorkspaces);
-    }
+    });
   }, [workspaces]);
 
   // 4b. CONTINUOUS CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
@@ -2594,14 +2563,20 @@ export function WorkspaceProvider({ children }) {
 
     const todayStr = getTodayFormatted();
     const campName = defaultCampaignName || currentWorkspace.campaignName || 'General Outbound';
-    const leadsWithCampaign = newLeads.map(l => ({
-      ...l,
-      campaignName: l.campaignName || campName,
-      dateAdded: l.dateAdded || todayStr,
-      importedAt: l.importedAt || new Date().toISOString()
-    }));
-
     const nowIso = new Date().toISOString();
+    const leadsWithCampaign = newLeads
+      .map(l => ({
+        ...l,
+        campaignName: l.campaignName || campName,
+        dateAdded: l.dateAdded || todayStr,
+        importedAt: l.importedAt || nowIso,
+        updatedAt: l.updatedAt || nowIso
+      }))
+      // Apply the same rules every save applies, so what the import reports is what persists
+      .map(l => sanitizeLeadForWorkspace(l, currentWorkspaceId))
+      .filter(Boolean);
+    if (leadsWithCampaign.length === 0) return 0;
+
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
@@ -2613,9 +2588,9 @@ export function WorkspaceProvider({ children }) {
                 id: 'act_' + Date.now(),
                 timestamp: nowIso,
                 type: 'import',
-                count: newLeads.length,
+                count: leadsWithCampaign.length,
                 campaignName: campName,
-                description: `Imported ${newLeads.length} leads into campaign "${campName}" on ${todayStr}`
+                description: `Imported ${leadsWithCampaign.length} leads into campaign "${campName}" on ${todayStr}`
               },
               ...(w.activityLog || [])
             ],
@@ -2642,7 +2617,7 @@ export function WorkspaceProvider({ children }) {
       updatedAt: nowIso
     }).catch(() => {});
 
-    return newLeads.length;
+    return leadsWithCampaign.length;
   }
 
   // 6b. Add Single Lead
@@ -2724,7 +2699,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), leadId])).slice(-10000);
+          const nextDeleted = capTombstones([...(w.deletedLeadIds || []), leadId], w.id);
           return {
             ...w,
             leads: (w.leads || []).filter(l => l.id !== leadId),
@@ -2756,7 +2731,7 @@ export function WorkspaceProvider({ children }) {
     setWorkspaces(prev => {
       const next = prev.map(w => {
         if (w.id === currentWorkspaceId) {
-          const nextDeleted = Array.from(new Set([...(w.deletedLeadIds || []), ...leadIds])).slice(-10000);
+          const nextDeleted = capTombstones([...(w.deletedLeadIds || []), ...leadIds], w.id);
           return {
             ...w,
             leads: (w.leads || []).filter(l => !delSet.has(l.id)),
