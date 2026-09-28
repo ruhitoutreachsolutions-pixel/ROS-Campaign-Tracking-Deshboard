@@ -200,8 +200,12 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             if (item.id === 'ws_zrnl1fjb') {
               if (sanitizedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
                 const idSet = new Set(sanitizedLeads.map(l => l.id));
+                const cgeDeleted = new Set([
+                  ...((item.sequence_config && item.sequence_config.deletedLeadIds) || []),
+                  ...(localWs?.deletedLeadIds || [])
+                ]);
                 cgeAuthoritative3804.leads.forEach(al => {
-                  if (!idSet.has(al.id)) {
+                  if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
                     sanitizedLeads.push(al);
                     idSet.add(al.id);
                   }
@@ -389,8 +393,9 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
 
     if (ws.id === 'ws_zrnl1fjb' && leadsToSave.length < 3804 && Array.isArray(cgeAuthoritative3804?.leads)) {
       const idSet = new Set(leadsToSave.map(l => l.id));
+      const cgeDeleted = new Set(mergedDeleted);
       cgeAuthoritative3804.leads.forEach(al => {
-        if (!idSet.has(al.id)) {
+        if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
           leadsToSave.push(al);
           idSet.add(al.id);
         }

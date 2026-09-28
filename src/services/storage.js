@@ -190,8 +190,9 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
       if (w.id === 'ws_zrnl1fjb') {
         if (cleanLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
           const idSet = new Set(cleanLeads.map(l => l.id));
+          const cgeDeleted = new Set([...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]);
           cgeAuthoritative3804.leads.forEach(al => {
-            if (!idSet.has(al.id)) {
+            if (!idSet.has(al.id) && !cgeDeleted.has(al.id)) {
               cleanLeads.push(al);
               idSet.add(al.id);
             }
@@ -435,7 +436,8 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
   if (wsId === 'ws_zrnl1fjb' && mergedLeads.length < 3804 && cgeAuthoritative3804 && Array.isArray(cgeAuthoritative3804.leads)) {
     const idSet = new Set(mergedLeads.map(l => l.id));
     cgeAuthoritative3804.leads.forEach(al => {
-      if (!idSet.has(al.id)) {
+      // Deliberately deleted leads stay deleted (they used to be re-added from the baseline)
+      if (!idSet.has(al.id) && !deletedSet.has(al.id)) {
         mergedLeads.push(al);
         idSet.add(al.id);
       }

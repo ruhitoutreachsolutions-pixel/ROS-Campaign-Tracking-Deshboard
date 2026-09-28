@@ -973,7 +973,11 @@ export function WorkspaceProvider({ children }) {
 
     // Only heal if baseline lead count dropped below 3,804 (e.g. data loss)
     // Never reset sent metrics or valid dispatches across any dates!
-    const needsHeal = (cge.leads || []).length > 0 && (cge.leads || []).length < 3804;
+    // Leads the user deliberately deleted are NOT data loss and must stay deleted.
+    const cgeDeleted = new Set(cge.deletedLeadIds || []);
+    const cgeIds = new Set((cge.leads || []).map(l => l.id));
+    const needsHeal = (cge.leads || []).length > 0 &&
+      cgeAuthoritative3804.leads.some(al => !cgeIds.has(al.id) && !cgeDeleted.has(al.id));
 
     if (needsHeal && !hasHealedCgeRef.current) {
       hasHealedCgeRef.current = true;
@@ -982,7 +986,7 @@ export function WorkspaceProvider({ children }) {
       // Only append missing leads, never overwrite existing leads in state!
       const healedLeads = [...(cge.leads || [])];
       cgeAuthoritative3804.leads.forEach(al => {
-        if (!existingMap.has(al.id)) {
+        if (!existingMap.has(al.id) && !cgeDeleted.has(al.id)) {
           healedLeads.push({ ...al });
           existingMap.set(al.id, al);
         }
