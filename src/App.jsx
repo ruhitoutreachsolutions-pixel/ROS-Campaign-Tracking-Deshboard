@@ -3,6 +3,7 @@ import { useWorkspace } from './context/WorkspaceContext';
 import Navbar from './components/Navbar';
 import LoginScreen from './components/LoginScreen';
 import MetricCards from './components/MetricCards';
+import MonthlyCycleTracker from './components/MonthlyCycleTracker';
 import MailMergeDispatcher from './components/MailMergeDispatcher';
 import InterestedPipeline from './components/InterestedPipeline';
 import SequenceTracker from './components/SequenceTracker';
@@ -360,6 +361,9 @@ export default function App() {
 
             {/* Top KPI Stat Cards */}
             <MetricCards />
+
+            {/* Monthly Campaign Cycle Tracker (Selectable Start/End Month Dates, Total Emails Sent & Total Leads Added) */}
+            <MonthlyCycleTracker />
 
             {/* Active Tab Content */}
             {activeAdminTab === 'dispatcher' && (

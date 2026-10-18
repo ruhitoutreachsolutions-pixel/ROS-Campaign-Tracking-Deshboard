@@ -2796,16 +2796,23 @@ export function WorkspaceProvider({ children }) {
   }
 
   function updateWorkspace(wsId, updates) {
-    setWorkspaces(prev => prev.map(w => {
-      if (w.id === wsId) {
-        const updated = { ...w, ...updates, updatedAt: new Date().toISOString() };
-        if (updates.name && !updates.clientName) {
-          updated.clientName = updates.name;
+    setWorkspaces(prev => {
+      const next = prev.map(w => {
+        if (w.id === wsId) {
+          const updated = { ...w, ...updates, updatedAt: new Date().toISOString() };
+          if (updates.name && !updates.clientName) {
+            updated.clientName = updates.name;
+          }
+          return updated;
         }
-        return updated;
-      }
-      return w;
-    }));
+        return w;
+      });
+      saveWorkspacesToLocal(next);
+      saveWorkspacesToCloud(next, wsId).catch(err => {
+        console.warn('Direct cloud save notice in updateWorkspace:', err);
+      });
+      return next;
+    });
 
     // Update currentUser name dynamically if active client is in this workspace
     setCurrentUser(prevUser => {
