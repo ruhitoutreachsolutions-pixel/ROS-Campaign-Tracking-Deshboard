@@ -179,7 +179,7 @@ export default function UnsubscribePage() {
                       Before you go — try Crewlix risk-free
                     </h3>
                     <p className="text-xs text-gray-300 mt-1 leading-relaxed">
-                      Before opting out, explore how Crewlix UK LTD streamlines care & healthcare staffing, or connect directly with our advisory team:
+                      Before opting out, explore how Crewlix UK LTD can empower your business, or book a live walkthrough to see the platform and features in action:
                     </p>
                   </div>
 
@@ -204,7 +204,7 @@ export default function UnsubscribePage() {
                       </span>
                     </a>
 
-                    {/* Button 2: Calendar Link */}
+                    {/* Button 2: Calendar Link (Live Platform & Features Demo) */}
                     <a
                       href="https://calendar.app.google/qKzaMiBFqUoQu2cw6"
                       target="_blank"
@@ -214,12 +214,12 @@ export default function UnsubscribePage() {
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-semibold text-[#00C2FF] flex items-center gap-1.5 font-mono">
                           <Calendar className="w-3.5 h-3.5 text-[#00C2FF]" />
-                          Intro Call
+                          Live Demo
                         </span>
                         <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition" />
                       </div>
                       <span className="text-xs sm:text-sm font-bold mt-1 text-gray-100 group-hover:text-white leading-tight">
-                        Book a call on our calendar
+                        Book a live demo of the platform & features
                       </span>
                     </a>
                   </div>
