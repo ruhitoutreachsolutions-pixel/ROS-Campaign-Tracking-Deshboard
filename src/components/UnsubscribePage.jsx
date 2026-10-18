@@ -54,6 +54,19 @@ export default function UnsubscribePage() {
     }
   }, []);
 
+  // Guarantee clean Crewlix UK LTD tab title and favicon
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.title = 'Crewlix UK LTD | Communication Preferences';
+    try {
+      const favicon = document.getElementById('app-favicon') || document.querySelector("link[rel*='icon']");
+      if (favicon) {
+        favicon.href = '/crewlix-logo.jpg';
+        favicon.type = 'image/jpeg';
+      }
+    } catch (e) {}
+  }, []);
+
   const reasons = [
     'I am no longer interested in these services',
     'Not relevant to my current role or organisation',

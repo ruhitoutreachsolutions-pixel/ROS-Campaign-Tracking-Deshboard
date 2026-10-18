@@ -186,6 +186,21 @@ export default function App() {
     );
   }, []);
 
+  // Ensure internal dashboard retains ROS branding while unsubscribe keeps Crewlix branding
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (!isUnsubscribeRoute) {
+      document.title = "ROS Campaign Tracking Dashboard | Ruhit Outreach Solutions";
+      try {
+        const favicon = document.getElementById('app-favicon') || document.querySelector("link[rel*='icon']");
+        if (favicon) {
+          favicon.href = "/ros-logo.svg";
+          favicon.type = "image/svg+xml";
+        }
+      } catch (e) {}
+    }
+  }, [isUnsubscribeRoute]);
+
   // Serve public unsubscribe page directly without requiring authentication
   if (isUnsubscribeRoute) {
     return <UnsubscribePage />;

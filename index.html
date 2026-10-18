@@ -2,9 +2,38 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/ros-logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ROS Campaign Tracking Dashboard | Ruhit Outreach Solutions</title>
+    <meta name="description" content="Crewlix UK LTD Communication Preferences and Outreach Opt-Out Portal" />
+    <link id="app-favicon" rel="icon" type="image/jpeg" href="/crewlix-logo.jpg" />
+    <title id="app-title">Crewlix UK LTD | Communication Preferences</title>
+    
+    <script>
+      (function() {
+        try {
+          var host = (window.location.hostname || '').toLowerCase();
+          var path = (window.location.pathname || '').toLowerCase();
+          var search = (window.location.search || '').toLowerCase();
+          var isUnsub = host.includes('unsub') || host.includes('crewlix') || path.includes('unsub') || search.includes('unsub');
+          
+          var favicon = document.getElementById('app-favicon');
+          var title = document.getElementById('app-title');
+
+          if (isUnsub) {
+            document.title = "Crewlix UK LTD | Communication Preferences";
+            if (favicon) {
+              favicon.href = "/crewlix-logo.jpg";
+              favicon.type = "image/jpeg";
+            }
+          } else {
+            document.title = "ROS Campaign Tracking Dashboard | Ruhit Outreach Solutions";
+            if (favicon) {
+              favicon.href = "/ros-logo.svg";
+              favicon.type = "image/svg+xml";
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
