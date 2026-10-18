@@ -15,6 +15,7 @@ export const STORAGE_KEY_PENDING_QUEUE = 'ros_google_sheets_pending_queue_v2';
 export const STORAGE_KEY_LAST_SYNC = 'ros_google_sheets_last_sync_v2';
 
 export const DEFAULT_SHEETS_TOKEN = 'ROS_SHEET_SECRET_2026';
+export const DEFAULT_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwiFZJSi4c6ZRTPCl2WJBYh5xq0hZgrzCGBHOsid28PtwrWdlW0T4LfWTUrlnKPNvz9/exec';
 
 // Standard 16-column lead schema for all workspace tabs
 export const LEAD_COLUMNS = [
@@ -52,12 +53,11 @@ export function getWorkspaceTabName(workspace) {
  * Get current Google Sheets configuration
  */
 export function getGoogleSheetsConfig() {
-  if (typeof localStorage === 'undefined') {
-    return { url: '', token: DEFAULT_SHEETS_TOKEN };
-  }
-  const url = localStorage.getItem(STORAGE_KEY_SHEETS_URL) || '';
-  const token = localStorage.getItem(STORAGE_KEY_SHEETS_TOKEN) || DEFAULT_SHEETS_TOKEN;
-  return { url: url.trim(), token: token.trim() };
+  const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SHEETS_URL) : null;
+  const savedToken = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SHEETS_TOKEN) : null;
+  const url = (savedUrl && savedUrl.trim()) ? savedUrl.trim() : DEFAULT_SHEETS_URL;
+  const token = (savedToken && savedToken.trim()) ? savedToken.trim() : DEFAULT_SHEETS_TOKEN;
+  return { url, token };
 }
 
 /**

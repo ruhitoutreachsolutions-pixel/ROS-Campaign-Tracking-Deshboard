@@ -1384,6 +1384,44 @@ export function WorkspaceProvider({ children }) {
         });
       }
 
+      // 8c-2. Realtime DNC / Opt-Out Added (Guarantees instant update across all workspaces and open tabs)
+      if (event.type === 'DNC_RECORD_ADDED' && event.email) {
+        const cleanEmail = event.email.trim().toLowerCase();
+        setWorkspaces(prev => {
+          let updatedAny = false;
+          const next = prev.map(w => {
+            let matched = false;
+            const nextLeads = (w.leads || []).map(l => {
+              if (l && l.email && l.email.trim().toLowerCase() === cleanEmail) {
+                matched = true;
+                updatedAny = true;
+                return {
+                  ...l,
+                  status: 'dnc',
+                  stage: 'DNC / Unsubscribed',
+                  isDNC: true,
+                  unsubscribedAt: event.unsubscribedAt || new Date().toISOString()
+                };
+              }
+              return l;
+            });
+            if (matched) {
+              return {
+                ...w,
+                leads: nextLeads,
+                updatedAt: new Date().toISOString()
+              };
+            }
+            return w;
+          });
+          if (updatedAny) {
+            saveWorkspacesToLocal(next);
+            return next;
+          }
+          return prev;
+        });
+      }
+
       // 8d. Realtime Workspace Reconcile Trigger (sender finished saving → pull the merged row)
       if ((event.type === 'WORKSPACE_RECONCILE_NEEDED' || event.type === 'WORKSPACE_SAVED') && event.workspaceId) {
         if (event.type === 'WORKSPACE_SAVED' && tsOf(event.updatedAt) && tsOf(event.updatedAt) <= (knownCloudTimeRef.current[event.workspaceId] || 0)) {

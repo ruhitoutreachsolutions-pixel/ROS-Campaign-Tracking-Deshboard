@@ -13,6 +13,47 @@ const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
 export const SYSTEM_META_ID = '__ros_system_metadata__';
+export const DNC_REGISTRY_ID = '__ros_dnc_registry_v1__';
+
+export async function fetchDncRegistryFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('leads')
+      .eq('id', DNC_REGISTRY_ID)
+      .maybeSingle();
+    if (!error && data && Array.isArray(data.leads)) {
+      return data.leads;
+    }
+  } catch (e) {}
+  return [];
+}
+
+export async function saveDncRecordToCloud(record) {
+  const supabase = getSupabaseClient();
+  if (!supabase || !record || !record.email) return false;
+  try {
+    const existing = await fetchDncRegistryFromCloud();
+    const cleanEmail = record.email.toLowerCase().trim();
+    const filtered = (existing || []).filter(r => r && r.email && r.email.toLowerCase().trim() !== cleanEmail);
+    filtered.unshift(record);
+
+    await supabase
+      .from('workspaces')
+      .upsert({
+        id: DNC_REGISTRY_ID,
+        name: 'ROS Global DNC Registry',
+        leads: filtered.slice(0, 5000),
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+    return true;
+  } catch (e) {
+    console.warn('saveDncRecordToCloud failed:', e);
+    return false;
+  }
+}
 
 let cachedClient = null;
 let cachedClientKey = '';
@@ -133,6 +174,15 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
         !deletedIds.includes(item.id)
       );
 
+      // Fetch cloud DNC registry to guarantee all opt-outs are reflected
+      let dncEmailSet = new Set();
+      try {
+        const dncList = await fetchDncRegistryFromCloud();
+        (dncList || []).forEach(d => {
+          if (d && d.email) dncEmailSet.add(d.email.trim().toLowerCase());
+        });
+      } catch (e) {}
+
       // Resolve leads for each workspace safely and fast:
       // If local already has leads and local updatedAt is up-to-date, reuse local leads.
       // Only fetch leads individually from cloud for the target workspace, or if cloud has newer updates.
@@ -203,7 +253,21 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             const sanitizedLeads = Array.isArray(leads)
               ? leads.filter(l => l && !deleted.has(l.id)).map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean)
               : [];
-            return refillFromBaseline(sanitizedLeads, item.id, deleted);
+            const refilled = refillFromBaseline(sanitizedLeads, item.id, deleted);
+            if (dncEmailSet.size > 0) {
+              return refilled.map(l => {
+                if (l && l.email && dncEmailSet.has(l.email.trim().toLowerCase())) {
+                  return {
+                    ...l,
+                    status: 'dnc',
+                    stage: 'DNC / Unsubscribed',
+                    isDNC: true
+                  };
+                }
+                return l;
+              });
+            }
+            return refilled;
           })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString()
