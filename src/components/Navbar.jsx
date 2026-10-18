@@ -21,10 +21,11 @@ import {
   Shield,
   CheckCircle2,
   MessageSquare,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Link2
 } from 'lucide-react';
 
-export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync, onNavigateToTasks, onNavigateToChat }) {
+export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, onOpenCloudSync, onNavigateToTasks, onNavigateToChat, onOpenUnsubscribeLink }) {
   const {
     workspaces,
     currentWorkspaceId,
@@ -311,6 +312,18 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
                 {pendingSheetsChangesCount}
               </span>
             )}
+          </button>
+
+          {/* UNSUBSCRIBE LINK GENERATOR PILL */}
+          <button
+            onClick={onOpenUnsubscribeLink}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#111827] border border-[#1E3A5F] hover:border-[#00C2FF]/60 text-xs font-medium text-gray-300 hover:text-white transition-all cursor-pointer shadow-sm group"
+            title="Generate & copy unsub.crewlixhr.co.uk unsubscribe links for cold email sequences"
+          >
+            <Link2 className="w-3.5 h-3.5 text-[#00C2FF]" />
+            <span className="hidden sm:inline text-[11px] font-semibold text-gray-300 group-hover:text-[#00C2FF]">
+              Unsub Link
+            </span>
           </button>
 
           {/* ADMIN: PENDING APPROVAL NOTIFICATION BADGE */}

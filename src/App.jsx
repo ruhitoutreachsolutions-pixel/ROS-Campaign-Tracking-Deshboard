@@ -22,6 +22,8 @@ import TasksAndReports from './components/TasksAndReports';
 import FormSubmissions from './components/FormSubmissions';
 import ChatView from './components/ChatView';
 import NotificationButton from './components/NotificationButton';
+import UnsubscribePage from './components/UnsubscribePage';
+import UnsubscribeLinkModal from './components/UnsubscribeLinkModal';
 import { 
   BarChart3, 
   Send, 
@@ -71,6 +73,7 @@ export default function App() {
   const [cloudSyncModalOpen, setCloudSyncModalOpen] = useState(false);
   const [cloudSyncInitialTab, setCloudSyncInitialTab] = useState('supabase');
   const [selectedLeadForModal, setSelectedLeadForModal] = useState(null);
+  const [unsubscribeLinkModalOpen, setUnsubscribeLinkModalOpen] = useState(false);
 
   // Unconditional Hooks (Must be called before any return statements)
   const isAdmin = effectiveRole === 'admin';
@@ -167,6 +170,27 @@ export default function App() {
     setWorkspaceModalOpen(true);
   };
 
+  // Detect if current request is for the public unsubscribe subdomain or route
+  const isUnsubscribeRoute = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const host = (window.location.hostname || '').toLowerCase();
+    const path = (window.location.pathname || '').toLowerCase();
+    const search = (window.location.search || '').toLowerCase();
+    return (
+      host.includes('unsub.crewlixhr.co.uk') ||
+      host.startsWith('unsub.') ||
+      path === '/unsubscribe' ||
+      path === '/unsub' ||
+      search.includes('unsub=') ||
+      search.includes('action=unsubscribe')
+    );
+  }, []);
+
+  // Serve public unsubscribe page directly without requiring authentication
+  if (isUnsubscribeRoute) {
+    return <UnsubscribePage />;
+  }
+
   // If user is not logged in, show Login Screen
   if (!currentUser) {
     return <LoginScreen />;
@@ -262,6 +286,7 @@ export default function App() {
         }}
         onNavigateToTasks={() => setActiveAdminTab('tasks')}
         onNavigateToChat={() => setActiveAdminTab('chat')}
+        onOpenUnsubscribeLink={() => setUnsubscribeLinkModalOpen(true)}
       />
 
       {/* Google Sheets Dual-Cloud Redundancy & Out-of-Sync Banner (Admin & Warrior) */}
@@ -436,6 +461,11 @@ export default function App() {
         isOpen={cloudSyncModalOpen}
         onClose={() => setCloudSyncModalOpen(false)}
         initialTab={cloudSyncInitialTab}
+      />
+
+      <UnsubscribeLinkModal
+        isOpen={unsubscribeLinkModalOpen}
+        onClose={() => setUnsubscribeLinkModalOpen(false)}
       />
 
       {/* Interactive Google Sheet Out-of-Sync Popup (Admin & Warrior) */}

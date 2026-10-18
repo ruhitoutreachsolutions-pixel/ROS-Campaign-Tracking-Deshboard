@@ -28,9 +28,11 @@ import {
   Search,
   ChevronDown,
   X,
-  ClipboardList
+  ClipboardList,
+  Link2
 } from 'lucide-react';
 import BatchTagModal from './BatchTagModal';
+import UnsubscribeLinkModal from './UnsubscribeLinkModal';
 
 // Helper to reliably get a lead's sender account
 function getLeadSenderAccount(lead, workspace) {
@@ -80,6 +82,7 @@ export default function MailMergeDispatcher() {
   const [manualSelection, setManualSelection] = useState([]);
   const [reassignSuccessMsg, setReassignSuccessMsg] = useState(null);
   const [batchTagModalOpen, setBatchTagModalOpen] = useState(false);
+  const [unsubModalOpen, setUnsubModalOpen] = useState(false);
 
   // Searchable Sender Account Dropdown State
   const [accountSearchQuery, setAccountSearchQuery] = useState('');
@@ -441,6 +444,15 @@ export default function MailMergeDispatcher() {
                 <Layers className="w-4 h-4" />
                 1. Select Sequence & Campaign
               </span>
+              <button
+                type="button"
+                onClick={() => setUnsubModalOpen(true)}
+                className="text-[11px] text-[#00C2FF] hover:text-white flex items-center gap-1 font-bold cursor-pointer transition px-2 py-0.5 rounded-lg bg-[#00C2FF]/10 hover:bg-[#00C2FF]/20 border border-[#00C2FF]/30"
+                title="Generate & copy unsub.crewlixhr.co.uk links for cold email templates"
+              >
+                <Link2 className="w-3 h-3" />
+                <span>Unsub Link</span>
+              </button>
             </div>
 
             {/* Sequence Selector Buttons */}
@@ -1061,6 +1073,12 @@ export default function MailMergeDispatcher() {
       <BatchTagModal
         isOpen={batchTagModalOpen}
         onClose={() => setBatchTagModalOpen(false)}
+      />
+
+      {/* UNSUBSCRIBE LINK GENERATOR MODAL */}
+      <UnsubscribeLinkModal
+        isOpen={unsubModalOpen}
+        onClose={() => setUnsubModalOpen(false)}
       />
 
     </div>
