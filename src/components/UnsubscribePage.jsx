@@ -109,8 +109,8 @@ export default function UnsubscribePage() {
     <div className="min-h-screen bg-[#070B13] text-white flex flex-col justify-between font-['Space_Grotesk'] selection:bg-[#00C2FF] selection:text-[#0A0A0A]">
       
       {/* Top Professional Header */}
-      <header className="border-b border-[#1E3A5F]/70 bg-[#0F172A]/80 backdrop-blur-md py-4 px-6 sm:px-12">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+      <header className="border-b border-[#1E3A5F]/70 bg-[#0F172A]/80 backdrop-blur-md py-3.5 px-4 sm:px-8 md:px-10 lg:px-12 w-full">
+        <div className="w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img 
               src={crewlixLogo || "/crewlix-logo.jpg"} 
