@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { processUnsubscribeRequest } from '../services/unsubscribeService';
+import crewlixLogo from '../assets/crewlix-logo.jpg';
 import { 
   ShieldCheck, 
   CheckCircle2, 
@@ -11,7 +12,10 @@ import {
   X, 
   ChevronRight,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  ExternalLink,
+  Calendar,
+  Sparkles
 } from 'lucide-react';
 
 export default function UnsubscribePage() {
@@ -95,12 +99,15 @@ export default function UnsubscribePage() {
       <header className="border-b border-[#1E3A5F]/70 bg-[#0F172A]/80 backdrop-blur-md py-4 px-6 sm:px-12">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#00C2FF] to-[#00E5A0] flex items-center justify-center text-[#0A0A0A] font-black text-sm shadow-md">
-              C
-            </div>
+            <img 
+              src={crewlixLogo || "/crewlix-logo.jpg"} 
+              alt="Crewlix UK LTD" 
+              className="h-10 w-auto rounded-xl object-contain bg-white p-1 shadow-md border border-white/20"
+              onError={(e) => { e.currentTarget.src = '/crewlix-logo.jpg'; }}
+            />
             <div>
               <span className="font-bold tracking-tight text-white text-sm sm:text-base block">
-                Crewlix HR & Outreach
+                Crewlix UK LTD
               </span>
               <span className="text-[11px] text-[#7B7B7B] block font-mono">
                 Communication Preferences Portal
@@ -134,8 +141,84 @@ export default function UnsubscribePage() {
                   Unsubscribe from Campaigns
                 </h1>
                 <p className="text-xs sm:text-sm text-gray-400 mt-2 leading-relaxed">
-                  We respect your privacy and email boundaries. Confirm your email address below to permanently stop all cold email communications from our team.
+                  We respect your privacy and email boundaries. Confirm your email address below to permanently stop all email communications from Crewlix UK LTD.
                 </p>
+              </div>
+
+              {/* Special Retention Offer Box */}
+              <div className="rounded-2xl bg-gradient-to-br from-[#132238] via-[#0F1B2E] to-[#0A1220] border border-[#00C2FF]/30 p-5 shadow-xl relative overflow-hidden">
+                <div className="absolute -top-12 -right-12 w-32 h-32 bg-[#00C2FF]/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-[#00E5A0]/10 rounded-full blur-2xl pointer-events-none" />
+
+                <div className="relative z-10 space-y-3.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 font-mono">
+                      Exclusive Crewlix Offer
+                    </span>
+                  </div>
+
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                      Before you go — try Crewlix risk-free
+                    </h3>
+                    <p className="text-xs text-gray-300 mt-1 leading-relaxed">
+                      Before opting out, explore how Crewlix UK LTD streamlines care & healthcare staffing, or connect directly with our advisory team:
+                    </p>
+                  </div>
+
+                  {/* Two Offer Action Buttons */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {/* Button 1: 30-Day Free Trial */}
+                    <a
+                      href="https://www.crewlix.co.uk/welcome/?plan=business-monthly"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group flex flex-col justify-center p-3.5 rounded-xl bg-gradient-to-r from-[#00C2FF] to-[#00E5A0] text-[#0A0A0A] font-bold shadow-lg hover:shadow-[#00C2FF]/20 hover:scale-[1.02] active:scale-[0.99] transition duration-200"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 text-[#0A0A0A]/90">
+                          <Sparkles className="w-3.5 h-3.5 text-[#0A0A0A]" />
+                          Special Offer
+                        </span>
+                        <ExternalLink className="w-3.5 h-3.5 opacity-70 group-hover:opacity-100 transition text-[#0A0A0A]" />
+                      </div>
+                      <span className="text-xs sm:text-sm font-extrabold mt-1 text-[#050B14] leading-tight">
+                        Free for 30 days, no card required
+                      </span>
+                    </a>
+
+                    {/* Button 2: Calendar Link */}
+                    <a
+                      href="https://calendar.app.google/qKzaMiBFqUoQu2cw6"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group flex flex-col justify-center p-3.5 rounded-xl bg-[#0B1323] hover:bg-[#132238] border border-[#1E3A5F] hover:border-[#00C2FF]/50 text-white shadow-md hover:scale-[1.02] active:scale-[0.99] transition duration-200"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-[#00C2FF] flex items-center gap-1.5 font-mono">
+                          <Calendar className="w-3.5 h-3.5 text-[#00C2FF]" />
+                          Intro Call
+                        </span>
+                        <ExternalLink className="w-3.5 h-3.5 text-gray-400 group-hover:text-white transition" />
+                      </div>
+                      <span className="text-xs sm:text-sm font-bold mt-1 text-gray-100 group-hover:text-white leading-tight">
+                        Book a call on our calendar
+                      </span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+
+              {/* Divider before unsubscribe form */}
+              <div className="relative flex items-center justify-center py-1">
+                <div className="border-t border-[#1E3A5F]/60 w-full" />
+                <span className="bg-[#0F172A] px-3 text-[10px] font-mono text-gray-500 uppercase tracking-widest">
+                  Or confirm opt-out below
+                </span>
               </div>
 
               {/* Form */}
@@ -268,7 +351,7 @@ export default function UnsubscribePage() {
                 </div>
                 <div className="flex items-center justify-between text-gray-400">
                   <span>Outreach Network:</span>
-                  <span className="text-white">Crewlix HR & Campaigns</span>
+                  <span className="text-white">Crewlix UK LTD & Campaigns</span>
                 </div>
               </div>
 
@@ -284,7 +367,7 @@ export default function UnsubscribePage() {
 
       {/* Footer */}
       <footer className="border-t border-[#1E3A5F]/70 bg-[#0F172A]/80 py-4 px-6 sm:px-12 text-center text-xs text-gray-500 font-mono">
-        <span>© {new Date().getFullYear()} Crewlix HR · Outbound Communication Preferences · All Rights Reserved</span>
+        <span>© {new Date().getFullYear()} Crewlix UK LTD · Outbound Communication Preferences · All Rights Reserved</span>
       </footer>
 
     </div>
