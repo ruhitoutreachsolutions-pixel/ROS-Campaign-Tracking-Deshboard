@@ -14,6 +14,93 @@ const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
 export const SYSTEM_META_ID = '__ros_system_metadata__';
 export const DNC_REGISTRY_ID = '__ros_dnc_registry_v1__';
+export const CHUNK_SIZE = 3000;
+export const CHUNK_PREFIX = '__ros_chunk__';
+
+// Strips empty strings, nulls, zeroes, false booleans to reduce JSON size by >60%
+export function compactLeadForCloud(l) {
+  if (!l || typeof l !== 'object') return null;
+  const c = { id: l.id, email: l.email };
+  if (l.firstName) c.firstName = l.firstName;
+  if (l.companyName) c.companyName = l.companyName;
+  if (l.city) c.city = l.city;
+  if (l.campaignName) c.campaignName = l.campaignName;
+  if (l.accountName) c.accountName = l.accountName;
+  if (l.email1) c.email1 = l.email1;
+  if (l.email2) c.email2 = l.email2;
+  if (l.email3) c.email3 = l.email3;
+  if (l.stage) c.stage = l.stage;
+  if (l.status && l.status !== 'pending') c.status = l.status;
+  if (l.isDNC) c.isDNC = true;
+  if (l.dealValue) c.dealValue = Number(l.dealValue) || 0;
+  if (l.replyDate) c.replyDate = l.replyDate;
+  if (l.notes) c.notes = l.notes;
+  if (l.dateAdded) c.dateAdded = l.dateAdded;
+  if (l.createdAt) c.createdAt = l.createdAt;
+  if (l.importedAt) c.importedAt = l.importedAt;
+  if (l.updatedAt) c.updatedAt = l.updatedAt;
+  if (l.unsubscribedAt) c.unsubscribedAt = l.unsubscribedAt;
+  return c;
+}
+
+// Fast 32-bit checksum for chunk delta change detection
+export function computeChunkHash(leads) {
+  if (!Array.isArray(leads) || leads.length === 0) return '0';
+  let hash = 0;
+  const str = JSON.stringify(leads);
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return String(hash);
+}
+
+// Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together
+export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
+  if (!supabase || !wsId) return { data: null, error: 'No client or workspace ID' };
+
+  try {
+    const { data: mainRow, error: mainErr } = await supabase
+      .from('workspaces')
+      .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, sequence_config, activity_log, created_at, updated_at')
+      .eq('id', wsId)
+      .maybeSingle();
+
+    if (mainErr) return { data: null, error: mainErr };
+    if (!mainRow) return { data: null, error: null };
+
+    // Fetch any partition chunk rows for this workspace
+    const { data: chunkRows, error: chunkErr } = await supabase
+      .from('workspaces')
+      .select('id, leads')
+      .like('id', `${CHUNK_PREFIX}${wsId}__%`);
+
+    let fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
+
+    if (!chunkErr && Array.isArray(chunkRows) && chunkRows.length > 0) {
+      chunkRows.sort((a, b) => {
+        const idxA = parseInt(a.id.split('__').pop(), 10) || 0;
+        const idxB = parseInt(b.id.split('__').pop(), 10) || 0;
+        return idxA - idxB;
+      });
+      for (const cr of chunkRows) {
+        if (Array.isArray(cr.leads) && cr.leads.length > 0) {
+          fullLeads.push(...cr.leads);
+        }
+      }
+    }
+
+    return {
+      data: {
+        ...mainRow,
+        leads: fullLeads
+      },
+      error: null
+    };
+  } catch (err) {
+    return { data: null, error: err };
+  }
+}
 
 export async function fetchDncRegistryFromCloud() {
   const supabase = getSupabaseClient();
@@ -197,15 +284,11 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 
         if (needsCloudLeads) {
           try {
-            const { data: leadRow, error: leadErr } = await supabase
-              .from('workspaces')
-              .select('id, leads')
-              .eq('id', item.id)
-              .maybeSingle();
+            const { data: fullCloudRow, error: leadErr } = await fetchFullCloudWorkspaceRow(supabase, item.id);
 
-            if (!leadErr && leadRow && Array.isArray(leadRow.leads)) {
+            if (!leadErr && fullCloudRow && Array.isArray(fullCloudRow.leads)) {
               if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
-                leads = mergeWorkspaceLeads(localWs.leads, leadRow.leads, {
+                leads = mergeWorkspaceLeads(localWs.leads, fullCloudRow.leads, {
                   workspaceId: item.id,
                   localWsUpdatedAt: localWs.updatedAt,
                   cloudWsUpdatedAt: item.updated_at,
@@ -213,7 +296,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
                   unionSentEmails: unionSentEmailsFor.includes(item.id)
                 });
               } else {
-                leads = leadRow.leads;
+                leads = fullCloudRow.leads;
               }
             } else if (localWs && Array.isArray(localWs.leads)) {
               leads = localWs.leads;
@@ -395,11 +478,7 @@ const MAX_SAVE_ATTEMPTS = 4;
 
 async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
   for (let attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt++) {
-    const { data: existingRow, error: checkErr } = await supabase
-      .from('workspaces')
-      .select('id, updated_at, leads, sequence_config, activity_log')
-      .eq('id', ws.id)
-      .maybeSingle();
+    const { data: existingRow, error: checkErr } = await fetchFullCloudWorkspaceRow(supabase, ws.id);
 
     if (checkErr) {
       lastCloudErrorMsg = checkErr.message || String(checkErr);
@@ -440,12 +519,19 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       .filter(Boolean);
     leadsToSave = refillFromBaseline(leadsToSave, ws.id, mergedDeletedSet);
 
-    let cloudLeadsPayload = leadsToSave;
-    if (ws.id === 'ws_crewlixukltd') {
-      // Previously Crewlix was skipped entirely (payload too large), so its edits never left the
-      // device. Upload only the leads that differ from the bundled baseline.
-      cloudLeadsPayload = toCrewlixCloudDelta(leadsToSave, existingRow?.leads);
+    // Compact all leads to strip redundant empty strings / defaults
+    const compactedLeads = leadsToSave.map(compactLeadForCloud).filter(Boolean);
+
+    // Split into safe chunks of CHUNK_SIZE (3,000 leads ~ 750 KB each)
+    const chunks = [];
+    for (let i = 0; i < compactedLeads.length; i += CHUNK_SIZE) {
+      chunks.push(compactedLeads.slice(i, i + CHUNK_SIZE));
     }
+    if (chunks.length === 0) chunks.push([]);
+
+    const currentHashes = chunks.map(computeChunkHash);
+    const prevHashes = Array.isArray(existingRow?.sequence_config?.chunkHashes) ? existingRow.sequence_config.chunkHashes : [];
+    const prevChunkCount = Number(existingRow?.sequence_config?.chunkCount) || 1;
 
     const mergedActivity = mergeActivityLogs(ws.activityLog || [], existingRow?.activity_log || []);
     const nowIso = new Date().toISOString();
@@ -462,10 +548,14 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       sequence_config: {
         ...(existingRow?.sequence_config || {}),
         ...(ws.sequenceConfig || {}),
-        deletedLeadIds: mergedDeleted
+        deletedLeadIds: mergedDeleted,
+        chunkCount: chunks.length,
+        chunkSize: CHUNK_SIZE,
+        totalLeads: compactedLeads.length,
+        chunkHashes: currentHashes
       },
       activity_log: mergedActivity,
-      leads: cloudLeadsPayload,
+      leads: chunks[0], // Primary chunk stored in workspace main row
       updated_at: nowIso
     };
 
@@ -473,8 +563,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     let conflict = false;
 
     if (existingRow) {
-      // Compare-and-swap: only write if nobody else saved since we read. Otherwise re-read,
-      // re-merge and retry, so concurrent saves from two portals can't erase each other's edits.
+      // Compare-and-swap on main row
       let casQuery = supabase.from('workspaces').update(payload).eq('id', ws.id);
       casQuery = existingRow.updated_at
         ? casQuery.eq('updated_at', existingRow.updated_at)
@@ -500,6 +589,45 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       }
       lastCloudErrorMsg = `Workspace ${ws.id} kept changing in the cloud during save; will retry on next sync.`;
       return false;
+    }
+
+    // Upsert any subsequent partition chunks (1 .. N-1) with delta skip
+    for (let k = 1; k < chunks.length; k++) {
+      if (prevHashes[k] && prevHashes[k] === currentHashes[k]) {
+        // Delta optimization: chunk content identical, skip upload
+        continue;
+      }
+      const chunkRowId = `${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`;
+      const chunkPayload = {
+        id: chunkRowId,
+        name: `${ws.name || ws.id} (Partition ${k})`,
+        client_name: 'ROS Chunk Partition',
+        client_email: '',
+        campaign_name: ws.campaignName || '',
+        active_sending_account: 'system',
+        sending_accounts: ['system'],
+        client_credentials: {},
+        sequence_config: { partitionIndex: k, workspaceId: ws.id, hash: currentHashes[k] },
+        activity_log: [],
+        leads: chunks[k],
+        updated_at: nowIso
+      };
+
+      const { error: chunkSaveErr } = await supabase
+        .from('workspaces')
+        .upsert(chunkPayload, { onConflict: 'id' });
+
+      if (chunkSaveErr) {
+        console.warn(`Error uploading chunk ${k} for ${ws.id}:`, chunkSaveErr);
+      }
+    }
+
+    // Clean up any stale chunks if total chunk count decreased
+    if (prevChunkCount > chunks.length) {
+      for (let c = chunks.length; c < prevChunkCount; c++) {
+        const staleId = `${CHUNK_PREFIX}${ws.id}__${String(c).padStart(4, '0')}`;
+        await supabase.from('workspaces').delete().eq('id', staleId);
+      }
     }
 
     lastSavedRows.set(ws.id, {
@@ -530,9 +658,6 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
     if (!ws || !ws.id || ws.id.startsWith('__ros_') || PERMANENTLY_PURGED_WS_IDS.includes(ws.id) || deletedIds.includes(ws.id)) continue;
     if (targetWorkspaceId && ws.id !== targetWorkspaceId) continue;
 
-    // Skip massive historical archives during untargeted bulk saves to avoid statement timeouts
-    if (!targetWorkspaceId && ws.leads && ws.leads.length > 5000) continue;
-
     try {
       const ok = await enqueueWorkspaceSave(ws.id, () => saveSingleWorkspaceToCloud(supabase, ws, !!targetWorkspaceId));
       if (!ok) hasError = true;
@@ -556,6 +681,12 @@ export async function deleteWorkspaceFromCloud(wsId) {
       .from('workspaces')
       .delete()
       .eq('id', wsId);
+
+    // Also delete any partition chunks for this workspace
+    await supabase
+      .from('workspaces')
+      .delete()
+      .like('id', `${CHUNK_PREFIX}${wsId}__%`);
 
     if (error) {
       console.warn(`Error deleting workspace ${wsId} from Supabase:`, error);

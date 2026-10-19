@@ -197,14 +197,14 @@ create policy "Allow all access" on workspaces for all using (true) with check (
 
   const handleManualSyncNow = async () => {
     setIsSaving(true);
-    setStatusMessage('');
+    setStatusMessage('Partitioning and synchronizing leads to cloud database in safe chunks...');
     setErrorMessage('');
     const targetId = currentWorkspace?.id;
     const ok = await saveWorkspacesToCloud(workspaces, targetId);
     setIsSaving(false);
     if (ok) {
       setStatusMessage(`All leads for ${currentWorkspace?.name || 'workspace'} (${currentWorkspace?.leads?.length || 0} leads) are synchronized with Supabase!`);
-      setTimeout(() => setStatusMessage(''), 4000);
+      setTimeout(() => setStatusMessage(''), 5000);
     } else {
       const err = getLastCloudError();
       setErrorMessage(err ? `Cloud sync failed: ${err}` : 'Cloud sync failed. Make sure Supabase is connected and the SQL table is created.');

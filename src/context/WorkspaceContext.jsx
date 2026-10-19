@@ -30,7 +30,8 @@ import {
   saveWarriorsToSupabase,
   getLastCloudError,
   fetchSheetsConfigFromCloud,
-  saveSheetsConfigToCloud
+  saveSheetsConfigToCloud,
+  fetchFullCloudWorkspaceRow
 } from '../services/db';
 import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
@@ -706,11 +707,7 @@ export function WorkspaceProvider({ children }) {
   async function fetchAndApplyCloudWorkspace(wsId) {
     const supabase = getSupabaseClient();
     if (!supabase || !wsId) return;
-    const { data: cloudRow, error } = await supabase
-      .from('workspaces')
-      .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, activity_log, sequence_config, updated_at')
-      .eq('id', wsId)
-      .maybeSingle();
+    const { data: cloudRow, error } = await fetchFullCloudWorkspaceRow(supabase, wsId);
     if (!error && cloudRow) applyCloudRowToState(wsId, cloudRow);
   }
 
