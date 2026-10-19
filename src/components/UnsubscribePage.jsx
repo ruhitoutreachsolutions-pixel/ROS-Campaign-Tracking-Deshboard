@@ -47,6 +47,11 @@ export default function UnsubscribePage() {
         } catch (e) {}
       }
 
+      // Ignore un-substituted template placeholders like '{{email}}', '{{Email Address}}', '{email}'
+      if (queryEmail && (queryEmail.includes('{') || queryEmail.includes('}') || !queryEmail.includes('@'))) {
+        queryEmail = '';
+      }
+
       if (queryEmail) setEmail(queryEmail.trim());
       if (queryWs) setWorkspaceId(queryWs.trim());
     } catch (err) {

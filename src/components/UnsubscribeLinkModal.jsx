@@ -17,6 +17,7 @@ import {
 export default function UnsubscribeLinkModal({ isOpen, onClose }) {
   const { currentWorkspace, workspaces } = useWorkspace();
   const [selectedWsId, setSelectedWsId] = useState(currentWorkspace?.id || 'ws_crewlixukltd');
+  const [tagFormat, setTagFormat] = useState('sheets_email_address'); // 'sheets_email_address' | 'sheets_email' | 'cold_email'
   const [copiedKey, setCopiedKey] = useState(null);
 
   if (!isOpen) return null;
@@ -24,7 +25,13 @@ export default function UnsubscribeLinkModal({ isOpen, onClose }) {
   const targetWs = workspaces?.find(w => w.id === selectedWsId) || currentWorkspace;
   const subdomainBase = 'https://unsub.crewlixhr.co.uk';
 
-  const rawUrl = `${subdomainBase}/?email={{email}}&ws=${targetWs?.id || ''}`;
+  const emailTag = tagFormat === 'sheets_email_address' 
+    ? '{{Email Address}}' 
+    : tagFormat === 'sheets_email' 
+      ? '{{Email}}' 
+      : '{{email}}';
+
+  const rawUrl = `${subdomainBase}/?email=${emailTag}&ws=${targetWs?.id || ''}`;
   const htmlSnippet = `<p style="font-size: 11px; color: #888888; margin-top: 24px;">If you would prefer not to receive future emails, you can <a href="${rawUrl}" style="color: #666666; text-decoration: underline;">unsubscribe here</a>.</p>`;
   const plainTextSnippet = `To unsubscribe from future emails, please visit: ${rawUrl}`;
 
@@ -108,6 +115,67 @@ export default function UnsubscribeLinkModal({ isOpen, onClose }) {
             </div>
           </div>
 
+          {/* Mail Merge Format / Tag Selector */}
+          <div>
+            <label className="text-[11px] font-bold text-gray-300 block mb-1.5">
+              Sending Tool / Variable Format:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setTagFormat('sheets_email_address')}
+                className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-0.5 ${
+                  tagFormat === 'sheets_email_address'
+                    ? 'bg-[#00C2FF]/15 border-[#00C2FF] text-white cyan-glow'
+                    : 'bg-[#0A0A0A] border-[#1E3A5F] text-gray-400 hover:text-white'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-[#00C2FF]">Google Sheets / Mailer</span>
+                <span className="text-[10px] text-gray-200 font-mono">{'{{Email Address}}'}</span>
+                <span className="text-[9px] text-gray-400">Campaign Mailer / YAMM / ROS TSV</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTagFormat('sheets_email')}
+                className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-0.5 ${
+                  tagFormat === 'sheets_email'
+                    ? 'bg-[#00C2FF]/15 border-[#00C2FF] text-white cyan-glow'
+                    : 'bg-[#0A0A0A] border-[#1E3A5F] text-gray-400 hover:text-white'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-[#00E5A0]">Google Sheets ("Email")</span>
+                <span className="text-[10px] text-gray-200 font-mono">{'{{Email}}'}</span>
+                <span className="text-[9px] text-gray-400">Sheets with header named "Email"</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTagFormat('cold_email')}
+                className={`p-2.5 rounded-xl border text-left transition cursor-pointer flex flex-col gap-0.5 ${
+                  tagFormat === 'cold_email'
+                    ? 'bg-[#00C2FF]/15 border-[#00C2FF] text-white cyan-glow'
+                    : 'bg-[#0A0A0A] border-[#1E3A5F] text-gray-400 hover:text-white'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-amber-400">Cold Email Tools</span>
+                <span className="text-[10px] text-gray-200 font-mono">{'{{email}}'}</span>
+                <span className="text-[9px] text-gray-400">Instantly, Lemlist, Smartlead</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Explanation Box */}
+          <div className="p-3 rounded-xl bg-[#00C2FF]/10 border border-[#00C2FF]/30 text-gray-300 text-xs flex items-start gap-2.5">
+            <Sparkles className="w-4 h-4 text-[#00C2FF] shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-white text-[11px]">How Google Sheets Mail Merge replaces recipient emails:</p>
+              <p className="text-[11px] text-gray-300 leading-relaxed">
+                In Google Sheets Mail Merge (Campaign Mailer), variables <strong>must match your sheet column header exactly</strong>. If your column is titled <span className="text-[#00C2FF] font-mono bg-black/60 px-1 py-0.5 rounded font-bold">Email Address</span>, use <span className="text-[#00E5A0] font-mono bg-black/60 px-1 py-0.5 rounded font-bold">{'{{Email Address}}'}</span> so the mailer automatically injects the recipient's email address upon sending.
+              </p>
+            </div>
+          </div>
+
           {/* Snippet 1: Raw URL Tag */}
           <div className="p-3.5 rounded-2xl bg-[#0A0A0A] border border-[#1E3A5F] space-y-2">
             <div className="flex items-center justify-between">
@@ -127,7 +195,7 @@ export default function UnsubscribeLinkModal({ isOpen, onClose }) {
               {rawUrl}
             </div>
             <p className="text-[11px] text-gray-500">
-              Use this directly as the link target in your sending tool. <code className="text-[#00C2FF] font-mono">{'{{email}}'}</code> will be automatically replaced with the lead's email.
+              Paste this link into your email sequence. <code className="text-[#00C2FF] font-mono">{emailTag}</code> will be automatically replaced with each recipient's actual email.
             </p>
           </div>
 
