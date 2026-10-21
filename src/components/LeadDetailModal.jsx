@@ -182,6 +182,20 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
                   ? 'Automatically excluded from follow-up dispatches.' 
                   : 'Will receive sequence follow-ups until marked DNC.'}
               </span>
+              {isDncState && (lead.unsubscribedAt || lead.unsubscribeReason) && (
+                <div className="mt-1.5 pt-1.5 border-t border-rose-500/20 text-[11px] text-rose-300">
+                  {lead.unsubscribedAt && (
+                    <div className="font-mono">
+                      📅 Unsubscribed: {new Date(lead.unsubscribedAt).toLocaleString()}
+                    </div>
+                  )}
+                  {lead.unsubscribeReason && (
+                    <div className="mt-0.5 text-rose-200">
+                      Reason: <span className="italic">"{lead.unsubscribeReason}"</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

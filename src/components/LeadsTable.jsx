@@ -59,6 +59,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
   // Global Search
   const [globalSearch, setGlobalSearch] = useState('');
+  const [showOnlyDnc, setShowOnlyDnc] = useState(false);
 
   // Bulk Email Search State
   const [isBulkSearchModalOpen, setIsBulkSearchModalOpen] = useState(false);
@@ -171,6 +172,11 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   // Apply Global Search, Bulk Email Search, Column Filters, and Sorting
   const filteredAndSortedLeads = useMemo(() => {
     let result = leads.filter(lead => {
+      // 0a. DNC / Unsubscribed Quick Filter
+      if (showOnlyDnc && !isLeadDNC(lead)) {
+        return false;
+      }
+
       // 0. Bulk Email Search Filter
       if (bulkSearchFilter && bulkSearchFilter.emailSet) {
         const leadEmail = (lead.email || '').trim().toLowerCase();
@@ -220,6 +226,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     return result;
   }, [leads, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
 
+  const dncLeadsCount = useMemo(() => leads.filter(isLeadDNC).length, [leads]);
+
   // Pagination
   const totalPages = Math.ceil(filteredAndSortedLeads.length / pageSize) || 1;
   const paginatedLeads = useMemo(() => {
@@ -228,7 +236,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   }, [filteredAndSortedLeads, page, pageSize]);
 
   // Active filters count
-  const activeFiltersCount = Object.values(columnFilters).filter(v => v && v.length > 0).length;
+  const activeFiltersCount = Object.values(columnFilters).filter(v => v && v.length > 0).length + (showOnlyDnc ? 1 : 0);
 
   // Toggle or Set Column Filter Values
   const handleToggleFilterValue = (colKey, val) => {
@@ -268,6 +276,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   const handleClearAllFilters = () => {
     setColumnFilters({});
     setGlobalSearch('');
+    setShowOnlyDnc(false);
     setBulkSearchFilter(null);
     setSortConfig({ key: null, direction: null });
     setPage(1);
@@ -515,6 +524,41 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               </span>
             )}
           </button>
+
+          {/* Quick DNC / Unsubscribed Toggle Button */}
+          <button
+            onClick={() => {
+              setShowOnlyDnc(prev => !prev);
+              setPage(1);
+            }}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              showOnlyDnc 
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500 shadow-lg shadow-rose-500/20' 
+                : 'bg-[#0A0A0A] hover:bg-rose-950/30 text-gray-300 hover:text-rose-400 border-[#1E3A5F]'
+            }`}
+            title="Filter table to view all unsubscribed and DNC leads"
+          >
+            <Ban className="w-3.5 h-3.5 text-rose-400" />
+            <span>DNC / Unsub</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 text-[10px] font-mono font-bold">
+              {dncLeadsCount}
+            </span>
+          </button>
+
+          {/* Active DNC Filter Pill */}
+          {showOnlyDnc && (
+            <div className="flex items-center gap-1.5 bg-rose-500/15 border border-rose-500/40 px-2.5 py-1 rounded-xl text-xs text-rose-300 shadow-md animate-fade-in">
+              <Ban className="w-3.5 h-3.5 text-rose-400" />
+              <span>Showing <strong>{dncLeadsCount}</strong> Unsubscribed</span>
+              <button
+                onClick={() => setShowOnlyDnc(false)}
+                className="ml-1 p-0.5 hover:text-white rounded cursor-pointer"
+                title="Clear DNC filter"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Active Bulk Search Filter Pill */}
           {bulkSearchFilter && (
