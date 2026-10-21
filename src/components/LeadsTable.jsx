@@ -224,7 +224,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     }
 
     return result;
-  }, [leads, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
+  }, [leads, showOnlyDnc, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
 
   const dncLeadsCount = useMemo(() => leads.filter(isLeadDNC).length, [leads]);
 
@@ -236,7 +236,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   }, [filteredAndSortedLeads, page, pageSize]);
 
   // Active filters count
-  const activeFiltersCount = Object.values(columnFilters).filter(v => v && v.length > 0).length + (showOnlyDnc ? 1 : 0);
+  const activeFiltersCount = Object.values(columnFilters).filter(v => v && v.length > 0).length;
 
   // Toggle or Set Column Filter Values
   const handleToggleFilterValue = (colKey, val) => {
@@ -529,6 +529,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
           <button
             onClick={() => {
               setShowOnlyDnc(prev => !prev);
+              setSelectedLeads(new Set());
               setPage(1);
             }}
             className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
@@ -551,7 +552,11 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
               <Ban className="w-3.5 h-3.5 text-rose-400" />
               <span>Showing <strong>{dncLeadsCount}</strong> Unsubscribed</span>
               <button
-                onClick={() => setShowOnlyDnc(false)}
+                onClick={() => {
+                  setShowOnlyDnc(false);
+                  setSelectedLeads(new Set());
+                  setPage(1);
+                }}
                 className="ml-1 p-0.5 hover:text-white rounded cursor-pointer"
                 title="Clear DNC filter"
               >
