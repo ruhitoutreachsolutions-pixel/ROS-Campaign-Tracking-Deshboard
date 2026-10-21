@@ -37,7 +37,8 @@ import {
   ShieldCheck,
   UserPlus,
   Plus,
-  Layers
+  Layers,
+  Link2
 } from 'lucide-react';
 
 export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpenCloudSync }) {
