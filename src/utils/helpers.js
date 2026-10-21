@@ -97,6 +97,17 @@ export function isLeadDNC(lead) {
   return false;
 }
 
+// Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk)
+export function isLeadUnsubscribedFromLink(lead) {
+  if (!lead) return false;
+  if (lead.unsubscribedFromLink === true) return true;
+  if (lead.unsubscribedAt && typeof lead.unsubscribedAt === 'string') return true;
+  if (lead.unsubscribeReason && typeof lead.unsubscribeReason === 'string') return true;
+  const notes = (lead.notes || '').toLowerCase();
+  if (notes.includes('unsubscribed via link') || notes.includes('unsub.crewlixhr.co.uk')) return true;
+  return false;
+}
+
 // Check if a stage string represents an active positive pipeline stage
 export function isPositivePipelineStage(stageStr) {
   if (!stageStr || typeof stageStr !== 'string') return false;

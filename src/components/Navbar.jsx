@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { isLeadUnsubscribedFromLink } from '../utils/helpers';
 import { useWorkspace } from '../context/WorkspaceContext';
 import RosLogo from './RosLogo';
 import NotificationButton from './NotificationButton';
@@ -48,6 +49,19 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
 
   const [wsDropdownOpen, setWsDropdownOpen] = useState(false);
   const [copiedShare, setCopiedShare] = useState(false);
+
+  // Count total leads unsubscribed via public link
+  const linkUnsubsTotal = useMemo(() => {
+    let count = 0;
+    (workspaces || []).forEach(ws => {
+      if (ws && Array.isArray(ws.leads)) {
+        ws.leads.forEach(l => {
+          if (isLeadUnsubscribedFromLink(l)) count++;
+        });
+      }
+    });
+    return count;
+  }, [workspaces]);
   const [timeAgoStr, setTimeAgoStr] = useState('just now');
 
   const isAdmin = currentUser?.role === 'admin';
@@ -314,16 +328,21 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
             )}
           </button>
 
-          {/* UNSUBSCRIBE LINK GENERATOR PILL */}
+          {/* UNSUBSCRIBE HUB & LOGS PILL */}
           <button
             onClick={onOpenUnsubscribeLink}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#111827] border border-[#1E3A5F] hover:border-[#00C2FF]/60 text-xs font-medium text-gray-300 hover:text-white transition-all cursor-pointer shadow-sm group"
-            title="Generate & copy unsub.crewlixhr.co.uk unsubscribe links for cold email sequences"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#111827] border border-[#1E3A5F] hover:border-rose-500/60 text-xs font-medium text-gray-300 hover:text-white transition-all cursor-pointer shadow-sm group"
+            title="Unsubscribe Hub: Copy sequence links & view real-time unsubscribed contacts log"
           >
-            <Link2 className="w-3.5 h-3.5 text-[#00C2FF]" />
-            <span className="hidden sm:inline text-[11px] font-semibold text-gray-300 group-hover:text-[#00C2FF]">
-              Unsub Link
+            <Link2 className="w-3.5 h-3.5 text-[#00C2FF] group-hover:text-rose-400 transition-colors" />
+            <span className="hidden sm:inline text-[11px] font-semibold text-gray-300 group-hover:text-white">
+              Unsub Hub
             </span>
+            {linkUnsubsTotal > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 text-[10px] font-mono font-bold">
+                {linkUnsubsTotal}
+              </span>
+            )}
           </button>
 
           {/* ADMIN: PENDING APPROVAL NOTIFICATION BADGE */}

@@ -40,6 +40,8 @@ export function compactLeadForCloud(l) {
   if (l.importedAt) c.importedAt = l.importedAt;
   if (l.updatedAt) c.updatedAt = l.updatedAt;
   if (l.unsubscribedAt) c.unsubscribedAt = l.unsubscribedAt;
+  if (l.unsubscribeReason) c.unsubscribeReason = l.unsubscribeReason;
+  if (l.unsubscribedFromLink) c.unsubscribedFromLink = true;
   return c;
 }
 
@@ -263,10 +265,15 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 
       // Fetch cloud DNC registry to guarantee all opt-outs are reflected
       let dncEmailSet = new Set();
+      let dncRecordMap = new Map();
       try {
         const dncList = await fetchDncRegistryFromCloud();
         (dncList || []).forEach(d => {
-          if (d && d.email) dncEmailSet.add(d.email.trim().toLowerCase());
+          if (d && d.email) {
+            const clean = d.email.trim().toLowerCase();
+            dncEmailSet.add(clean);
+            dncRecordMap.set(clean, d);
+          }
         });
       } catch (e) {}
 
@@ -340,11 +347,15 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             if (dncEmailSet.size > 0) {
               return refilled.map(l => {
                 if (l && l.email && dncEmailSet.has(l.email.trim().toLowerCase())) {
+                  const dncRec = dncRecordMap.get(l.email.trim().toLowerCase());
                   return {
                     ...l,
                     status: 'dnc',
                     stage: 'DNC / Unsubscribed',
-                    isDNC: true
+                    isDNC: true,
+                    unsubscribedAt: l.unsubscribedAt || dncRec?.unsubscribedAt || new Date().toISOString(),
+                    unsubscribeReason: l.unsubscribeReason || dncRec?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                    unsubscribedFromLink: true
                   };
                 }
                 return l;

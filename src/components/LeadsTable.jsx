@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
-import { exportLeadsToCSV, isLeadDNC } from '../utils/helpers';
+import { exportLeadsToCSV, isLeadDNC, isLeadUnsubscribedFromLink } from '../utils/helpers';
 import BulkEditModal from './BulkEditModal';
 import AddLeadModal from './AddLeadModal';
 import BulkSearchModal from './BulkSearchModal';
@@ -60,6 +60,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   // Global Search
   const [globalSearch, setGlobalSearch] = useState('');
   const [showOnlyDnc, setShowOnlyDnc] = useState(false);
+  const [showOnlyLinkUnsub, setShowOnlyLinkUnsub] = useState(false);
 
   // Bulk Email Search State
   const [isBulkSearchModalOpen, setIsBulkSearchModalOpen] = useState(false);
@@ -177,6 +178,11 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
         return false;
       }
 
+      // 0b. Public Link Unsubscribed Quick Filter
+      if (showOnlyLinkUnsub && !isLeadUnsubscribedFromLink(lead)) {
+        return false;
+      }
+
       // 0. Bulk Email Search Filter
       if (bulkSearchFilter && bulkSearchFilter.emailSet) {
         const leadEmail = (lead.email || '').trim().toLowerCase();
@@ -224,9 +230,10 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     }
 
     return result;
-  }, [leads, showOnlyDnc, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
+  }, [leads, showOnlyDnc, showOnlyLinkUnsub, globalSearch, columnFilters, sortConfig, currentWorkspace, bulkSearchFilter]);
 
   const dncLeadsCount = useMemo(() => leads.filter(isLeadDNC).length, [leads]);
+  const linkUnsubsCount = useMemo(() => leads.filter(isLeadUnsubscribedFromLink).length, [leads]);
 
   // Pagination
   const totalPages = Math.ceil(filteredAndSortedLeads.length / pageSize) || 1;
@@ -277,6 +284,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     setColumnFilters({});
     setGlobalSearch('');
     setShowOnlyDnc(false);
+    setShowOnlyLinkUnsub(false);
     setBulkSearchFilter(null);
     setSortConfig({ key: null, direction: null });
     setPage(1);
@@ -559,6 +567,47 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                 }}
                 className="ml-1 p-0.5 hover:text-white rounded cursor-pointer"
                 title="Clear DNC filter"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Quick Link Unsubscribed Toggle Button */}
+          <button
+            onClick={() => {
+              setShowOnlyLinkUnsub(prev => !prev);
+              setShowOnlyDnc(false);
+              setSelectedLeads(new Set());
+              setPage(1);
+            }}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              showOnlyLinkUnsub 
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500 shadow-lg shadow-rose-500/20' 
+                : 'bg-[#0A0A0A] hover:bg-rose-950/30 text-gray-300 hover:text-rose-400 border-[#1E3A5F]'
+            }`}
+            title="Filter table to view leads who unsubscribed specifically via the public link (unsub.crewlixhr.co.uk)"
+          >
+            <Link2 className="w-3.5 h-3.5 text-rose-400" />
+            <span>Link Unsub</span>
+            <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 text-[10px] font-mono font-bold">
+              {linkUnsubsCount}
+            </span>
+          </button>
+
+          {/* Active Link Unsub Filter Pill */}
+          {showOnlyLinkUnsub && (
+            <div className="flex items-center gap-1.5 bg-rose-500/15 border border-rose-500/40 px-2.5 py-1 rounded-xl text-xs text-rose-300 shadow-md animate-fade-in">
+              <Link2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Showing <strong>{linkUnsubsCount}</strong> Link Unsubs</span>
+              <button
+                onClick={() => {
+                  setShowOnlyLinkUnsub(false);
+                  setSelectedLeads(new Set());
+                  setPage(1);
+                }}
+                className="ml-1 p-0.5 hover:text-white rounded cursor-pointer"
+                title="Clear Link Unsub filter"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -1026,6 +1075,15 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                           <span className={isDnc ? 'text-rose-300 line-through' : 'text-[#00C2FF]'}>
                             {lead.email}
                           </span>
+                          {isLeadUnsubscribedFromLink(lead) && (
+                            <span 
+                              className="px-1.5 py-0.2 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[9px] font-mono font-bold flex items-center gap-1 shrink-0" 
+                              title={`Unsubscribed via link: ${lead.unsubscribeReason || ''} (${lead.unsubscribedAt || ''})`}
+                            >
+                              <Link2 className="w-2.5 h-2.5 text-rose-400" />
+                              <span>Link Unsub</span>
+                            </span>
+                          )}
                         </div>
                       </td>
 
