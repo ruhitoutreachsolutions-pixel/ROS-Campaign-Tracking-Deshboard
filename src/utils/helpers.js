@@ -67,6 +67,8 @@ export function formatDateDisplay(dateStr) {
 export function isLeadDNC(lead) {
   if (!lead) return false;
   if (lead.isDNC === true) return true;
+  if (lead.unsubscribedFromLink === true) return true;
+  if (lead.unsubscribedAt && typeof lead.unsubscribedAt === 'string' && lead.unsubscribedAt.trim()) return true;
 
   const stage = (lead.stage || '').toLowerCase().trim();
   const status = (lead.status || '').toLowerCase().trim();

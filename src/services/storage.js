@@ -9,6 +9,7 @@ const BACKUP_SNAPSHOT_KEY = 'ros_workspaces_snapshot_v1';
 
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
+import { isLeadDNC } from '../utils/helpers';
 
 // Open or initialize IndexedDB
 function openDB() {
@@ -386,9 +387,19 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     let stage = leadA.stage || leadB.stage || '';
     let status = leadA.status || leadB.status || 'pending';
 
-    // Newer edit wins so a lead can be moved OUT of Interested/DNC and that change syncs.
-    // Advanced stage only breaks ties (e.g. legacy leads without timestamps).
-    if (timeA > timeB) {
+    // DNC Priority Guard: Under compliance rules, DNC status ALWAYS overrides previous outreach stages
+    const isA_DNC = isLeadDNC(leadA) || leadA.isDNC === true || leadA.unsubscribedFromLink === true || Boolean(leadA.unsubscribedAt);
+    const isB_DNC = isLeadDNC(leadB) || leadB.isDNC === true || leadB.unsubscribedFromLink === true || Boolean(leadB.unsubscribedAt);
+    const isLeadDncOptOut = isA_DNC || isB_DNC;
+
+    if (isLeadDncOptOut) {
+      stage = (isA_DNC && leadA.stage && (leadA.stage.toLowerCase().includes('dnc') || leadA.stage.toLowerCase().includes('unsub')))
+        ? leadA.stage
+        : ((isB_DNC && leadB.stage && (leadB.stage.toLowerCase().includes('dnc') || leadB.stage.toLowerCase().includes('unsub')))
+          ? leadB.stage
+          : 'DNC / Unsubscribed');
+      status = 'dnc';
+    } else if (timeA > timeB) {
       stage = leadA.stage !== undefined ? leadA.stage : leadB.stage;
       status = leadA.status || leadB.status;
     } else if (timeB > timeA) {
@@ -428,6 +439,10 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       email3,
       stage,
       status,
+      isDNC: isLeadDncOptOut ? true : (primary.isDNC || secondary.isDNC || false),
+      unsubscribedFromLink: (leadA.unsubscribedFromLink || leadB.unsubscribedFromLink || (isLeadDncOptOut && (leadA.unsubscribedAt || leadB.unsubscribedAt))) ? true : false,
+      unsubscribedAt: leadA.unsubscribedAt || leadB.unsubscribedAt || undefined,
+      unsubscribeReason: leadA.unsubscribeReason || leadB.unsubscribeReason || undefined,
       notes,
       dealValue: primary.dealValue !== undefined ? primary.dealValue : (secondary.dealValue || 0),
       replyDate: primary.replyDate !== undefined ? (primary.replyDate || '') : (secondary.replyDate || ''),
@@ -438,23 +453,34 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     };
   };
 
-  // 1. Populate map with local leads by exact unique ID (or fallback to email ONLY if lead has no ID)
+  // 1. Populate map with local leads by exact unique ID and index by email for cross-matching
+  const emailToKeyMap = new Map();
   validLocal.forEach(lead => {
     const key = lead.id ? String(lead.id) : (lead.email ? `email:${lead.email.toLowerCase().trim()}` : null);
     if (key) {
       leadMap.set(key, lead);
+      if (lead.email) emailToKeyMap.set(lead.email.toLowerCase().trim(), key);
     }
   });
 
-  // 2. Merge cloud leads non-destructively by exact unique ID (or fallback to email ONLY if lead has no ID)
+  // 2. Merge cloud leads non-destructively by ID or matching email address
   validCloud.forEach(cLead => {
     const key = cLead.id ? String(cLead.id) : (cLead.email ? `email:${cLead.email.toLowerCase().trim()}` : `gen_${Math.random()}`);
+    const emailKey = cLead.email ? cLead.email.toLowerCase().trim() : null;
 
+    let matchKey = null;
     if (leadMap.has(key)) {
-      const existing = leadMap.get(key);
-      leadMap.set(key, mergeTwoLeads(existing, cLead));
+      matchKey = key;
+    } else if (emailKey && emailToKeyMap.has(emailKey)) {
+      matchKey = emailToKeyMap.get(emailKey);
+    }
+
+    if (matchKey && leadMap.has(matchKey)) {
+      const existing = leadMap.get(matchKey);
+      leadMap.set(matchKey, mergeTwoLeads(existing, cLead));
     } else {
       leadMap.set(key, cLead);
+      if (emailKey) emailToKeyMap.set(emailKey, key);
     }
   });
 

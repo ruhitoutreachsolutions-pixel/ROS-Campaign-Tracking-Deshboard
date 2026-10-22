@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'generator' }) {
-  const { currentWorkspace, workspaces } = useWorkspace();
+  const { currentWorkspace, workspaces, reconcileWithCloudDncRegistry } = useWorkspace();
   const [activeTab, setActiveTab] = useState(initialTab); // 'generator' | 'submissions'
   const [selectedWsId, setSelectedWsId] = useState(currentWorkspace?.id || 'ws_crewlixukltd');
   const [tagFormat, setTagFormat] = useState('sheets_email_address'); // 'sheets_email_address' | 'sheets_email' | 'cold_email'
@@ -44,6 +44,9 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
       const records = await fetchDncRegistryFromCloud();
       setCloudDncList(Array.isArray(records) ? records : []);
       setLastRefreshedAt(new Date());
+      if (reconcileWithCloudDncRegistry) {
+        reconcileWithCloudDncRegistry(records);
+      }
     } catch (err) {
       console.warn('Failed to fetch DNC registry:', err);
     } finally {

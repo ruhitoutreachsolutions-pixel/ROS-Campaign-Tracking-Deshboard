@@ -14,6 +14,7 @@ import {
 } from '../data/initialWorkspaces';
 import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested } from '../utils/helpers';
 import { 
+  fetchDncRegistryFromCloud,
   fetchWorkspacesFromCloud,
   saveWorkspacesToCloud as saveWorkspacesToCloudRaw,
   getLastSavedRow,
@@ -163,14 +164,21 @@ export function sanitizeLeadState(lead) {
   if (!lead) return lead;
   const stage = (lead.stage || '').toLowerCase().trim();
   const isInProgress = stage.includes('progress') || stage.includes('pending');
-  const isDnc = isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested');
+  const isDnc = isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || lead.isDNC === true || lead.unsubscribedFromLink === true || Boolean(lead.unsubscribedAt);
 
   if (isDnc) {
-    if (lead.status !== 'dnc' || lead.isDNC !== true || (lead.replyDate && lead.replyDate.trim()) || lead.dealValue) {
+    const isStageDnc = stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || stage.includes('bounce');
+    const targetStage = isStageDnc ? lead.stage : (lead.unsubscribeReason?.includes('Bounce') ? 'DNC / Bounced' : 'DNC / Unsubscribed');
+
+    if (lead.status !== 'dnc' || lead.isDNC !== true || lead.stage !== targetStage || !lead.unsubscribedFromLink || (lead.replyDate && lead.replyDate.trim()) || lead.dealValue) {
       return {
         ...lead,
         status: 'dnc',
+        stage: targetStage,
         isDNC: true,
+        unsubscribedFromLink: lead.unsubscribedFromLink || (lead.unsubscribedAt ? true : false),
+        unsubscribedAt: lead.unsubscribedAt || new Date().toISOString(),
+        unsubscribeReason: lead.unsubscribeReason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
         replyDate: '',
         dealValue: 0
       };
@@ -773,6 +781,81 @@ export function WorkspaceProvider({ children }) {
     }
     initFromIDB();
     return () => { isMounted = false; };
+  }, []);
+
+  // Reconciles in-memory and local leads with the authoritative Cloud DNC Registry
+  const reconcileWithCloudDncRegistry = async (customDncList = null) => {
+    try {
+      const dncList = Array.isArray(customDncList) ? customDncList : await fetchDncRegistryFromCloud();
+      if (!Array.isArray(dncList) || dncList.length === 0) return;
+
+      const dncMap = new Map();
+      dncList.forEach(d => {
+        if (d && d.email) {
+          dncMap.set(d.email.trim().toLowerCase(), d);
+        }
+      });
+
+      if (dncMap.size === 0) return;
+
+      setWorkspaces(prev => {
+        let hasAnyUpdate = false;
+        const next = prev.map(w => {
+          if (!w || !Array.isArray(w.leads) || w.leads.length === 0) return w;
+          let wsUpdated = false;
+          const nextLeads = w.leads.map(lead => {
+            if (!lead || !lead.email) return lead;
+            const clean = lead.email.trim().toLowerCase();
+            const dncRec = dncMap.get(clean);
+            if (dncRec) {
+              const alreadyProperDnc = lead.isDNC === true && 
+                                       lead.status === 'dnc' && 
+                                       (lead.stage || '').toLowerCase().includes('dnc') &&
+                                       lead.unsubscribedFromLink === true;
+              if (!alreadyProperDnc) {
+                wsUpdated = true;
+                hasAnyUpdate = true;
+                return {
+                  ...lead,
+                  status: 'dnc',
+                  stage: 'DNC / Unsubscribed',
+                  isDNC: true,
+                  unsubscribedFromLink: true,
+                  unsubscribedAt: lead.unsubscribedAt || dncRec.unsubscribedAt || new Date().toISOString(),
+                  unsubscribeReason: lead.unsubscribeReason || dncRec.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                  notes: lead.notes 
+                    ? (lead.notes.includes('[Unsubscribed via link') ? lead.notes : `${lead.notes} | [Unsubscribed via link]`)
+                    : '[Unsubscribed via link]'
+                };
+              }
+            }
+            return lead;
+          });
+
+          if (wsUpdated) {
+            return {
+              ...w,
+              leads: nextLeads,
+              updatedAt: new Date().toISOString()
+            };
+          }
+          return w;
+        });
+
+        if (hasAnyUpdate) {
+          saveWorkspacesToLocal(next);
+          return next;
+        }
+        return prev;
+      });
+    } catch (e) {
+      console.warn('reconcileWithCloudDncRegistry error:', e);
+    }
+  };
+
+  // Run automatic DNC reconciliation on mount
+  useEffect(() => {
+    reconcileWithCloudDncRegistry();
   }, []);
 
   // 3. Smart Conflict-Resistant Cloud Sync on Mount
@@ -4037,6 +4120,7 @@ export function WorkspaceProvider({ children }) {
     syncAllWorkspacesToCloud,
     restorePreviousBackup,
     forceSyncFromCloud,
+    reconcileWithCloudDncRegistry,
     // Google Sheets Dual-Cloud Redundancy
     sheetsSyncStatus,
     pendingSheetsChangesCount,
