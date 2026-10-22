@@ -60,117 +60,97 @@ export async function processUnsubscribeRequest({ email, workspaceId, reason }) 
   try {
     const nowIso = new Date().toISOString();
     const todayFormatted = new Date().toLocaleDateString('en-GB');
+    const finalReason = reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)';
 
-    // 1. Identify candidate workspace(s)
-    let explicitWsId = workspaceId && typeof workspaceId === 'string' && workspaceId.trim() !== '' 
+    // 1. Resolve workspace and baseline match in-memory (0ms lookup)
+    let baselineLead = null;
+    let targetWsId = workspaceId && typeof workspaceId === 'string' && workspaceId.trim() !== '' 
       ? workspaceId.trim() 
       : null;
+    let targetWsName = 'Crewlix UK LTD';
 
-    let targetWorkspaces = [];
-
-    if (explicitWsId) {
-      const { data: singleWs, error } = await supabase
-        .from('workspaces')
-        .select('id, name, leads, activity_log, updated_at')
-        .eq('id', explicitWsId)
-        .maybeSingle();
-
-      if (!error && singleWs) {
-        targetWorkspaces = [singleWs];
-      }
+    if (getCrewlixEmailMap().has(cleanEmail)) {
+      baselineLead = getCrewlixEmailMap().get(cleanEmail);
+      if (!targetWsId) targetWsId = 'ws_crewlixukltd';
+      targetWsName = 'Crewlix UK Ltd';
+    } else if (getCgeEmailMap().has(cleanEmail)) {
+      baselineLead = getCgeEmailMap().get(cleanEmail);
+      if (!targetWsId) targetWsId = 'ws_zrnl1fjb';
+      targetWsName = 'CGE UK LTD';
+    } else {
+      if (!targetWsId) targetWsId = 'ws_crewlixukltd';
     }
 
-    // If no explicit workspace provided or not found, automatically resolve workspace
-    if (targetWorkspaces.length === 0) {
-      // Prioritize workspace based on authoritative dataset match
-      let prioritizedWsId = 'ws_crewlixukltd';
-      if (getCrewlixEmailMap().has(cleanEmail)) {
-        prioritizedWsId = 'ws_crewlixukltd';
-      } else if (getCgeEmailMap().has(cleanEmail)) {
-        prioritizedWsId = 'ws_zrnl1fjb';
-      }
+    // 2. UNCONDITIONAL GLOBAL DNC REGISTRY SAVE (Always executed first!)
+    // Ensures regardless of chunks or baselines, the email is permanently registered as DNC.
+    const dncRecord = {
+      email: cleanEmail,
+      leadId: baselineLead?.id || null,
+      workspaceId: targetWsId,
+      reason: finalReason,
+      unsubscribedAt: nowIso
+    };
 
-      // Fetch prioritized workspace first (avoids fetching massive payload across all workspaces)
-      const { data: primaryWs } = await supabase
-        .from('workspaces')
-        .select('id, name, leads, activity_log, updated_at')
-        .eq('id', prioritizedWsId)
-        .maybeSingle();
+    // Save to global cloud registry so all dashboards/chunks reconcile it immediately
+    await saveDncRecordToCloud(dncRecord);
 
-      if (primaryWs) {
-        targetWorkspaces.push(primaryWs);
-      }
+    // Broadcast instant DNC notification across all tabs and open devices
+    broadcastRealtimeEvent('DNC_RECORD_ADDED', {
+      email: cleanEmail,
+      workspaceId: targetWsId,
+      reason: finalReason,
+      unsubscribedAt: nowIso,
+      lead: baselineLead ? {
+        ...baselineLead,
+        status: 'dnc',
+        stage: 'DNC / Unsubscribed',
+        isDNC: true,
+        unsubscribedAt: nowIso,
+        unsubscribeReason: finalReason,
+        unsubscribedFromLink: true
+      } : null
+    }).catch(() => {});
 
-      // Also fetch other active workspaces as fallback if not matched
-      const { data: otherWorkspaces } = await supabase
-        .from('workspaces')
-        .select('id, name, leads, activity_log, updated_at')
-        .neq('id', prioritizedWsId)
-        .neq('id', '__ros_system_metadata__')
-        .neq('id', '__ros_sheets_config_v1__')
-        .neq('id', '__ros_chat_messages_v1__')
-        .neq('id', '__ros_form_submissions_v1__');
-
-      if (Array.isArray(otherWorkspaces)) {
-        targetWorkspaces.push(...otherWorkspaces);
-      }
-    }
-
-    let matchFound = false;
-    let updatedWorkspaceName = '';
+    // 3. Fast targeted workspace row update (only the single target workspace, NEVER all partitions!)
     let updatedLeadRecord = null;
+    try {
+      const { data: wsRow } = await supabase
+        .from('workspaces')
+        .select('id, name, leads, activity_log')
+        .eq('id', targetWsId)
+        .maybeSingle();
 
-    // 2. Search for the lead across workspace(s) in Supabase leads AND authoritative baselines
-    for (const ws of targetWorkspaces) {
-      if (!ws || !ws.id) continue;
-
-      let existingLead = null;
-      let leadIndex = -1;
-
-      // 2a. Check Supabase workspace leads first
-      if (Array.isArray(ws.leads)) {
-        leadIndex = ws.leads.findIndex(l => 
-          l && l.email && l.email.trim().toLowerCase() === cleanEmail
-        );
-        if (leadIndex !== -1) {
-          existingLead = ws.leads[leadIndex];
-        }
-      }
-
-      // 2b. If not found in Supabase delta, check baseline for this workspace
-      if (!existingLead) {
-        if (ws.id === 'ws_crewlixukltd' || ws.id === 'ws_crewlixuk' || ws.id === 'ws_crewlix') {
-          existingLead = getCrewlixEmailMap().get(cleanEmail) || null;
-        } else if (ws.id === 'ws_zrnl1fjb') {
-          existingLead = getCgeEmailMap().get(cleanEmail) || null;
-        }
-      }
-
-      // 2c. Lead found! Apply DNC opt-out
-      if (existingLead) {
-        matchFound = true;
-        updatedWorkspaceName = ws.name || 'Crewlix UK LTD';
+      if (wsRow) {
+        if (wsRow.name) targetWsName = wsRow.name;
+        let wsLeads = Array.isArray(wsRow.leads) ? [...wsRow.leads] : [];
+        const existingIdx = wsLeads.findIndex(l => l && l.email && l.email.trim().toLowerCase() === cleanEmail);
+        
+        const existingOrBase = existingIdx !== -1 ? wsLeads[existingIdx] : (baselineLead || {
+          id: 'lead_unsub_' + Date.now(),
+          email: cleanEmail,
+          createdAt: nowIso
+        });
 
         const updatedLead = {
-          ...existingLead,
+          ...existingOrBase,
           status: 'dnc',
           stage: 'DNC / Unsubscribed',
           isDNC: true,
           unsubscribedAt: nowIso,
-          unsubscribeReason: reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-          notes: existingLead.notes 
-            ? `${existingLead.notes} | [Unsubscribed via link on ${todayFormatted}]` 
+          unsubscribeReason: finalReason,
+          unsubscribedFromLink: true,
+          notes: existingOrBase.notes 
+            ? `${existingOrBase.notes} | [Unsubscribed via link on ${todayFormatted}]` 
             : `[Unsubscribed via link on ${todayFormatted}]`,
           updatedAt: nowIso
         };
 
         updatedLeadRecord = updatedLead;
 
-        let updatedLeads = Array.isArray(ws.leads) ? [...ws.leads] : [];
-        if (leadIndex !== -1) {
-          updatedLeads[leadIndex] = updatedLead;
+        if (existingIdx !== -1) {
+          wsLeads[existingIdx] = updatedLead;
         } else {
-          updatedLeads.push(updatedLead);
+          wsLeads.unshift(updatedLead);
         }
 
         const newActivity = {
@@ -181,166 +161,66 @@ export async function processUnsubscribeRequest({ email, workspaceId, reason }) 
           description: `Lead ${cleanEmail} unsubscribed via public link (unsub.crewlixhr.co.uk)`
         };
 
-        const updatedActivity = [newActivity, ...(ws.activity_log || [])].slice(0, 500);
+        const updatedActivity = [newActivity, ...(wsRow.activity_log || [])].slice(0, 500);
 
-        // 3. Save to Supabase Cloud
-        const { error: updateErr } = await supabase
+        await supabase
           .from('workspaces')
           .update({
-            leads: updatedLeads,
+            leads: wsLeads,
             activity_log: updatedActivity,
             updated_at: nowIso
           })
-          .eq('id', ws.id);
+          .eq('id', targetWsId);
 
-        // Always record in the resilient Cloud DNC Registry partition
-        saveDncRecordToCloud({
-          email: cleanEmail,
-          leadId: updatedLead.id,
-          workspaceId: ws.id,
-          reason: reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-          unsubscribedAt: nowIso
-        }).catch(() => {});
+        // Sync delta to Google Sheet in background
+        syncLeadsBatchToGoogleSheet(targetWsId, targetWsName, [updatedLead], newActivity).catch(() => {});
 
-        // Broadcast instant DNC notification across all tabs
-        broadcastRealtimeEvent('DNC_RECORD_ADDED', {
-          email: cleanEmail,
-          workspaceId: ws.id,
-          unsubscribedAt: nowIso,
-          lead: updatedLead
-        }).catch(() => {});
-
-        if (!updateErr) {
-          // 4. Broadcast Realtime Event to all open dashboard devices & tabs
-          broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
-            workspaceId: ws.id,
-            leads: [updatedLead],
-            updatedAt: nowIso
-          }).catch(() => {});
-
-          broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-            workspaceId: ws.id,
-            updatedAt: nowIso
-          }).catch(() => {});
-
-          // 5. Delta sync to Google Sheets
-          syncLeadsBatchToGoogleSheet(ws.id, ws.name, [updatedLead], newActivity).catch(() => {});
-        }
-
-        break; // Match confirmed and processed
-      }
-    }
-
-    // 6. Fallback if not matched in any loaded workspace: check baselines directly
-    if (!matchFound) {
-      const fallbackBaselineLead = getCrewlixEmailMap().get(cleanEmail) || getCgeEmailMap().get(cleanEmail);
-      if (fallbackBaselineLead) {
-        const fallbackWsId = getCrewlixEmailMap().has(cleanEmail) ? 'ws_crewlixukltd' : 'ws_zrnl1fjb';
-        const fallbackWsName = fallbackWsId === 'ws_crewlixukltd' ? 'Crewlix UK Ltd' : 'CGE UK LTD';
-
-        const updatedLead = {
-          ...fallbackBaselineLead,
-          status: 'dnc',
-          stage: 'DNC / Unsubscribed',
-          isDNC: true,
-          unsubscribedAt: nowIso,
-          unsubscribeReason: reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-          notes: fallbackBaselineLead.notes 
-            ? `${fallbackBaselineLead.notes} | [Unsubscribed via link on ${todayFormatted}]` 
-            : `[Unsubscribed via link on ${todayFormatted}]`,
+        // Broadcast workspace updated event
+        broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
+          workspaceId: targetWsId,
+          leads: [updatedLead],
           updatedAt: nowIso
-        };
+        }).catch(() => {});
 
-        matchFound = true;
-        updatedWorkspaceName = fallbackWsName;
-
-        const { data: wsRow } = await supabase
-          .from('workspaces')
-          .select('id, leads, activity_log')
-          .eq('id', fallbackWsId)
-          .maybeSingle();
-
-        if (wsRow) {
-          const updatedLeads = [...(wsRow.leads || []), updatedLead];
-          const act = {
-            id: 'act_unsub_' + Date.now(),
-            timestamp: nowIso,
-            type: 'dnc',
-            count: 1,
-            description: `Lead ${cleanEmail} unsubscribed via public link (unsub.crewlixhr.co.uk)`
-          };
-          await supabase
-            .from('workspaces')
-            .update({
-              leads: updatedLeads,
-              activity_log: [act, ...(wsRow.activity_log || [])].slice(0, 500),
-              updated_at: nowIso
-            })
-            .eq('id', fallbackWsId);
-
-          saveDncRecordToCloud({
-            email: cleanEmail,
-            leadId: updatedLead.id,
-            workspaceId: fallbackWsId,
-            reason: reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-            unsubscribedAt: nowIso
-          }).catch(() => {});
-
-          broadcastRealtimeEvent('DNC_RECORD_ADDED', {
-            email: cleanEmail,
-            workspaceId: fallbackWsId,
-            unsubscribedAt: nowIso,
-            lead: updatedLead
-          }).catch(() => {});
-
-          broadcastRealtimeEvent('WORKSPACE_LEADS_UPDATED', {
-            workspaceId: fallbackWsId,
-            leads: [updatedLead],
-            updatedAt: nowIso
-          }).catch(() => {});
-
-          broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-            workspaceId: fallbackWsId,
-            updatedAt: nowIso
-          }).catch(() => {});
-
-          syncLeadsBatchToGoogleSheet(fallbackWsId, fallbackWsName, [updatedLead], act).catch(() => {});
-        }
+        broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
+          workspaceId: targetWsId,
+          updatedAt: nowIso
+        }).catch(() => {});
       }
+    } catch (wsErr) {
+      console.warn('Non-blocking workspace row update error:', wsErr);
     }
 
-    // 7. If genuinely external (not found anywhere), log in __ros_system_metadata__
-    if (!matchFound) {
-      try {
-        const { data: sysRow } = await supabase
+    // Also record in system metadata activity log for centralized audit history
+    try {
+      const { data: sysRow } = await supabase
+        .from('workspaces')
+        .select('id, activity_log')
+        .eq('id', '__ros_system_metadata__')
+        .maybeSingle();
+
+      if (sysRow) {
+        const act = {
+          id: 'act_unsub_' + Date.now(),
+          timestamp: nowIso,
+          type: 'dnc',
+          description: `Lead ${cleanEmail} unsubscribed via unsub.crewlixhr.co.uk (${targetWsName})`
+        };
+        await supabase
           .from('workspaces')
-          .select('id, activity_log')
-          .eq('id', '__ros_system_metadata__')
-          .maybeSingle();
-
-        if (sysRow) {
-          const act = {
-            id: 'act_unsub_external_' + Date.now(),
-            timestamp: nowIso,
-            type: 'dnc_external',
-            description: `External email ${cleanEmail} unsubscribed via unsub.crewlixhr.co.uk`
-          };
-          await supabase
-            .from('workspaces')
-            .update({
-              activity_log: [act, ...(sysRow.activity_log || [])].slice(0, 500),
-              updated_at: nowIso
-            })
-            .eq('id', '__ros_system_metadata__');
-        }
-      } catch (e) {}
-    }
+          .update({
+            activity_log: [act, ...(sysRow.activity_log || [])].slice(0, 500),
+            updated_at: nowIso
+          })
+          .eq('id', '__ros_system_metadata__');
+      }
+    } catch (e) {}
 
     return {
       success: true,
       email: cleanEmail,
-      matched: matchFound,
-      workspaceName: updatedWorkspaceName || 'Crewlix UK LTD'
+      matched: true,
+      workspaceName: targetWsName
     };
 
   } catch (err) {

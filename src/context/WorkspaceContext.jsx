@@ -1397,7 +1397,9 @@ export function WorkspaceProvider({ children }) {
                   status: 'dnc',
                   stage: 'DNC / Unsubscribed',
                   isDNC: true,
-                  unsubscribedAt: event.unsubscribedAt || new Date().toISOString()
+                  unsubscribedAt: event.unsubscribedAt || new Date().toISOString(),
+                  unsubscribeReason: event.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                  unsubscribedFromLink: true
                 };
               }
               return l;
