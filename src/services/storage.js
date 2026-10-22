@@ -9,7 +9,7 @@ const BACKUP_SNAPSHOT_KEY = 'ros_workspaces_snapshot_v1';
 
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
-import { isLeadDNC } from '../utils/helpers';
+import { isLeadDNC, KNOWN_LINK_UNSUB_EMAILS } from '../utils/helpers';
 
 // Open or initialize IndexedDB
 function openDB() {
@@ -440,7 +440,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
       stage,
       status,
       isDNC: isLeadDncOptOut ? true : (primary.isDNC || secondary.isDNC || false),
-      unsubscribedFromLink: (leadA.unsubscribedFromLink || leadB.unsubscribedFromLink || (isLeadDncOptOut && (leadA.unsubscribedAt || leadB.unsubscribedAt))) ? true : false,
+      unsubscribedFromLink: (leadA.unsubscribedFromLink === true || leadB.unsubscribedFromLink === true || KNOWN_LINK_UNSUB_EMAILS.has((leadA.email || leadB.email || '').toLowerCase().trim())) ? true : undefined,
       unsubscribedAt: leadA.unsubscribedAt || leadB.unsubscribedAt || undefined,
       unsubscribeReason: leadA.unsubscribeReason || leadB.unsubscribeReason || undefined,
       notes,

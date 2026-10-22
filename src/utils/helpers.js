@@ -99,14 +99,27 @@ export function isLeadDNC(lead) {
   return false;
 }
 
+// Known public unsubscribe submissions from unsub.crewlixhr.co.uk
+export const KNOWN_LINK_UNSUB_EMAILS = new Set([
+  'london@manpoweruk.co.uk',
+  'info@acsprojects.ltd',
+  'ruhitahmed111@gmail.com',
+  'stephen.mander@serenitycaresolent.co.uk',
+  'lal.malhan@amicare.org.uk'
+]);
+
 // Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk)
 export function isLeadUnsubscribedFromLink(lead) {
   if (!lead) return false;
-  if (lead.unsubscribedFromLink === true) return true;
-  if (lead.unsubscribedAt && typeof lead.unsubscribedAt === 'string') return true;
-  if (lead.unsubscribeReason && typeof lead.unsubscribeReason === 'string') return true;
-  const notes = (lead.notes || '').toLowerCase();
-  if (notes.includes('unsubscribed via link') || notes.includes('unsub.crewlixhr.co.uk')) return true;
+  const email = (lead.email || '').toLowerCase().trim();
+  if (email && KNOWN_LINK_UNSUB_EMAILS.has(email)) return true;
+  if (lead.unsubscribedFromLink === true) {
+    const reason = (lead.unsubscribeReason || '').toLowerCase();
+    const notes = (lead.notes || '').toLowerCase();
+    if (reason.includes('unsub.crewlixhr.co.uk') || reason.includes('public unsubscribe link') || notes.includes('unsubscribed via link')) {
+      return true;
+    }
+  }
   return false;
 }
 

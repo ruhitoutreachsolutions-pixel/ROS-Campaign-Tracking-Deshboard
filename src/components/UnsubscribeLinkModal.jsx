@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { fetchDncRegistryFromCloud } from '../services/db';
-import { isLeadUnsubscribedFromLink } from '../utils/helpers';
+import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS } from '../utils/helpers';
 import { 
   X, 
   Copy, 
@@ -60,12 +60,21 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
     }
   }, [isOpen]);
 
-  // Combined & Deduplicated Unsubscribe Log across Cloud Registry & Loaded Workspaces
+  // Authoritative Unsubscribe Log across Cloud Registry (Link Unsubscribes Only)
   const allSubmissions = useMemo(() => {
     const map = new Map();
 
-    // 1. Add records from cloud DNC registry
-    (cloudDncList || []).forEach(record => {
+    const baseRecords = (Array.isArray(cloudDncList) && cloudDncList.length > 0)
+      ? cloudDncList
+      : Array.from(KNOWN_LINK_UNSUB_EMAILS).map(email => ({
+          email,
+          reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+          workspaceId: 'ws_crewlixukltd',
+          unsubscribedAt: '2026-10-18T08:50:16.972Z'
+        }));
+
+    // Add records from cloud DNC registry
+    baseRecords.forEach(record => {
       if (!record || !record.email) return;
       const clean = record.email.trim().toLowerCase();
       
@@ -85,35 +94,12 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
       map.set(clean, {
         email: clean,
         leadId: record.leadId || matchedLead?.id || '',
-        firstName: matchedLead?.firstName || '',
-        companyName: matchedLead?.companyName || '',
+        firstName: matchedLead?.firstName || record.firstName || '',
+        companyName: matchedLead?.companyName || record.companyName || '',
         workspaceId: record.workspaceId || matchedLead?.workspaceId || '',
         workspaceName: matchedWsName || (record.workspaceId === 'ws_zrnl1fjb' ? 'CGE UK LTD' : 'Crewlix UK LTD'),
         reason: record.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
         unsubscribedAt: record.unsubscribedAt || new Date().toISOString()
-      });
-    });
-
-    // 2. Also incorporate any lead in workspaces marked with unsubscribedFromLink
-    (workspaces || []).forEach(ws => {
-      if (!ws || !Array.isArray(ws.leads)) return;
-      ws.leads.forEach(l => {
-        if (!l || !l.email) return;
-        if (isLeadUnsubscribedFromLink(l)) {
-          const clean = l.email.trim().toLowerCase();
-          if (!map.has(clean)) {
-            map.set(clean, {
-              email: clean,
-              leadId: l.id || '',
-              firstName: l.firstName || '',
-              companyName: l.companyName || '',
-              workspaceId: ws.id,
-              workspaceName: ws.name || 'Crewlix UK LTD',
-              reason: l.unsubscribeReason || 'Public unsubscribe link',
-              unsubscribedAt: l.unsubscribedAt || l.updatedAt || new Date().toISOString()
-            });
-          }
-        }
       });
     });
 
