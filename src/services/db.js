@@ -7,7 +7,7 @@ import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
 // Default Supabase project for ROS Outreach Dashboard (Crewlix UK Ltd Active Database)
 const DEFAULT_SUPABASE_URL = 'https://efpywnwavldrycjspdel.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5cWN0aGJldHdlbnZjdGp2ZmltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3MTUzMTMsImV4cCI6MjEwMzI5MTMxM30.JVjBtbXU8evmFx9ORHtVsf3cr8F7_yqhFrcm-NvtvKU';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmcHl3bndhdmxkcnljanNwZGVsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMzE4MDEsImV4cCI6MjEwODYwNzgwMX0.i0wlV3E3CiLL9uZ5JCVr5hfYnkwywhWUCvjDp5zcz0s';
 
 const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
 const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
@@ -206,8 +206,19 @@ export function isValidSupabaseKey(key) {
 
 // 1. Get active Supabase client (singleton cached for stable realtime connection)
 export function getSupabaseClient() {
-  const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
-  const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
+  let savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
+  let savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
+
+  // Auto-Migration Guard: If localStorage holds any old deprecated project, purge it so all clients upgrade cleanly
+  if (savedUrl && (savedUrl.includes('dyqcthbetwenvctjvfim') || savedUrl.includes('kmjqbctguwighqwezwq'))) {
+    console.log('Migrating device to authoritative Crewlix UK Ltd Supabase database...');
+    try {
+      localStorage.removeItem(STORAGE_KEY_SUPABASE_URL);
+      localStorage.removeItem(STORAGE_KEY_SUPABASE_KEY);
+      savedUrl = null;
+      savedKey = null;
+    } catch (e) {}
+  }
   
   // Guard: if savedKey is invalid (e.g. autofilled browser password), purge it and fallback to authoritative anon key
   const validSavedKey = isValidSupabaseKey(savedKey) ? savedKey.trim() : null;
@@ -252,8 +263,12 @@ export function saveSupabaseConfig(url, key) {
 }
 
 export function getSupabaseConfig() {
-  const savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
-  const savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
+  let savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
+  let savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
+  if (savedUrl && (savedUrl.includes('dyqcthbetwenvctjvfim') || savedUrl.includes('kmjqbctguwighqwezwq'))) {
+    savedUrl = null;
+    savedKey = null;
+  }
   return {
     url: savedUrl || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL,
     key: savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY
