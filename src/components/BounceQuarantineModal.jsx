@@ -96,7 +96,7 @@ export default function BounceQuarantineModal({ isOpen, onClose }) {
       if (currentWorkspace?.leads && Array.isArray(currentWorkspace.leads)) {
         const parsedSet = new Set(parsedEmails);
         currentWorkspace.leads.forEach(lead => {
-          if (lead && lead.email && parsedSet.has(lead.email.toLowerCase().trim())) {
+          if (lead && lead.email && parsedSet.has(String(lead.email).toLowerCase().trim())) {
             matchedCount++;
             updateLead(lead.id, {
               status: 'dnc',

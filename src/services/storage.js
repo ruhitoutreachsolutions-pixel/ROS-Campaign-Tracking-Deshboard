@@ -104,6 +104,16 @@ export function sanitizeLeadForWorkspace(lead, workspaceId) {
   if (!lead) return null;
   const wsId = workspaceId || lead.workspaceId;
 
+  // Defensively coerce non-string fields to strings
+  if (lead.companyName != null && typeof lead.companyName !== 'string') lead.companyName = String(lead.companyName);
+  if (lead.firstName != null && typeof lead.firstName !== 'string') lead.firstName = String(lead.firstName);
+  if (lead.city != null && typeof lead.city !== 'string') lead.city = String(lead.city);
+  if (lead.campaignName != null && typeof lead.campaignName !== 'string') lead.campaignName = String(lead.campaignName);
+  if (lead.accountName != null && typeof lead.accountName !== 'string') lead.accountName = String(lead.accountName);
+  if (lead.email != null && typeof lead.email !== 'string') lead.email = String(lead.email);
+  if (lead.notes != null && typeof lead.notes !== 'string') lead.notes = String(lead.notes);
+  if (lead.stage != null && typeof lead.stage !== 'string') lead.stage = String(lead.stage);
+
   // PURGE & SANITIZATION FOR CGE UK LTD (ws_zrnl1fjb) ONLY
   if (wsId === 'ws_zrnl1fjb') {
     const camp = (lead.campaignName || '').trim();
@@ -364,14 +374,14 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
         return valB !== undefined ? (valB || '') : (valA || '');
       }
       // If timestamps identical, pick non-empty
-      return (valA && valA.trim()) ? valA : (valB || '');
+      return (valA && String(valA).trim()) ? valA : (valB || '');
     };
 
     // One-time migration mode: keep any recorded send (either side). Used only where lead
     // timestamps can't be trusted yet, so a stale copy can never erase a real sent date.
     const pickUnionEmail = (valA, valB) => {
-      const a = (valA || '').trim();
-      const b = (valB || '').trim();
+      const a = String(valA || '').trim();
+      const b = String(valB || '').trim();
       if (a && b) return timeA >= timeB ? valA : valB;
       return a ? valA : (b ? valB : '');
     };

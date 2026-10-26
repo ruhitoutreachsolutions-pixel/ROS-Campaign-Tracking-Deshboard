@@ -146,7 +146,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
       }
       return '25/08/26';
     }
-    return lead[key] || '';
+    return String(lead[key] != null ? lead[key] : '');
   };
 
   // Compute Unique Values and Counts on demand for active/filtered columns in a single fast pass
@@ -189,7 +189,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
       // 0. Bulk Email Search Filter
       if (bulkSearchFilter && bulkSearchFilter.emailSet) {
-        const leadEmail = (lead.email || '').trim().toLowerCase();
+        const leadEmail = String(lead.email || '').trim().toLowerCase();
         if (!bulkSearchFilter.emailSet.has(leadEmail)) {
           return false;
         }
@@ -197,14 +197,14 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
 
       // 1. Global Search
       if (globalSearch.trim()) {
-        const q = globalSearch.toLowerCase();
-        const matches = (lead.email || '').toLowerCase().includes(q) ||
-                        (lead.firstName || '').toLowerCase().includes(q) ||
-                        (lead.city || '').toLowerCase().includes(q) ||
-                        (lead.companyName || '').toLowerCase().includes(q) ||
-                        (lead.campaignName || '').toLowerCase().includes(q) ||
-                        (lead.accountName || '').toLowerCase().includes(q) ||
-                        (lead.notes || '').toLowerCase().includes(q) ||
+        const q = globalSearch.toLowerCase().trim();
+        const matches = String(lead.email || '').toLowerCase().includes(q) ||
+                        String(lead.firstName || '').toLowerCase().includes(q) ||
+                        String(lead.city || '').toLowerCase().includes(q) ||
+                        String(lead.companyName || '').toLowerCase().includes(q) ||
+                        String(lead.campaignName || '').toLowerCase().includes(q) ||
+                        String(lead.accountName || '').toLowerCase().includes(q) ||
+                        String(lead.notes || '').toLowerCase().includes(q) ||
                         (isLeadDNC(lead) && 'dnc unsubscribed opt out not interested'.includes(q));
         if (!matches) return false;
       }
@@ -225,8 +225,8 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     // 3. Sorting
     if (sortConfig.key && sortConfig.direction) {
       result.sort((a, b) => {
-        const valA = getLeadValue(a, sortConfig.key).toLowerCase();
-        const valB = getLeadValue(b, sortConfig.key).toLowerCase();
+        const valA = String(getLeadValue(a, sortConfig.key) || '').toLowerCase();
+        const valB = String(getLeadValue(b, sortConfig.key) || '').toLowerCase();
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
@@ -295,7 +295,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
   };
 
   const handleApplyBulkSearchMatches = ({ emails, leadIds, autoSelect, totalSearched, unmatchedCount, unmatchedList }) => {
-    const emailSet = new Set((emails || []).map(e => e.trim().toLowerCase()));
+    const emailSet = new Set((emails || []).map(e => String(e || '').trim().toLowerCase()));
     setBulkSearchFilter({
       emails,
       emailSet,
@@ -978,7 +978,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                             {/* Unique Values Checklist */}
                             <div className="max-h-40 overflow-y-auto space-y-1 pr-1 border border-[#1E3A5F]/60 rounded-lg p-1.5 bg-[#0A0A0A]">
                               {(columnUniqueValues[col.key] || [])
-                                .filter(item => item.value.toLowerCase().includes(filterSearchQuery.toLowerCase()))
+                                .filter(item => String(item.value || '').toLowerCase().includes(filterSearchQuery.toLowerCase()))
                                 .map((item) => {
                                   const currentSelected = columnFilters[col.key] || (columnUniqueValues[col.key] || []).map(v => v.value);
                                   const isChecked = currentSelected.includes(item.value);

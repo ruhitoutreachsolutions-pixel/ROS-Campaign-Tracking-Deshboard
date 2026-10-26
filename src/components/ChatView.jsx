@@ -118,9 +118,9 @@ export default function ChatView() {
     if (!searchQuery.trim()) return allowedChatContacts;
     const q = searchQuery.toLowerCase();
     return allowedChatContacts.filter(c => 
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.username || '').toLowerCase().includes(q) ||
-      (c.badge || '').toLowerCase().includes(q)
+      String(c.name || '').toLowerCase().includes(q) ||
+      String(c.username || '').toLowerCase().includes(q) ||
+      String(c.badge || '').toLowerCase().includes(q)
     );
   }, [allowedChatContacts, searchQuery]);
 

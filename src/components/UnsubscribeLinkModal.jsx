@@ -140,11 +140,11 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
     if (!searchQuery.trim()) return allSubmissions;
     const q = searchQuery.toLowerCase().trim();
     return allSubmissions.filter(item => 
-      (item.email || '').toLowerCase().includes(q) ||
-      (item.firstName || '').toLowerCase().includes(q) ||
-      (item.companyName || '').toLowerCase().includes(q) ||
-      (item.reason || '').toLowerCase().includes(q) ||
-      (item.workspaceName || '').toLowerCase().includes(q)
+      String(item.email || '').toLowerCase().includes(q) ||
+      String(item.firstName || '').toLowerCase().includes(q) ||
+      String(item.companyName || '').toLowerCase().includes(q) ||
+      String(item.reason || '').toLowerCase().includes(q) ||
+      String(item.workspaceName || '').toLowerCase().includes(q)
     );
   }, [allSubmissions, searchQuery]);
 
@@ -174,11 +174,11 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
     const headers = ['Email Address', 'First Name', 'Company Name', 'Workspace', 'Unsubscribed At', 'Reason', 'Status'];
     const rows = allSubmissions.map(item => [
       `"${item.email}"`,
-      `"${(item.firstName || '').replace(/"/g, '""')}"`,
-      `"${(item.companyName || '').replace(/"/g, '""')}"`,
+      `"${String(item.firstName || '').replace(/"/g, '""')}"`,
+      `"${String(item.companyName || '').replace(/"/g, '""')}"`,
       `"${item.workspaceName}"`,
       `"${new Date(item.unsubscribedAt).toLocaleString()}"`,
-      `"${(item.reason || '').replace(/"/g, '""')}"`,
+      `"${String(item.reason || '').replace(/"/g, '""')}"`,
       `"DNC / Excluded"`
     ]);
 

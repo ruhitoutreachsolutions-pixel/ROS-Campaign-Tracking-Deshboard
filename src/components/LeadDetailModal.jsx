@@ -40,20 +40,20 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
 
   useEffect(() => {
     if (lead) {
-      setFirstName(lead.firstName || '');
-      setCompanyName(lead.companyName || '');
-      setCity(lead.city || '');
-      setEmail(lead.email || '');
-      setCampaignName(lead.campaignName || currentWorkspace?.campaignName || 'General Outbound');
-      setEmail1(lead.email1 || '');
-      setEmail2(lead.email2 || '');
-      setEmail3(lead.email3 || '');
-      setAccountName(lead.accountName || '');
-      setStage(lead.stage || '');
+      setFirstName(String(lead.firstName || ''));
+      setCompanyName(String(lead.companyName || ''));
+      setCity(String(lead.city || ''));
+      setEmail(String(lead.email || ''));
+      setCampaignName(String(lead.campaignName || currentWorkspace?.campaignName || 'General Outbound'));
+      setEmail1(String(lead.email1 || ''));
+      setEmail2(String(lead.email2 || ''));
+      setEmail3(String(lead.email3 || ''));
+      setAccountName(String(lead.accountName || ''));
+      setStage(String(lead.stage || ''));
       setDealValue(lead.dealValue !== undefined && lead.dealValue !== null ? String(lead.dealValue) : '0');
-      setReplyDate(lead.replyDate || '');
-      setDateAdded(lead.dateAdded || (lead.importedAt ? new Date(lead.importedAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '25/08/26'));
-      setNotes(lead.notes || '');
+      setReplyDate(String(lead.replyDate || ''));
+      setDateAdded(String(lead.dateAdded || (lead.importedAt ? new Date(lead.importedAt).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '25/08/26')));
+      setNotes(String(lead.notes || ''));
       setIsDncState(isLeadDNC(lead));
     }
   }, [lead, currentWorkspace]);
@@ -72,12 +72,13 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
 
   const handleSave = (e) => {
     e.preventDefault();
+    const stageStr = String(stage || '');
     const isNowDnc = isDncState || 
-                     stage.toLowerCase().includes('dnc') || 
-                     stage.toLowerCase().includes('unsub') || 
-                     stage.toLowerCase().includes('not interested');
+                     stageStr.toLowerCase().includes('dnc') || 
+                     stageStr.toLowerCase().includes('unsub') || 
+                     stageStr.toLowerCase().includes('not interested');
 
-    const isInProgress = stage.toLowerCase().includes('progress') || stage.toLowerCase().includes('pending') || stage.trim() === '';
+    const isInProgress = stageStr.toLowerCase().includes('progress') || stageStr.toLowerCase().includes('pending') || stageStr.trim() === '';
     const isPositiveStage = isPositivePipelineStage(stage);
 
     let finalStatus = 'pending';
@@ -96,7 +97,7 @@ export default function LeadDetailModal({ lead, isOpen, onClose }) {
       finalStatus = 'interested';
       finalReplyDate = replyDate.trim() || lead.replyDate || getTodayFormatted();
       finalDealValue = Number(dealValue) || 0;
-    } else if (stage.toLowerCase().includes('lost') || stage.toLowerCase().includes('not a fit')) {
+    } else if (stageStr.toLowerCase().includes('lost') || stageStr.toLowerCase().includes('not a fit')) {
       finalStatus = 'lost';
       finalReplyDate = replyDate.trim() || lead.replyDate || '';
       finalDealValue = Number(dealValue) || 0;

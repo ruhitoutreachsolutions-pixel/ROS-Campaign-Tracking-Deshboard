@@ -50,12 +50,12 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
         return false;
       }
       if (!searchLead.trim()) return true;
-      const q = searchLead.toLowerCase();
-      return (l.firstName || '').toLowerCase().includes(q) ||
-             (l.companyName || '').toLowerCase().includes(q) ||
-             (l.email || '').toLowerCase().includes(q) ||
-             (l.city || '').toLowerCase().includes(q) ||
-             (l.campaignName || '').toLowerCase().includes(q);
+      const q = searchLead.toLowerCase().trim();
+      return String(l.firstName || '').toLowerCase().includes(q) ||
+             String(l.companyName || '').toLowerCase().includes(q) ||
+             String(l.email || '').toLowerCase().includes(q) ||
+             String(l.city || '').toLowerCase().includes(q) ||
+             String(l.campaignName || '').toLowerCase().includes(q);
     });
   }, [leads, activeTab, selectedCampaignFilter, searchLead, currentWorkspace?.campaignName]);
 

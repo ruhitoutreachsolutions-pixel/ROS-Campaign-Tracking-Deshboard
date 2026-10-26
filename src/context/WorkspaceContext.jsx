@@ -163,9 +163,20 @@ export function mergeFormSubmissions(localList = [], cloudList = [], deletedIds 
 // Lead State Sanitizer: guarantees In Progress and DNC leads are never contaminated as interested
 export function sanitizeLeadState(lead) {
   if (!lead) return lead;
-  const stage = (lead.stage || '').toLowerCase().trim();
+
+  // Defensively coerce non-string fields to strings to prevent runtime TypeErrors
+  if (lead.companyName != null && typeof lead.companyName !== 'string') lead.companyName = String(lead.companyName);
+  if (lead.firstName != null && typeof lead.firstName !== 'string') lead.firstName = String(lead.firstName);
+  if (lead.city != null && typeof lead.city !== 'string') lead.city = String(lead.city);
+  if (lead.campaignName != null && typeof lead.campaignName !== 'string') lead.campaignName = String(lead.campaignName);
+  if (lead.accountName != null && typeof lead.accountName !== 'string') lead.accountName = String(lead.accountName);
+  if (lead.email != null && typeof lead.email !== 'string') lead.email = String(lead.email);
+  if (lead.notes != null && typeof lead.notes !== 'string') lead.notes = String(lead.notes);
+  if (lead.stage != null && typeof lead.stage !== 'string') lead.stage = String(lead.stage);
+
+  const stage = String(lead.stage || '').toLowerCase().trim();
   const isInProgress = stage.includes('progress') || stage.includes('pending');
-  const email = (lead.email || '').toLowerCase().trim();
+  const email = String(lead.email || '').toLowerCase().trim();
   const isLinkUnsub = isLeadUnsubscribedFromLink(lead);
   const isDnc = isLinkUnsub || isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || lead.isDNC === true;
 
@@ -204,7 +215,7 @@ export function sanitizeLeadState(lead) {
       lead.isDNC !== true ||
       lead.stage !== cleanStage ||
       (isLinkUnsub && lead.unsubscribedFromLink !== true) ||
-      (lead.replyDate && lead.replyDate.trim()) ||
+      (lead.replyDate && String(lead.replyDate).trim()) ||
       lead.dealValue
     ) {
       const res = {
@@ -231,7 +242,7 @@ export function sanitizeLeadState(lead) {
       return res;
     }
   } else if (isInProgress) {
-    if (lead.status === 'interested' || (lead.replyDate && lead.replyDate.trim()) || lead.dealValue) {
+    if (lead.status === 'interested' || (lead.replyDate && String(lead.replyDate).trim()) || lead.dealValue) {
       return {
         ...lead,
         status: deriveLeadStatus(lead),
@@ -943,14 +954,14 @@ export function WorkspaceProvider({ children }) {
           let wsUpdated = false;
           const nextLeads = w.leads.map(lead => {
             if (!lead || !lead.email) return lead;
-            const clean = lead.email.trim().toLowerCase();
+            const clean = String(lead.email || '').trim().toLowerCase();
             const dncRec = dncMap.get(clean);
             const isLinkUnsub = Boolean(dncRec) || isLeadUnsubscribedFromLink(lead);
 
             if (isLinkUnsub) {
               const alreadyProperDnc = lead.isDNC === true && 
                                        lead.status === 'dnc' && 
-                                       (lead.stage || '').toLowerCase().includes('dnc') &&
+                                       String(lead.stage || '').toLowerCase().includes('dnc') &&
                                        lead.unsubscribedFromLink === true;
               if (!alreadyProperDnc) {
                 wsUpdated = true;

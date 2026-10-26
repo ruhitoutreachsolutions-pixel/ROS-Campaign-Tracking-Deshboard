@@ -56,12 +56,12 @@ export default function PaymentsInvoices() {
   const filteredPayments = useMemo(() => {
     return (payments || []).filter(p => {
       const matchesSearch = 
-        (p.clientName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (p.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (p.notes || '').toLowerCase().includes(searchTerm.toLowerCase());
+        String(p.clientName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        String(p.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        String(p.notes || '').toLowerCase().includes(searchTerm.toLowerCase());
       
       const matchesWorkspace = selectedWorkspaceFilter === 'all' || p.workspaceId === selectedWorkspaceFilter;
-      const matchesStatus = selectedStatusFilter === 'all' || p.status.toLowerCase() === selectedStatusFilter.toLowerCase();
+      const matchesStatus = selectedStatusFilter === 'all' || String(p.status || '').toLowerCase() === selectedStatusFilter.toLowerCase();
       const matchesCurrency = currencyFilter === 'all' || p.currency === currencyFilter;
 
       return matchesSearch && matchesWorkspace && matchesStatus && matchesCurrency;
@@ -185,7 +185,7 @@ export default function PaymentsInvoices() {
       `"${p.dueDate}"`,
       `"${p.status}"`,
       `"${p.paymentMethod}"`,
-      `"${(p.notes || '').replace(/"/g, '""')}"`
+      `"${String(p.notes || '').replace(/"/g, '""')}"`
     ]);
 
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');

@@ -96,10 +96,10 @@ export default function FormSubmissions() {
       // Search filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesUrl = (item.formUrl || '').toLowerCase().includes(q);
-        const matchesDate = (item.submissionDate || '').toLowerCase().includes(q);
-        const matchesUser = (item.submittedBy || '').toLowerCase().includes(q);
-        const matchesNotes = (item.notes || '').toLowerCase().includes(q);
+        const matchesUrl = String(item.formUrl || '').toLowerCase().includes(q);
+        const matchesDate = String(item.submissionDate || '').toLowerCase().includes(q);
+        const matchesUser = String(item.submittedBy || '').toLowerCase().includes(q);
+        const matchesNotes = String(item.notes || '').toLowerCase().includes(q);
         if (!matchesUrl && !matchesDate && !matchesUser && !matchesNotes) {
           return false;
         }
@@ -304,7 +304,7 @@ export default function FormSubmissions() {
       item.submissionDate || '',
       item.submittedBy || '',
       item.workspaceId || '',
-      (item.notes || '').replace(/[\r\n\t]+/g, ' ')
+      String(item.notes || '').replace(/[\r\n\t]+/g, ' ')
     ]);
 
     const tsvContent = [headers.join('\t'), ...rows.map(r => r.join('\t'))].join('\n');

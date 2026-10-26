@@ -50,9 +50,9 @@ function getLeadSenderAccount(lead, workspace) {
 function getLeadPrevDate(lead, sequence) {
   if (!lead) return '—';
   if (sequence === 'email2') {
-    return extractDateFromStatus(lead.email1) || (lead.email1 ? lead.email1.trim() : 'Unknown Date');
+    return extractDateFromStatus(lead.email1) || (lead.email1 ? String(lead.email1).trim() : 'Unknown Date');
   } else if (sequence === 'email3') {
-    return extractDateFromStatus(lead.email2) || (lead.email2 ? lead.email2.trim() : 'Unknown Date');
+    return extractDateFromStatus(lead.email2) || (lead.email2 ? String(lead.email2).trim() : 'Unknown Date');
   }
   return lead.dateAdded || 'Standard Import';
 }
@@ -117,7 +117,7 @@ export default function MailMergeDispatcher() {
     const set = new Set();
     if (currentWorkspace?.campaignName) set.add(currentWorkspace.campaignName.trim());
     leads.forEach(l => {
-      if (l.campaignName && l.campaignName.trim()) set.add(l.campaignName.trim());
+      if (l.campaignName && String(l.campaignName).trim()) set.add(String(l.campaignName).trim());
     });
     return Array.from(set);
   }, [leads, currentWorkspace]);
@@ -134,7 +134,7 @@ export default function MailMergeDispatcher() {
     const filtered = leads.filter(l => {
       // Campaign filter
       if (selectedCampaign !== 'all') {
-        const leadCamp = (l.campaignName || currentWorkspace?.campaignName || 'General Outbound').trim();
+        const leadCamp = String(l.campaignName || currentWorkspace?.campaignName || 'General Outbound').trim();
         if (leadCamp.toLowerCase() !== selectedCampaign.toLowerCase()) return false;
       }
 
@@ -142,11 +142,11 @@ export default function MailMergeDispatcher() {
       let matchesSequence = true;
       if (filterMode === 'pending') {
         if (activeSequence === 'email1') {
-          matchesSequence = !l.email1 || l.email1.trim() === '';
+          matchesSequence = !l.email1 || String(l.email1).trim() === '';
         } else if (activeSequence === 'email2') {
-          matchesSequence = l.email1 && l.email1.trim() !== '' && (!l.email2 || l.email2.trim() === '');
+          matchesSequence = l.email1 && String(l.email1).trim() !== '' && (!l.email2 || String(l.email2).trim() === '');
         } else if (activeSequence === 'email3') {
-          matchesSequence = l.email2 && l.email2.trim() !== '' && (!l.email3 || l.email3.trim() === '');
+          matchesSequence = l.email2 && String(l.email2).trim() !== '' && (!l.email3 || String(l.email3).trim() === '');
         }
       }
 

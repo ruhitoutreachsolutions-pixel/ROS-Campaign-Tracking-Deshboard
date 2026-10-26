@@ -91,12 +91,12 @@ export default function InterestedPipeline({ onOpenLeadDetail }) {
     if (!isLeadInterested(l)) return false;
 
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const match = (l.firstName || '').toLowerCase().includes(q) ||
-                    (l.companyName || '').toLowerCase().includes(q) ||
-                    (l.email || '').toLowerCase().includes(q) ||
-                    (l.city || '').toLowerCase().includes(q) ||
-                    (l.notes || '').toLowerCase().includes(q);
+      const q = searchQuery.toLowerCase().trim();
+      const match = String(l.firstName || '').toLowerCase().includes(q) ||
+                    String(l.companyName || '').toLowerCase().includes(q) ||
+                    String(l.email || '').toLowerCase().includes(q) ||
+                    String(l.city || '').toLowerCase().includes(q) ||
+                    String(l.notes || '').toLowerCase().includes(q);
       if (!match) return false;
     }
 

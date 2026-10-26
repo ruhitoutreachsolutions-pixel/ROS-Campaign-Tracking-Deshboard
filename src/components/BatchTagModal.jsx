@@ -52,7 +52,7 @@ export default function BatchTagModal({ isOpen, onClose }) {
   const matchedLeads = useMemo(() => {
     if (parsedEmails.length === 0) return [];
     const emailSet = new Set(parsedEmails);
-    return leads.filter(l => l.email && emailSet.has(l.email.trim().toLowerCase()));
+    return leads.filter(l => l.email && emailSet.has(String(l.email).trim().toLowerCase()));
   }, [parsedEmails, leads]);
 
   if (!isOpen) return null;

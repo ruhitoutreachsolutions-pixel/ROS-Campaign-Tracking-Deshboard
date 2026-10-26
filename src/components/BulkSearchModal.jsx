@@ -94,7 +94,7 @@ export default function BulkSearchModal({
     // Leads can match by email (lowercase)
     const leadEmailMap = new Map();
     (leads || []).forEach(l => {
-      const email = (l.email || '').trim().toLowerCase();
+      const email = String(l?.email || '').trim().toLowerCase();
       if (email) {
         // In case of multiple leads with same email, collect them
         if (!leadEmailMap.has(email)) {

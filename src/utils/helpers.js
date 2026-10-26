@@ -70,8 +70,8 @@ export function isLeadDNC(lead) {
   if (lead.unsubscribedFromLink === true) return true;
   if (lead.unsubscribedAt && typeof lead.unsubscribedAt === 'string' && lead.unsubscribedAt.trim()) return true;
 
-  const stage = (lead.stage || '').toLowerCase().trim();
-  const status = (lead.status || '').toLowerCase().trim();
+  const stage = String(lead.stage || '').toLowerCase().trim();
+  const status = String(lead.status || '').toLowerCase().trim();
 
   // Explicit DNC, Unsubscribe, and Not Interested conditions
   if (
@@ -266,16 +266,16 @@ export const VERIFIED_LINK_UNSUB_RECORDS = [
 // Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk)
 export function isLeadUnsubscribedFromLink(lead) {
   if (!lead) return false;
-  const email = (lead.email || '').toLowerCase().trim();
+  const email = String(lead.email || '').toLowerCase().trim();
   if (email && KNOWN_LINK_UNSUB_EMAILS.has(email)) return true;
 
   // Specific stage reserved strictly for public link unsubs
-  const stage = (lead.stage || '').trim();
+  const stage = String(lead.stage || '').trim();
   if (stage === 'DNC / Unsubscribed') return true;
 
   if (lead.unsubscribedFromLink === true) {
-    const reason = (lead.unsubscribeReason || '').toLowerCase();
-    const notes = (lead.notes || '').toLowerCase();
+    const reason = String(lead.unsubscribeReason || '').toLowerCase();
+    const notes = String(lead.notes || '').toLowerCase();
     if (
       reason.includes('unsub.crewlixhr.co.uk') ||
       reason.includes('public unsubscribe link') ||
@@ -347,7 +347,7 @@ export function normalizeLeadStage(leadOrStage) {
     status = leadOrStage.status || '';
   }
 
-  const s = (stage || '').toLowerCase().trim();
+  const s = String(stage || '').toLowerCase().trim();
 
   if (s.includes('progress') || s.includes('pending') || s.includes('dnc') || s.includes('unsub') || s.includes('not interested')) {
     return stage || 'In Progress';
@@ -378,8 +378,8 @@ export function isLeadInterested(lead) {
   if (!lead) return false;
   if (isLeadDNC(lead)) return false;
 
-  const stage = (lead.stage || '').toLowerCase().trim();
-  const status = (lead.status || '').toLowerCase().trim();
+  const stage = String(lead.stage || '').toLowerCase().trim();
+  const status = String(lead.status || '').toLowerCase().trim();
 
   // 1. Explicit Non-Interested / Outreach In-Progress stages: NEVER interested
   if (
@@ -443,10 +443,10 @@ export function generateMailMergeTSV(leads, includeHeaders = false, filterDNC = 
   }
   
   validLeads.forEach(lead => {
-    const email = (lead.email || '').trim();
-    const firstName = (lead.firstName || '').trim();
-    const city = (lead.city || '').trim();
-    const companyName = (lead.companyName || '').trim();
+    const email = String(lead.email || '').trim();
+    const firstName = String(lead.firstName || '').trim();
+    const city = String(lead.city || '').trim();
+    const companyName = String(lead.companyName || '').trim();
     lines.push(`${email}\t${firstName}\t${city}\t${companyName}`);
   });
   
@@ -992,21 +992,21 @@ export function exportLeadsToCSV(leads, filename = 'ROS_Campaign_Leads.csv') {
   ];
 
   const rows = leads.map(l => [
-    `"${(l.email || '').replace(/"/g, '""')}"`,
-    `"${(l.firstName || '').replace(/"/g, '""')}"`,
-    `"${(l.city || '').replace(/"/g, '""')}"`,
-    `"${(l.companyName || '').replace(/"/g, '""')}"`,
-    `"${(l.campaignName || '').replace(/"/g, '""')}"`,
-    `"${(l.email1 || '').replace(/"/g, '""')}"`,
-    `"${(l.email2 || '').replace(/"/g, '""')}"`,
-    `"${(l.email3 || '').replace(/"/g, '""')}"`,
-    `"${(l.accountName || '').replace(/"/g, '""')}"`,
-    `"${(l.stage || '').replace(/"/g, '""')}"`,
+    `"${String(l.email || '').replace(/"/g, '""')}"`,
+    `"${String(l.firstName || '').replace(/"/g, '""')}"`,
+    `"${String(l.city || '').replace(/"/g, '""')}"`,
+    `"${String(l.companyName || '').replace(/"/g, '""')}"`,
+    `"${String(l.campaignName || '').replace(/"/g, '""')}"`,
+    `"${String(l.email1 || '').replace(/"/g, '""')}"`,
+    `"${String(l.email2 || '').replace(/"/g, '""')}"`,
+    `"${String(l.email3 || '').replace(/"/g, '""')}"`,
+    `"${String(l.accountName || '').replace(/"/g, '""')}"`,
+    `"${String(l.stage || '').replace(/"/g, '""')}"`,
     `"${l.dealValue || 0}"`,
-    `"${(l.dateAdded || getTodayFormatted()).replace(/"/g, '""')}"`,
-    `"${(l.status || '').replace(/"/g, '""')}"`,
+    `"${String(l.dateAdded || getTodayFormatted()).replace(/"/g, '""')}"`,
+    `"${String(l.status || '').replace(/"/g, '""')}"`,
     `"${isLeadDNC(l) ? 'DNC / Unsubscribed' : 'Active'}"`,
-    `"${(l.notes || '').replace(/"/g, '""')}"`
+    `"${String(l.notes || '').replace(/"/g, '""')}"`
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
