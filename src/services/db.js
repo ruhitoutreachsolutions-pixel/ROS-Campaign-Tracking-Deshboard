@@ -5,8 +5,8 @@ import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSU
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
-// Default Supabase project for ROS Outreach Dashboard
-const DEFAULT_SUPABASE_URL = 'https://dyqcthbetwenvctjvfim.supabase.co';
+// Default Supabase project for ROS Outreach Dashboard (Crewlix UK Ltd Active Database)
+const DEFAULT_SUPABASE_URL = 'https://efpywnwavldrycjspdel.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5cWN0aGJldHdlbnZjdGp2ZmltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3MTUzMTMsImV4cCI6MjEwMzI5MTMxM30.JVjBtbXU8evmFx9ORHtVsf3cr8F7_yqhFrcm-NvtvKU';
 
 const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;

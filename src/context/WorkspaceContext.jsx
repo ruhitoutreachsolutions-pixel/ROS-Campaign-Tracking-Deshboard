@@ -1030,13 +1030,21 @@ export function WorkspaceProvider({ children }) {
           unionSentEmailsFor: needsCrewlixUnionMigration ? ['ws_crewlixukltd'] : []
         });
         if (!isMounted) return;
-        if (!Array.isArray(cloudData) || cloudData.length === 0) {
-          // Supabase is offline or quota-restricted: autonomous failover to Google Sheets!
+
+        // Ensure device gets all 51,452 leads: If Supabase returns empty/stale or <50k leads, auto-hydrate from Google Sheets!
+        const cloudCrewlix = Array.isArray(cloudData) ? cloudData.find(c => c && c.id === 'ws_crewlixukltd') : null;
+        const cloudLeadCount = cloudCrewlix?.leads?.length || 0;
+
+        if (!cloudCrewlix || cloudLeadCount < 50000) {
           const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
           if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
-            console.log('[DualCloudFailover] Supabase returned empty/restricted, auto-pulling 51k leads from Google Sheets...');
-            pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
+            console.log('[DualCloudFailover] Device lead count is below 50k, auto-hydrating all 51,452 leads from Google Sheets...');
+            await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
+            return;
           }
+        }
+
+        if (!Array.isArray(cloudData) || cloudData.length === 0) {
           return;
         }
 
