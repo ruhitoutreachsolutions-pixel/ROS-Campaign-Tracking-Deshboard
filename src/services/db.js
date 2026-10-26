@@ -73,11 +73,11 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
     if (mainErr) return { data: null, error: mainErr };
     if (!mainRow) return { data: null, error: null };
 
-    // Fetch any partition chunk rows for this workspace
+    // Fetch any partition chunk rows for this workspace (using ilike for robust multi-underscore matching)
     const { data: chunkRows, error: chunkErr } = await supabase
       .from('workspaces')
       .select('id, leads')
-      .like('id', `${CHUNK_PREFIX}${wsId}__%`);
+      .ilike('id', `%${CHUNK_PREFIX}${wsId}%`);
 
     let fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
 
@@ -643,6 +643,14 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     const prevHashes = Array.isArray(existingRow?.sequence_config?.chunkHashes) ? existingRow.sequence_config.chunkHashes : [];
     const prevChunkCount = Number(existingRow?.sequence_config?.chunkCount) || 1;
 
+    // 🛡️ ANTI-DOWNGRADE SHIELD:
+    // If Cloud currently has 50k+ leads (prevChunkCount >= 17), and local device is attempting
+    // to save fewer than 50,000 leads (e.g. 20,113 baseline on initial boot), REFUSE to overwrite!
+    if (prevChunkCount >= 17 && compactedLeads.length < 50000) {
+      console.warn(`[ANTI-DOWNGRADE SHIELD] Blocked autosave: Cloud holds ${prevChunkCount} chunks (51k+ leads), while local only has ${compactedLeads.length} leads.`);
+      return true;
+    }
+
     const mergedActivity = mergeActivityLogs(ws.activityLog || [], existingRow?.activity_log || []);
     const nowIso = new Date().toISOString();
 
@@ -732,8 +740,8 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       }
     }
 
-    // Clean up any stale chunks if total chunk count decreased
-    if (prevChunkCount > chunks.length) {
+    // Clean up any stale chunks if total chunk count decreased (ONLY IF leads >= 50,000)
+    if (prevChunkCount > chunks.length && compactedLeads.length >= 50000) {
       for (let c = chunks.length; c < prevChunkCount; c++) {
         const staleId = `${CHUNK_PREFIX}${ws.id}__${String(c).padStart(4, '0')}`;
         await supabase.from('workspaces').delete().eq('id', staleId);

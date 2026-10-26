@@ -279,7 +279,6 @@ export function WorkspaceProvider({ children }) {
           if (crewlixOnly.length > 0) {
             // Overwrite localStorage with only Crewlix UK Ltd immediately
             localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(crewlixOnly));
-            saveWorkspacesToLocal(crewlixOnly);
             return sanitizeWorkspaceLeads(crewlixOnly);
           }
         }
@@ -290,7 +289,6 @@ export function WorkspaceProvider({ children }) {
     const fallback = sanitizeWorkspaceLeads((initialWorkspaces || []).filter(w => w && w.id === 'ws_crewlixukltd'));
     try {
       localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(fallback));
-      saveWorkspacesToLocal(fallback);
     } catch (e) {}
     return fallback;
   });
