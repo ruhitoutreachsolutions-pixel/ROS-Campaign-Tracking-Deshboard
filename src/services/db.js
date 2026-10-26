@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from './storage';
+import { fetchDncRegistryFromGoogleSheets } from './googleSheetsService';
+import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
@@ -105,19 +107,49 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
 }
 
 export async function fetchDncRegistryFromCloud() {
+  let records = [];
   const supabase = getSupabaseClient();
-  if (!supabase) return [];
-  try {
-    const { data, error } = await supabase
-      .from('workspaces')
-      .select('leads')
-      .eq('id', DNC_REGISTRY_ID)
-      .maybeSingle();
-    if (!error && data && Array.isArray(data.leads)) {
-      return data.leads;
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('workspaces')
+        .select('leads')
+        .eq('id', DNC_REGISTRY_ID)
+        .maybeSingle();
+      if (!error && data && Array.isArray(data.leads) && data.leads.length > 0) {
+        records = data.leads;
+      }
+    } catch (e) {
+      console.warn('[CloudRegistry] Supabase DNC fetch error, falling back to Google Sheets:', e.message);
     }
-  } catch (e) {}
-  return [];
+  }
+
+  // Dual-Cloud Failover: If Supabase returned empty/error (e.g. quota 402), fail over to Google Sheets
+  if (!records || records.length === 0) {
+    try {
+      const sheetRecords = await fetchDncRegistryFromGoogleSheets();
+      if (Array.isArray(sheetRecords) && sheetRecords.length > 0) {
+        records = sheetRecords;
+      }
+    } catch (sheetErr) {
+      console.warn('[CloudRegistry] Google Sheets failover fetch error:', sheetErr.message);
+    }
+  }
+
+  // Baseline Guarantee: Merge with all 13 verified public link unsubscribe records
+  const map = new Map();
+  VERIFIED_LINK_UNSUB_RECORDS.forEach(rec => {
+    if (rec && rec.email) map.set(rec.email.toLowerCase().trim(), rec);
+  });
+  (records || []).forEach(rec => {
+    if (rec && rec.email) {
+      const clean = rec.email.toLowerCase().trim();
+      const existing = map.get(clean);
+      map.set(clean, { ...existing, ...rec });
+    }
+  });
+
+  return Array.from(map.values());
 }
 
 export async function saveDncRecordToCloud(recordsOrRecord) {
@@ -361,10 +393,14 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
               ? leads.filter(l => l && !deleted.has(l.id)).map(l => sanitizeLeadForWorkspace(l, item.id)).filter(Boolean)
               : [];
             const refilled = refillFromBaseline(sanitizedLeads, item.id, deleted);
-            if (dncEmailSet.size > 0) {
+            if (dncEmailSet.size > 0 || KNOWN_LINK_UNSUB_EMAILS.size > 0) {
               return refilled.map(l => {
-                if (l && l.email && dncEmailSet.has(l.email.trim().toLowerCase())) {
-                  const dncRec = dncRecordMap.get(l.email.trim().toLowerCase());
+                const cleanEmail = (l && l.email) ? l.email.trim().toLowerCase() : '';
+                const isMatchInDnc = cleanEmail && (dncEmailSet.has(cleanEmail) || KNOWN_LINK_UNSUB_EMAILS.has(cleanEmail));
+                const isLinkUnsub = isMatchInDnc || isLeadUnsubscribedFromLink(l);
+
+                if (isLinkUnsub) {
+                  const dncRec = dncRecordMap.get(cleanEmail);
                   return {
                     ...l,
                     status: 'dnc',
@@ -374,7 +410,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
                     unsubscribeReason: l.unsubscribeReason || dncRec?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
                     unsubscribedFromLink: true
                   };
-                } else if (l && l.unsubscribedFromLink === true) {
+                } else if (l && l.unsubscribedFromLink === true && !isLeadUnsubscribedFromLink(l)) {
                   const clean = { ...l };
                   delete clean.unsubscribedFromLink;
                   if (clean.unsubscribeReason && (clean.unsubscribeReason.includes('unsub.crewlixhr.co.uk') || clean.unsubscribeReason.includes('Public unsubscribe link'))) {

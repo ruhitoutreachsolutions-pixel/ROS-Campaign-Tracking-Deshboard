@@ -9,6 +9,8 @@
 // 6. Out-of-sync detection with 1-click Push Engine
 // ============================================================================
 
+import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
+
 export const STORAGE_KEY_SHEETS_URL = 'ros_google_sheets_url_v2';
 export const STORAGE_KEY_SHEETS_TOKEN = 'ros_google_sheets_token_v2';
 export const STORAGE_KEY_PENDING_QUEUE = 'ros_google_sheets_pending_queue_v2';
@@ -557,6 +559,65 @@ export async function fetchWorkspaceLeadsFromGoogleSheet(workspaceId, workspaceN
   } catch (err) {
     console.warn(`[GoogleSheetFailover] Failed to read ${tabName}:`, err.message);
     return null;
+  }
+}
+
+/**
+ * Pulls all public link unsubscribe records from Google Sheets redundancy store (e.g. WS_Crewlix_UK_Ltd tab).
+ * Acts as high-availability failover when Supabase bandwidth/quota is restricted.
+ */
+export async function fetchDncRegistryFromGoogleSheets() {
+  if (!isGoogleSheetsConfigured()) {
+    return Array.from(VERIFIED_LINK_UNSUB_RECORDS);
+  }
+
+  try {
+    const res = await sendSheetsRequest({
+      action: 'get_workspace_leads',
+      workspaceId: 'ws_crewlixukltd',
+      tabName: 'WS_Crewlix_UK_Ltd'
+    }, 15000);
+
+    const map = new Map();
+
+    // 1. Seed baseline verified link unsubs
+    VERIFIED_LINK_UNSUB_RECORDS.forEach(rec => {
+      if (rec && rec.email) {
+        map.set(rec.email.toLowerCase().trim(), rec);
+      }
+    });
+
+    // 2. Extract link unsubscribes from Google Sheet leads
+    if (res && res.success && Array.isArray(res.leads)) {
+      res.leads.forEach(l => {
+        if (!l || !l.email) return;
+        const clean = l.email.toLowerCase().trim();
+        if (
+          isLeadUnsubscribedFromLink(l) ||
+          l.stage === 'DNC / Unsubscribed' ||
+          KNOWN_LINK_UNSUB_EMAILS.has(clean)
+        ) {
+          const existing = map.get(clean);
+          map.set(clean, {
+            email: clean,
+            leadId: l.id || existing?.leadId || '',
+            firstName: l.firstName || existing?.firstName || '',
+            companyName: l.companyName || existing?.companyName || '',
+            workspaceId: 'ws_crewlixukltd',
+            workspaceName: 'Crewlix UK LTD',
+            stage: 'DNC / Unsubscribed',
+            status: 'dnc',
+            reason: l.unsubscribeReason || existing?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+            unsubscribedAt: l.unsubscribedAt || existing?.unsubscribedAt || l.updatedAt || new Date().toISOString()
+          });
+        }
+      });
+    }
+
+    return Array.from(map.values());
+  } catch (err) {
+    console.warn('[GoogleSheetDncFailover] Failed to fetch DNC registry from Google Sheets:', err.message);
+    return Array.from(VERIFIED_LINK_UNSUB_RECORDS);
   }
 }
 

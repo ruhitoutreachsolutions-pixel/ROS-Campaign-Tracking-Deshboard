@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { fetchDncRegistryFromCloud } from '../services/db';
-import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS } from '../utils/helpers';
+import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import { 
   X, 
   Copy, 
@@ -64,43 +64,69 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
   const allSubmissions = useMemo(() => {
     const map = new Map();
 
-    const baseRecords = (Array.isArray(cloudDncList) && cloudDncList.length > 0)
-      ? cloudDncList
-      : Array.from(KNOWN_LINK_UNSUB_EMAILS).map(email => ({
-          email,
-          reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-          workspaceId: 'ws_crewlixukltd',
-          unsubscribedAt: '2026-10-18T08:50:16.972Z'
-        }));
+    // 1. Seed baseline verified records for all 13 link unsubs
+    VERIFIED_LINK_UNSUB_RECORDS.forEach(rec => {
+      if (rec && rec.email) {
+        const clean = rec.email.toLowerCase().trim();
+        map.set(clean, { ...rec });
+      }
+    });
 
-    // Add records from cloud DNC registry
-    baseRecords.forEach(record => {
-      if (!record || !record.email) return;
-      const clean = record.email.trim().toLowerCase();
-      
-      // Match with lead in workspaces to get contact name & company
-      let matchedLead = null;
-      let matchedWsName = '';
-      for (const ws of (workspaces || [])) {
-        if (!ws || !Array.isArray(ws.leads)) continue;
-        const l = ws.leads.find(x => x && x.email && x.email.trim().toLowerCase() === clean);
-        if (l) {
-          matchedLead = l;
-          matchedWsName = ws.name || 'Crewlix UK LTD';
-          break;
+    // 2. Merge cloud DNC list (fetched from Supabase / Google Sheets failover)
+    if (Array.isArray(cloudDncList) && cloudDncList.length > 0) {
+      cloudDncList.forEach(record => {
+        if (!record || !record.email) return;
+        const clean = record.email.toLowerCase().trim();
+        const existing = map.get(clean);
+        map.set(clean, {
+          email: clean,
+          leadId: record.leadId || existing?.leadId || '',
+          firstName: record.firstName || existing?.firstName || '',
+          companyName: record.companyName || existing?.companyName || '',
+          workspaceId: record.workspaceId || existing?.workspaceId || 'ws_crewlixukltd',
+          workspaceName: existing?.workspaceName || (record.workspaceId === 'ws_zrnl1fjb' ? 'CGE UK LTD' : 'Crewlix UK LTD'),
+          reason: record.reason || existing?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+          unsubscribedAt: record.unsubscribedAt || existing?.unsubscribedAt || new Date().toISOString()
+        });
+      });
+    }
+
+    // 3. Scan all loaded workspaces for any leads flagged as public link unsubscribes
+    (workspaces || []).forEach(ws => {
+      if (!ws || !Array.isArray(ws.leads)) return;
+      ws.leads.forEach(l => {
+        if (!l || !l.email) return;
+        if (isLeadUnsubscribedFromLink(l)) {
+          const clean = l.email.toLowerCase().trim();
+          const existing = map.get(clean);
+          map.set(clean, {
+            email: clean,
+            leadId: l.id || existing?.leadId || '',
+            firstName: l.firstName || existing?.firstName || '',
+            companyName: l.companyName || existing?.companyName || '',
+            workspaceId: ws.id || existing?.workspaceId || 'ws_crewlixukltd',
+            workspaceName: ws.name || existing?.workspaceName || 'Crewlix UK LTD',
+            reason: l.unsubscribeReason || existing?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+            unsubscribedAt: l.unsubscribedAt || existing?.unsubscribedAt || l.updatedAt || new Date().toISOString()
+          });
+        }
+      });
+    });
+
+    // 4. Enrich names and company names from loaded workspace leads if missing
+    map.forEach((item, clean) => {
+      if (!item.firstName || !item.companyName) {
+        for (const ws of (workspaces || [])) {
+          if (!ws || !Array.isArray(ws.leads)) continue;
+          const matched = ws.leads.find(x => x && x.email && x.email.toLowerCase().trim() === clean);
+          if (matched) {
+            if (!item.firstName && matched.firstName) item.firstName = matched.firstName;
+            if (!item.companyName && matched.companyName) item.companyName = matched.companyName;
+            if (!item.workspaceName && ws.name) item.workspaceName = ws.name;
+            break;
+          }
         }
       }
-
-      map.set(clean, {
-        email: clean,
-        leadId: record.leadId || matchedLead?.id || '',
-        firstName: matchedLead?.firstName || record.firstName || '',
-        companyName: matchedLead?.companyName || record.companyName || '',
-        workspaceId: record.workspaceId || matchedLead?.workspaceId || '',
-        workspaceName: matchedWsName || (record.workspaceId === 'ws_zrnl1fjb' ? 'CGE UK LTD' : 'Crewlix UK LTD'),
-        reason: record.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-        unsubscribedAt: record.unsubscribedAt || new Date().toISOString()
-      });
     });
 
     const list = Array.from(map.values());

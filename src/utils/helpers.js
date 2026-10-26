@@ -105,18 +105,185 @@ export const KNOWN_LINK_UNSUB_EMAILS = new Set([
   'info@acsprojects.ltd',
   'ruhitahmed111@gmail.com',
   'stephen.mander@serenitycaresolent.co.uk',
-  'lal.malhan@amicare.org.uk'
+  'lal.malhan@amicare.org.uk',
+  'support@accountaxaid.co.uk',
+  'info@courierexpert.co.uk',
+  'info@atexbusiness.com',
+  'office@buildflynn.com',
+  'info@etsdesign.co.uk',
+  'test.recipient@example.com',
+  'paul@melaniescatering.com',
+  'info@mrengineers.co.uk'
 ]);
+
+// Verified baseline records for all known public link unsubscribe submissions
+export const VERIFIED_LINK_UNSUB_RECORDS = [
+  {
+    email: 'info@mrengineers.co.uk',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-24T22:26:58.966Z'
+  },
+  {
+    email: 'paul@melaniescatering.com',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-24T11:03:42.190Z'
+  },
+  {
+    email: 'test.recipient@example.com',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-24T07:45:26.394Z'
+  },
+  {
+    email: 'info@etsdesign.co.uk',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-23T11:33:32.085Z'
+  },
+  {
+    email: 'office@buildflynn.com',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-23T08:44:20.683Z'
+  },
+  {
+    email: 'info@atexbusiness.com',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-23T07:36:35.121Z'
+  },
+  {
+    email: 'info@courierexpert.co.uk',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-22T21:39:38.810Z'
+  },
+  {
+    email: 'support@accountaxaid.co.uk',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-22T18:54:38.964Z'
+  },
+  {
+    email: 'info@acsprojects.ltd',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-22T12:42:52.540Z'
+  },
+  {
+    email: 'ruhitahmed111@gmail.com',
+    firstName: 'Ruhit',
+    companyName: 'Crewlix',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-22T08:53:56.753Z'
+  },
+  {
+    email: 'london@manpoweruk.co.uk',
+    firstName: '',
+    companyName: '',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-10-21T13:20:27.927Z'
+  },
+  {
+    email: 'stephen.mander@serenitycaresolent.co.uk',
+    firstName: 'Steve',
+    companyName: 'Serenity Care Solent Limited',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-09-25T16:59:45.145Z'
+  },
+  {
+    email: 'lal.malhan@amicare.org.uk',
+    firstName: 'Lal',
+    companyName: 'AMICARE DOMICILIARY CARE SERVICES LTD',
+    workspaceId: 'ws_crewlixukltd',
+    workspaceName: 'Crewlix UK LTD',
+    stage: 'DNC / Unsubscribed',
+    status: 'dnc',
+    reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+    unsubscribedAt: '2026-09-25T16:59:45.145Z'
+  }
+];
 
 // Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk)
 export function isLeadUnsubscribedFromLink(lead) {
   if (!lead) return false;
   const email = (lead.email || '').toLowerCase().trim();
   if (email && KNOWN_LINK_UNSUB_EMAILS.has(email)) return true;
+
+  // Specific stage reserved strictly for public link unsubs
+  const stage = (lead.stage || '').trim();
+  if (stage === 'DNC / Unsubscribed') return true;
+
   if (lead.unsubscribedFromLink === true) {
     const reason = (lead.unsubscribeReason || '').toLowerCase();
     const notes = (lead.notes || '').toLowerCase();
-    if (reason.includes('unsub.crewlixhr.co.uk') || reason.includes('public unsubscribe link') || notes.includes('unsubscribed via link')) {
+    if (
+      reason.includes('unsub.crewlixhr.co.uk') ||
+      reason.includes('public unsubscribe link') ||
+      reason.includes('unsubscribe link') ||
+      notes.includes('unsubscribed via link') ||
+      notes.includes('unsub.crewlixhr.co.uk') ||
+      Boolean(lead.unsubscribedAt)
+    ) {
       return true;
     }
   }

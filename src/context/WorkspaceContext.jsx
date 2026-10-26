@@ -12,7 +12,7 @@ import {
   initialWarriorTimeline,
   initialFormSubmissions
 } from '../data/initialWorkspaces';
-import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested, isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS } from '../utils/helpers';
+import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested, isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import { 
   fetchDncRegistryFromCloud,
   fetchWorkspacesFromCloud,
@@ -165,25 +165,25 @@ export function sanitizeLeadState(lead) {
   const stage = (lead.stage || '').toLowerCase().trim();
   const isInProgress = stage.includes('progress') || stage.includes('pending');
   const email = (lead.email || '').toLowerCase().trim();
-  const isKnownLinkUnsub = KNOWN_LINK_UNSUB_EMAILS.has(email);
-  const isDnc = isKnownLinkUnsub || isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || lead.isDNC === true;
+  const isLinkUnsub = isLeadUnsubscribedFromLink(lead);
+  const isDnc = isLinkUnsub || isLeadDNC(lead) || stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || lead.isDNC === true;
 
   if (isDnc) {
     const isStageDnc = stage.includes('dnc') || stage.includes('unsub') || stage.includes('not interested') || stage.includes('bounce');
-    const targetStage = isKnownLinkUnsub 
+    const targetStage = isLinkUnsub 
       ? 'DNC / Unsubscribed' 
       : (isStageDnc ? lead.stage : (lead.unsubscribeReason?.includes('Bounce') ? 'DNC / Bounced' : 'DNC'));
 
     let needsClean = false;
-    let cleanUnsubFromLink = isKnownLinkUnsub ? true : undefined;
-    let cleanUnsubReason = isKnownLinkUnsub 
+    let cleanUnsubFromLink = isLinkUnsub ? true : undefined;
+    let cleanUnsubReason = isLinkUnsub 
       ? (lead.unsubscribeReason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)') 
       : lead.unsubscribeReason;
     let cleanNotes = lead.notes;
     let cleanStage = targetStage;
 
-    // Purge accidental contamination on manual DNC leads from previous build
-    if (!isKnownLinkUnsub && lead.unsubscribedFromLink === true) {
+    // Only purge accidental contamination on generic manual DNC leads that have NO link origin
+    if (!isLinkUnsub && lead.unsubscribedFromLink === true) {
       needsClean = true;
       cleanUnsubFromLink = undefined;
       if (cleanUnsubReason && (cleanUnsubReason.includes('unsub.crewlixhr.co.uk') || cleanUnsubReason.includes('Public unsubscribe link'))) {
@@ -202,7 +202,7 @@ export function sanitizeLeadState(lead) {
       lead.status !== 'dnc' ||
       lead.isDNC !== true ||
       lead.stage !== cleanStage ||
-      (isKnownLinkUnsub && lead.unsubscribedFromLink !== true) ||
+      (isLinkUnsub && lead.unsubscribedFromLink !== true) ||
       (lead.replyDate && lead.replyDate.trim()) ||
       lead.dealValue
     ) {
@@ -835,20 +835,30 @@ export function WorkspaceProvider({ children }) {
       const dncList = Array.isArray(customDncList) ? customDncList : await fetchDncRegistryFromCloud();
 
       const dncMap = new Map();
-      // 1. Seed with known baseline link unsubs
+      // 1. Seed with verified baseline records for all known public link unsubs
+      VERIFIED_LINK_UNSUB_RECORDS.forEach(rec => {
+        if (rec && rec.email) {
+          dncMap.set(rec.email.trim().toLowerCase(), rec);
+        }
+      });
       KNOWN_LINK_UNSUB_EMAILS.forEach(email => {
-        dncMap.set(email.trim().toLowerCase(), {
-          email,
-          reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
-          unsubscribedAt: '2026-10-18T08:50:16.972Z'
-        });
+        const clean = email.trim().toLowerCase();
+        if (!dncMap.has(clean)) {
+          dncMap.set(clean, {
+            email,
+            reason: 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+            unsubscribedAt: '2026-10-18T08:50:16.972Z'
+          });
+        }
       });
 
-      // 2. Overlay live records from Supabase __ros_dnc_registry_v1__
+      // 2. Overlay live records from Cloud DNC Registry (Supabase + Google Sheets Failover)
       if (Array.isArray(dncList)) {
         dncList.forEach(d => {
           if (d && d.email) {
-            dncMap.set(d.email.trim().toLowerCase(), d);
+            const clean = d.email.trim().toLowerCase();
+            const existing = dncMap.get(clean);
+            dncMap.set(clean, { ...existing, ...d });
           }
         });
       }
@@ -862,7 +872,9 @@ export function WorkspaceProvider({ children }) {
             if (!lead || !lead.email) return lead;
             const clean = lead.email.trim().toLowerCase();
             const dncRec = dncMap.get(clean);
-            if (dncRec) {
+            const isLinkUnsub = Boolean(dncRec) || isLeadUnsubscribedFromLink(lead);
+
+            if (isLinkUnsub) {
               const alreadyProperDnc = lead.isDNC === true && 
                                        lead.status === 'dnc' && 
                                        (lead.stage || '').toLowerCase().includes('dnc') &&
@@ -876,15 +888,15 @@ export function WorkspaceProvider({ children }) {
                   stage: 'DNC / Unsubscribed',
                   isDNC: true,
                   unsubscribedFromLink: true,
-                  unsubscribedAt: lead.unsubscribedAt || dncRec.unsubscribedAt || new Date().toISOString(),
-                  unsubscribeReason: lead.unsubscribeReason || dncRec.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                  unsubscribedAt: lead.unsubscribedAt || dncRec?.unsubscribedAt || new Date().toISOString(),
+                  unsubscribeReason: lead.unsubscribeReason || dncRec?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
                   notes: lead.notes 
                     ? (lead.notes.includes('[Unsubscribed via link') ? lead.notes : `${lead.notes} | [Unsubscribed via link]`)
                     : '[Unsubscribed via link]'
                 };
               }
-            } else if (lead.unsubscribedFromLink === true) {
-              // Accidental contamination from previous build: strip the link unsub flag!
+            } else if (lead.unsubscribedFromLink === true && !isLeadUnsubscribedFromLink(lead)) {
+              // Accidental contamination on a purely manual DNC lead: strip the link unsub flag!
               wsUpdated = true;
               hasAnyUpdate = true;
               const cleanCopy = { ...lead };
