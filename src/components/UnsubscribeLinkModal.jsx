@@ -84,7 +84,7 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
           firstName: record.firstName || existing?.firstName || '',
           companyName: record.companyName || existing?.companyName || '',
           workspaceId: record.workspaceId || existing?.workspaceId || 'ws_crewlixukltd',
-          workspaceName: existing?.workspaceName || (record.workspaceId === 'ws_zrnl1fjb' ? 'CGE UK LTD' : 'Crewlix UK LTD'),
+          workspaceName: existing?.workspaceName || 'Crewlix UK LTD',
           reason: record.reason || existing?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
           unsubscribedAt: record.unsubscribedAt || existing?.unsubscribedAt || new Date().toISOString()
         });

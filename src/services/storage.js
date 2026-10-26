@@ -146,13 +146,16 @@ export function isLeadPermanentlyPurged(lead, workspaceId) {
 export async function saveWorkspacesToLocal(workspaces) {
   if (!workspaces || !Array.isArray(workspaces)) return false;
 
-  const sanitized = workspaces.map(w => {
-    if (!w || !Array.isArray(w.leads)) return w;
-    return {
-      ...w,
-      leads: w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean)
-    };
-  });
+  // Strictly preserve ONLY Crewlix UK Ltd
+  const sanitized = workspaces
+    .filter(w => w && w.id === 'ws_crewlixukltd')
+    .map(w => {
+      if (!w || !Array.isArray(w.leads)) return w;
+      return {
+        ...w,
+        leads: w.leads.map(l => sanitizeLeadForWorkspace(l, w.id)).filter(Boolean)
+      };
+    });
 
   const nowIso = new Date().toISOString();
   let idbSuccess = false;
@@ -231,20 +234,22 @@ export async function saveWorkspacesToLocal(workspaces) {
 export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
   // Helper to filter out any permanently purged leads from local loads
   const cleanLoadedWorkspaces = (list) => {
-    if (!Array.isArray(list)) return list;
-    return list.map(w => {
-      if (!w || !Array.isArray(w.leads)) return w;
-      const deleted = new Set([...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]);
-      let cleanLeads = w.leads
-        .filter(l => l && !deleted.has(l.id))
-        .map(l => sanitizeLeadForWorkspace(l, w.id))
-        .filter(Boolean);
-      cleanLeads = refillFromBaseline(cleanLeads, w.id, deleted);
-      return {
-        ...w,
-        leads: cleanLeads
-      };
-    });
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(w => w && w.id === 'ws_crewlixukltd')
+      .map(w => {
+        if (!w || !Array.isArray(w.leads)) return w;
+        const deleted = new Set([...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]);
+        let cleanLeads = w.leads
+          .filter(l => l && !deleted.has(l.id))
+          .map(l => sanitizeLeadForWorkspace(l, w.id))
+          .filter(Boolean);
+        cleanLeads = refillFromBaseline(cleanLeads, w.id, deleted);
+        return {
+          ...w,
+          leads: cleanLeads
+        };
+      });
   };
 
   // 1. Try IndexedDB first (most complete and largest capacity)
@@ -297,7 +302,7 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
 
 // Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation
 export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = {}) {
-  const wsId = options.workspaceId || 'ws_zrnl1fjb';
+  const wsId = options.workspaceId || 'ws_crewlixukltd';
   const deletedSet = new Set(options.deletedLeadIds || []);
   const isValid = (l) => l && (l.id || l.email) && !deletedSet.has(l.id) && !isLeadPermanentlyPurged(l, wsId);
 

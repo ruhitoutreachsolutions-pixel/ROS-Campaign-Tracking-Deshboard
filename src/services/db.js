@@ -264,8 +264,19 @@ export function isCloudDatabaseConnected() {
   return !!getSupabaseClient();
 }
 
-// Permanently purged demo workspaces that must NEVER be loaded or re-saved
-export const PERMANENTLY_PURGED_WS_IDS = ['ws_crewlix', 'ws_crewlixuk'];
+// Sole authoritative active workspace
+export const PRIMARY_WORKSPACE_ID = 'ws_crewlixukltd';
+
+// Permanently purged workspaces that must NEVER be loaded or re-saved
+export const PERMANENTLY_PURGED_WS_IDS = [
+  'ws_crewlix',
+  'ws_crewlixuk',
+  'ws_zrnl1fjb',
+  'ws_ybrxd4k1',
+  'ws_cgeenergy',
+  'ws_cge_uk_ltd',
+  'ws_crewlixglobal'
+];
 export const DEMO_INVOICE_IDS = ['inv_101', 'inv_102', 'inv_103'];
 
 function getLocalDeletedIds() {
@@ -281,7 +292,9 @@ function getLocalDeletedIds() {
 // 2. Fetch all workspaces from Supabase Cloud Database (Lightweight & Scalable)
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null, mergeOptions = {}) {
   const unionSentEmailsFor = Array.isArray(mergeOptions.unionSentEmailsFor) ? mergeOptions.unionSentEmailsFor : [];
-  const safeFallback = Array.isArray(fallbackWorkspaces) ? fallbackWorkspaces : [];
+  const safeFallback = Array.isArray(fallbackWorkspaces) 
+    ? fallbackWorkspaces.filter(w => w && w.id === PRIMARY_WORKSPACE_ID) 
+    : [];
   const supabase = getSupabaseClient();
   if (!supabase) {
     lastCloudErrorMsg = 'Supabase client is not connected or anon key is missing.';
@@ -304,9 +317,10 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 
     if (Array.isArray(data) && data.length > 0) {
       const deletedIds = getLocalDeletedIds();
-      // Filter out internal system metadata rows and purged/deleted workspaces
+      // Strictly only retain Crewlix UK Ltd, permanently purge everything else
       const clientWorkspaces = data.filter(item => 
         item && item.id && 
+        item.id === PRIMARY_WORKSPACE_ID &&
         !item.id.startsWith('__ros_') && 
         !PERMANENTLY_PURGED_WS_IDS.includes(item.id) &&
         !deletedIds.includes(item.id)
@@ -554,6 +568,10 @@ export async function fetchWorkspaceHeadersFromCloud() {
 const MAX_SAVE_ATTEMPTS = 4;
 
 async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
+  if (!ws || !ws.id || ws.id !== PRIMARY_WORKSPACE_ID || PERMANENTLY_PURGED_WS_IDS.includes(ws.id)) {
+    return true; // Skip non-Crewlix UK Ltd workspaces completely
+  }
+
   for (let attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt++) {
     const { data: existingRow, error: checkErr } = await fetchFullCloudWorkspaceRow(supabase, ws.id);
 
@@ -774,6 +792,32 @@ export async function deleteWorkspaceFromCloud(wsId) {
     console.warn('Supabase delete workspace failed:', err);
     return false;
   }
+}
+
+/**
+ * Purges all deprecated workspaces and their partition chunks from Supabase
+ * to reclaim storage space, reduce table bloat, and prevent egress limits.
+ * Guarantees 'ws_crewlixukltd' is NEVER touched.
+ */
+export async function purgeUnwantedWorkspacesFromCloud() {
+  const supabase = getSupabaseClient();
+  if (!supabase) return false;
+
+  let cleanedCount = 0;
+  for (const id of PERMANENTLY_PURGED_WS_IDS) {
+    try {
+      // 1. Delete main workspace row
+      const { error: err1 } = await supabase.from('workspaces').delete().eq('id', id);
+      if (!err1) cleanedCount++;
+
+      // 2. Delete all partition chunk rows for this workspace
+      await supabase.from('workspaces').delete().like('id', `${CHUNK_PREFIX}${id}__%`);
+    } catch (e) {
+      console.warn(`[PurgeCloud] Could not delete ${id}:`, e.message);
+    }
+  }
+
+  return cleanedCount;
 }
 
 // 4. Fetch System Metadata (Warriors, Daily Reports, Tasks, Timeline) from Supabase

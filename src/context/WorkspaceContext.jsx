@@ -21,6 +21,7 @@ import {
   fetchWorkspaceHeadersFromCloud,
   mergeActivityLogs,
   deleteWorkspaceFromCloud,
+  purgeUnwantedWorkspacesFromCloud,
   getSupabaseConfig, 
   saveSupabaseConfig, 
   getSupabaseClient, 
@@ -257,33 +258,49 @@ export function sanitizeWorkspaceLeads(workspacesList) {
 }
 
 export function WorkspaceProvider({ children }) {
-  // 1. Initial fast synchronous load from localStorage (Strictly excluding internal system metadata and deleted workspaces)
+  // 1. Initial fast synchronous load from localStorage (Strictly keeping ONLY Crewlix UK Ltd)
   const [workspaces, setWorkspaces] = useState(() => {
     const deletedIds = getDeletedWorkspaceIds();
+    const purgedIds = ['ws_crewlix', 'ws_crewlixuk', 'ws_zrnl1fjb', 'ws_ybrxd4k1', 'ws_cgeenergy', 'ws_cge_uk_ltd', 'ws_crewlixglobal'];
+    
+    // Automatically record all other workspace IDs into tombstone deleted set
+    try {
+      const mergedDeleted = Array.from(new Set([...deletedIds, ...purgedIds]));
+      localStorage.setItem(STORAGE_KEY_DELETED_WORKSPACES, JSON.stringify(mergedDeleted));
+    } catch (e) {}
+
     try {
       const saved = localStorage.getItem(STORAGE_KEY_WORKSPACES);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const validParsed = parsed.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id));
-          if (validParsed.length > 0) {
-            return sanitizeWorkspaceLeads(validParsed);
+          // Strictly only retain Crewlix UK Ltd
+          const crewlixOnly = parsed.filter(w => w && w.id === 'ws_crewlixukltd');
+          if (crewlixOnly.length > 0) {
+            // Overwrite localStorage with only Crewlix UK Ltd immediately
+            localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(crewlixOnly));
+            saveWorkspacesToLocal(crewlixOnly);
+            return sanitizeWorkspaceLeads(crewlixOnly);
           }
         }
       }
     } catch (e) {
       console.warn('Failed to load workspaces from storage', e);
     }
-    return sanitizeWorkspaceLeads((initialWorkspaces || []).filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
+    const fallback = sanitizeWorkspaceLeads((initialWorkspaces || []).filter(w => w && w.id === 'ws_crewlixukltd'));
+    try {
+      localStorage.setItem(STORAGE_KEY_WORKSPACES, JSON.stringify(fallback));
+      saveWorkspacesToLocal(fallback);
+    } catch (e) {}
+    return fallback;
   });
 
-  // 2. Load active workspace ID
+  // 2. Load active workspace ID (Strictly locked to Crewlix UK Ltd)
   const [currentWorkspaceId, setCurrentWorkspaceId] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_WSD);
-      if (saved) return saved;
+      localStorage.setItem(STORAGE_KEY_ACTIVE_WSD, 'ws_crewlixukltd');
     } catch (e) {}
-    return initialWorkspaces[0]?.id || 'ws_crewlixuk';
+    return 'ws_crewlixukltd';
   });
 
   // 3. Current user auth state (DEFAULT IS NULL SO LOGIN PAGE ALWAYS OPENS FIRST)
@@ -957,11 +974,14 @@ export function WorkspaceProvider({ children }) {
         if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
 
         const deletedIds = getDeletedWorkspaceIds();
-        const validCloudData = cloudData.filter(c => c && c.id && !c.id.startsWith('__ros_') && !deletedIds.includes(c.id));
+        const validCloudData = cloudData.filter(c => c && c.id === 'ws_crewlixukltd');
+
+        // Trigger background cleanup of deprecated workspaces in Supabase
+        purgeUnwantedWorkspacesFromCloud().catch(() => {});
 
         setWorkspaces(prev => {
           const merged = prev
-            .filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))
+            .filter(w => w && w.id === 'ws_crewlixukltd')
             .map(localWs => {
               const cloudWs = validCloudData.find(c => c.id === localWs.id);
               if (!cloudWs) {
@@ -1011,17 +1031,17 @@ export function WorkspaceProvider({ children }) {
               };
             });
 
-          // Include any brand new workspaces from cloud (excluding deleted ones)
+          // Include Crewlix UK Ltd if it was newly fetched from cloud
           validCloudData.forEach(cWs => {
-            if (!merged.some(m => m.id === cWs.id) && !deletedIds.includes(cWs.id)) {
+            if (cWs.id === 'ws_crewlixukltd' && !merged.some(m => m.id === cWs.id)) {
               merged.push(cWs);
               knownCloudTimeRef.current[cWs.id] = tsOf(cWs.updatedAt);
               cleanStampRef.current[cWs.id] = tsOf(cWs.updatedAt);
             }
           });
 
-          // Filter out internal system metadata and deleted workspaces
-          const cleanMerged = sanitizeWorkspaceLeads(merged.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
+          // Strictly filter to ONLY Crewlix UK Ltd
+          const cleanMerged = sanitizeWorkspaceLeads(merged.filter(w => w && w.id === 'ws_crewlixukltd'));
 
           // Workspaces left dirty above (local newer / local-only) are uploaded one by one,
           // targeted, by the autosave effect once isCloudSyncedRef flips.
@@ -1149,7 +1169,7 @@ export function WorkspaceProvider({ children }) {
     if (!idbLoadedRef.current) return;
     if (!workspaces || workspaces.length === 0) return;
 
-    ['ws_zrnl1fjb', 'ws_crewlixukltd'].forEach(wsId => {
+    ['ws_crewlixukltd'].forEach(wsId => {
       if (healedWorkspaceIdsRef.current.has(wsId)) return;
       const ws = workspaces.find(w => w.id === wsId);
       if (!ws || !(ws.leads || []).length) return;
@@ -3047,7 +3067,10 @@ export function WorkspaceProvider({ children }) {
   }
 
   async function deleteWorkspace(wsId) {
-    if (!wsId) return false;
+    if (!wsId || wsId === 'ws_crewlixukltd') {
+      alert('Crewlix UK Ltd is the protected primary workspace and cannot be deleted.');
+      return false;
+    }
     if (workspaces.length <= 1) {
       alert('Cannot delete the last workspace.');
       return false;

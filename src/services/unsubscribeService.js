@@ -71,14 +71,11 @@ export async function processUnsubscribeRequest({ email, workspaceId, reason }) 
 
     if (getCrewlixEmailMap().has(cleanEmail)) {
       baselineLead = getCrewlixEmailMap().get(cleanEmail);
-      if (!targetWsId) targetWsId = 'ws_crewlixukltd';
+      targetWsId = 'ws_crewlixukltd';
       targetWsName = 'Crewlix UK Ltd';
-    } else if (getCgeEmailMap().has(cleanEmail)) {
-      baselineLead = getCgeEmailMap().get(cleanEmail);
-      if (!targetWsId) targetWsId = 'ws_zrnl1fjb';
-      targetWsName = 'CGE UK LTD';
     } else {
-      if (!targetWsId) targetWsId = 'ws_crewlixukltd';
+      targetWsId = 'ws_crewlixukltd';
+      targetWsName = 'Crewlix UK Ltd';
     }
 
     // 2. UNCONDITIONAL GLOBAL DNC REGISTRY SAVE (Always executed first!)
