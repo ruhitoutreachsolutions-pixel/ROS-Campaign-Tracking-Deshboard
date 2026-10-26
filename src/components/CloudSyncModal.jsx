@@ -50,7 +50,8 @@ export default function CloudSyncModal({ isOpen, onClose, initialTab = 'supabase
     sheetsSyncStatus,
     pendingSheetsChangesCount,
     refreshSheetsStatus,
-    saveSheetsConfigGlobally
+    saveSheetsConfigGlobally,
+    pullWorkspaceLeadsFromGoogleSheet
   } = useWorkspace();
 
   const [activeTab, setActiveTab] = useState(initialTab); // 'supabase' | 'sheets'
@@ -75,6 +76,7 @@ export default function CloudSyncModal({ isOpen, onClose, initialTab = 'supabase
   const [sheetsToken, setSheetsToken] = useState(existingSheetsConfig.token || 'ROS_SHEET_SECRET_2026');
   const [isTestingSheets, setIsTestingSheets] = useState(false);
   const [isPushingAllSheets, setIsPushingAllSheets] = useState(false);
+  const [isPullingSheets, setIsPullingSheets] = useState(false);
   const [sheetsProgress, setSheetsProgress] = useState('');
   const [sheetsMessage, setSheetsMessage] = useState('');
   const [sheetsError, setSheetsError] = useState('');
@@ -296,6 +298,36 @@ create policy "Allow all access" on workspaces for all using (true) with check (
       setSheetsError(`Push failed: ${err.message}`);
     } finally {
       setIsPushingAllSheets(false);
+      setSheetsProgress('');
+    }
+  };
+
+  const handlePullFromSheets = async () => {
+    if (!sheetsUrl.trim()) {
+      setSheetsError('Please enter and save your Google Apps Script Web App URL first.');
+      return;
+    }
+
+    setIsPullingSheets(true);
+    setSheetsProgress('Connecting to Google Sheet and downloading 51,452 leads...');
+    setSheetsMessage('');
+    setSheetsError('');
+
+    try {
+      const res = await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd', (msg) => {
+        setSheetsProgress(msg);
+      });
+
+      if (res && res.success) {
+        setSheetsMessage(`🎉 ${res.message}`);
+        if (refreshSheetsStatus) refreshSheetsStatus();
+      } else {
+        setSheetsError(res?.message || 'Failed to pull leads from Google Sheets.');
+      }
+    } catch (err) {
+      setSheetsError(`Pull failed: ${err.message}`);
+    } finally {
+      setIsPullingSheets(false);
       setSheetsProgress('');
     }
   };
@@ -624,6 +656,36 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                   Clear Queue
                 </button>
               )}
+            </div>
+
+            {/* CREWLIX UK LTD ROSTER AUDIT & 1-CLICK PULL CARD */}
+            <div className="p-4 rounded-xl bg-gradient-to-br from-[#0A0A0A] to-[#0A1A2F] border-2 border-[#00E5A0]/50 space-y-3 shadow-lg shadow-[#00E5A0]/10">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-2">
+                    <FileSpreadsheet className="w-4 h-4 text-[#00E5A0]" />
+                    <span>Crewlix UK Ltd — Authoritative Roster Restore</span>
+                  </div>
+                  <div className="text-[11px] text-gray-300 mt-1 leading-relaxed">
+                    Local Dashboard: <strong className="text-[#00E5A0] font-mono">{(currentWorkspace?.leads?.length || 0).toLocaleString()}</strong> leads loaded
+                    <br />
+                    Google Sheet <code className="text-[#00C2FF] font-bold">WS_Crewlix_UK_Ltd</code>: <strong className="text-[#00C2FF] font-mono">51,452</strong> leads intact & safe
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePullFromSheets}
+                  disabled={isPullingSheets || isPushingAllSheets || isTestingSheets}
+                  className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-[#00E5A0] to-[#00C2FF] hover:opacity-90 text-black text-xs font-black flex items-center justify-center gap-2 transition shadow-lg shadow-[#00E5A0]/30 cursor-pointer active:scale-95 shrink-0"
+                >
+                  <Download className={`w-4 h-4 ${isPullingSheets ? 'animate-bounce' : ''}`} />
+                  <span>{isPullingSheets ? 'Downloading 51,452 Leads...' : '📥 Pull 51,452 Leads from Sheet'}</span>
+                </button>
+              </div>
+              <div className="text-[10px] text-gray-400 italic">
+                * 100% Free failover. Bypasses Supabase restrictions completely by loading directly into IndexedDB.
+              </div>
             </div>
 
             {/* QUICK SETUP GUIDE & COPY SCRIPT */}

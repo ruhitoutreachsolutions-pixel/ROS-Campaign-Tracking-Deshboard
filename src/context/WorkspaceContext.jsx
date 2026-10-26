@@ -695,6 +695,64 @@ export function WorkspaceProvider({ children }) {
     }
   }
 
+  // 1-Click Pull Engine: Fetch full lead roster from Google Sheets tab (e.g. WS_Crewlix_UK_Ltd)
+  async function pullWorkspaceLeadsFromGoogleSheet(targetWorkspaceId = 'ws_crewlixukltd', onProgress = null) {
+    if (!isGoogleSheetsConfigured()) {
+      return { success: false, message: 'Google Sheets Web App URL is not configured. Please open Cloud Settings.' };
+    }
+
+    setSheetsSyncStatus('syncing');
+    setSheetsSyncError(null);
+
+    try {
+      if (onProgress) onProgress('Connecting to Google Sheet Web App (fetching 51k leads)...');
+      const targetWs = workspacesRef.current.find(w => w.id === targetWorkspaceId) || { id: 'ws_crewlixukltd', name: 'Crewlix UK Ltd' };
+      const rawLeads = await fetchWorkspaceLeadsFromGoogleSheet(targetWs.id, targetWs.name, 90000);
+
+      if (!rawLeads || !Array.isArray(rawLeads) || rawLeads.length === 0) {
+        throw new Error('No leads returned from Google Sheet tab WS_Crewlix_UK_Ltd. Please check script permissions or tab name.');
+      }
+
+      if (onProgress) onProgress(`Formatting and sanitizing ${rawLeads.length.toLocaleString()} leads...`);
+
+      const cleanLeads = rawLeads
+        .map(l => sanitizeLeadForWorkspace(l, targetWs.id))
+        .filter(Boolean)
+        .map(sanitizeLeadState);
+
+      setWorkspaces(prev => {
+        const next = prev.map(w => {
+          if (w.id === targetWs.id) {
+            return {
+              ...w,
+              leads: cleanLeads,
+              updatedAt: new Date().toISOString()
+            };
+          }
+          return w;
+        });
+        saveWorkspacesToLocal(next);
+        return next;
+      });
+
+      setLastSyncedTime(new Date());
+      setLastSheetsSyncTimeState(new Date().toISOString());
+      setSheetsSyncStatus('synced');
+      setShowSheetsAlert(false);
+
+      return {
+        success: true,
+        count: cleanLeads.length,
+        message: `Successfully pulled and restored ${cleanLeads.length.toLocaleString()} leads from Google Sheets!`
+      };
+    } catch (err) {
+      console.error('[GoogleSheetPull] Error:', err);
+      setSheetsSyncStatus('out_of_sync');
+      setSheetsSyncError(err.message);
+      return { success: false, message: err.message };
+    }
+  }
+
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
   // Track whether initial cloud sync has completed (prevents pushing stale local state on mount)
@@ -971,7 +1029,16 @@ export function WorkspaceProvider({ children }) {
         const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, currentWorkspaceIdRef.current, {
           unionSentEmailsFor: needsCrewlixUnionMigration ? ['ws_crewlixukltd'] : []
         });
-        if (!isMounted || !Array.isArray(cloudData) || cloudData.length === 0) return;
+        if (!isMounted) return;
+        if (!Array.isArray(cloudData) || cloudData.length === 0) {
+          // Supabase is offline or quota-restricted: autonomous failover to Google Sheets!
+          const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
+          if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
+            console.log('[DualCloudFailover] Supabase returned empty/restricted, auto-pulling 51k leads from Google Sheets...');
+            pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
+          }
+          return;
+        }
 
         const deletedIds = getDeletedWorkspaceIds();
         const validCloudData = cloudData.filter(c => c && c.id === 'ws_crewlixukltd');
@@ -1057,6 +1124,12 @@ export function WorkspaceProvider({ children }) {
         });
       } catch (err) {
         console.warn('Background cloud sync notice:', err);
+        // Supabase error (e.g. 402 Payment Required or network): auto-failover to Google Sheets
+        const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
+        if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
+          console.log('[DualCloudFailover] Supabase error, auto-pulling 51k leads from Google Sheets...');
+          pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
+        }
       } finally {
         isCloudSyncedRef.current = true;
       }
@@ -4237,6 +4310,7 @@ export function WorkspaceProvider({ children }) {
     lastSheetsSyncTime,
     isGoogleSheetsConfigured,
     pushPendingToGoogleSheet,
+    pullWorkspaceLeadsFromGoogleSheet,
     refreshSheetsStatus,
     saveSheetsConfigGlobally,
     sheetsConfigVersion

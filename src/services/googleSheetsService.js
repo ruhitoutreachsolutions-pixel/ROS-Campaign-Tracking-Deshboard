@@ -539,18 +539,19 @@ export async function verifyCredentialsWithGoogleSheet(username, password) {
 /**
  * Redundant Data Read:
  * Pulls leads for a workspace directly from its Google Sheet tab.
+ * Uses 90-second timeout to handle large rosters (50k+ leads).
  */
-export async function fetchWorkspaceLeadsFromGoogleSheet(workspaceId, workspaceName) {
+export async function fetchWorkspaceLeadsFromGoogleSheet(workspaceId = 'ws_crewlixukltd', workspaceName = 'Crewlix UK Ltd', timeoutMs = 90000) {
   if (!isGoogleSheetsConfigured()) return null;
 
-  const tabName = getWorkspaceTabName({ name: workspaceName, id: workspaceId });
+  const tabName = workspaceName ? getWorkspaceTabName({ name: workspaceName, id: workspaceId }) : 'WS_Crewlix_UK_Ltd';
 
   try {
     const res = await sendSheetsRequest({
       action: 'get_workspace_leads',
       workspaceId,
       tabName
-    }, 12000);
+    }, timeoutMs);
 
     if (res && res.success && Array.isArray(res.leads)) {
       return res.leads;
