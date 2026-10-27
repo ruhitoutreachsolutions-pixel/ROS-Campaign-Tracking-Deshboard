@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge } from './storage';
 import { fetchDncRegistryFromGoogleSheets } from './googleSheetsService';
 import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
@@ -59,8 +59,11 @@ export function computeChunkHash(leads) {
   return String(hash);
 }
 
-// Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together
-export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
+// Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together.
+// Returns an error unless every partition loaded and the count matches sequence_config.totalLeads;
+// options.allowIncomplete instead returns what loaded, flagged `incomplete` (used by the save path,
+// which merges this device's leads in and so repairs the cloud copy).
+export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
   if (!supabase || !wsId) return { data: null, error: 'No client or workspace ID' };
 
   try {
@@ -80,41 +83,59 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
       .ilike('id', `%${CHUNK_PREFIX}${wsId}%`)
       .order('id', { ascending: true });
 
-    let fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
+    if (chunkErr) return { data: null, error: chunkErr };
+
+    const chunkIndexOf = (id) => parseInt(String(id).split('__').pop(), 10) || 0;
+    const cfg = mainRow.sequence_config || {};
+    const expectedChunkCount = Number(cfg.chunkCount) || 0;
+    const expectedTotal = Number.isFinite(Number(cfg.totalLeads)) && cfg.totalLeads !== undefined ? Number(cfg.totalLeads) : null;
     const existingChunkIds = (chunkHeaderRows || []).map(r => r.id);
+    // Only partitions 1..chunkCount-1 belong to the current save. Rows past that are leftovers
+    // from a bigger save; stitching them in would resurrect leads deleted since.
+    const liveChunkIds = existingChunkIds
+      .filter(id => { const k = chunkIndexOf(id); return k >= 1 && (!expectedChunkCount || k < expectedChunkCount); })
+      .sort((a, b) => chunkIndexOf(a) - chunkIndexOf(b));
 
-    if (!chunkErr && Array.isArray(existingChunkIds) && existingChunkIds.length > 0) {
-      // Fetch in safe batches of 4 chunks (~2.5 MB per batch)
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < existingChunkIds.length; i += BATCH_SIZE) {
-        const batchIds = existingChunkIds.slice(i, i + BATCH_SIZE);
-        const { data: batchData, error: batchErr } = await supabase
-          .from('workspaces')
-          .select('id, leads')
-          .in('id', batchIds)
-          .order('id', { ascending: true });
+    const chunkLeads = new Map();
+    const loadChunks = async (ids) => {
+      const { data: batchData, error: batchErr } = await supabase
+        .from('workspaces')
+        .select('id, leads')
+        .in('id', ids);
+      if (batchErr || !Array.isArray(batchData)) return;
+      batchData.forEach(cr => chunkLeads.set(cr.id, Array.isArray(cr.leads) ? cr.leads : []));
+    };
+    // Fetch in safe batches of 4 chunks (~2.5 MB per batch), then retry missing ones singly
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < liveChunkIds.length; i += BATCH_SIZE) {
+      await loadChunks(liveChunkIds.slice(i, i + BATCH_SIZE));
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const missing = liveChunkIds.filter(id => !chunkLeads.has(id));
+      if (missing.length === 0) break;
+      for (const id of missing) await loadChunks([id]);
+    }
 
-        if (!batchErr && Array.isArray(batchData)) {
-          // Sort numerically by partition index
-          batchData.sort((a, b) => {
-            const idxA = parseInt(a.id.split('__').pop(), 10) || 0;
-            const idxB = parseInt(b.id.split('__').pop(), 10) || 0;
-            return idxA - idxB;
-          });
-          for (const cr of batchData) {
-            if (Array.isArray(cr.leads) && cr.leads.length > 0) {
-              fullLeads.push(...cr.leads);
-            }
-          }
-        }
-      }
+    // A partial copy must never be treated as the cloud state: every reader merges it as
+    // authoritative, so missing partitions would look like deleted leads (and vice versa).
+    const missingChunks = liveChunkIds.filter(id => !chunkLeads.has(id));
+    const fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
+    liveChunkIds.forEach(id => { if (chunkLeads.has(id)) fullLeads.push(...chunkLeads.get(id)); });
+    const missingPartitions = expectedChunkCount > 1 && liveChunkIds.length < expectedChunkCount - 1;
+    const incomplete = missingChunks.length > 0 || missingPartitions || (expectedTotal !== null && fullLeads.length !== expectedTotal);
+    if (incomplete && !options.allowIncomplete) {
+      return {
+        data: null,
+        error: new Error(`Incomplete cloud copy of ${wsId}: got ${fullLeads.length}${expectedTotal !== null ? ` of ${expectedTotal}` : ''} leads (${missingChunks.length} partition(s) failed to load)`)
+      };
     }
 
     return {
       data: {
         ...mainRow,
         leads: fullLeads,
-        existingChunkIds
+        existingChunkIds,
+        incomplete
       },
       error: null
     };
@@ -324,6 +345,7 @@ function getLocalDeletedIds() {
 // 2. Fetch all workspaces from Supabase Cloud Database (Lightweight & Scalable)
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null, mergeOptions = {}) {
   const unionSentEmailsFor = Array.isArray(mergeOptions.unionSentEmailsFor) ? mergeOptions.unionSentEmailsFor : [];
+  lastCloudFetchOk = false;
   const safeFallback = Array.isArray(fallbackWorkspaces) 
     ? fallbackWorkspaces.filter(w => w && w.id === PRIMARY_WORKSPACE_ID) 
     : [];
@@ -381,32 +403,32 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
         const localTime = new Date(localWs?.updatedAt || 0).getTime();
 
         let leads = [];
+        let cloudSyncedAt = localWs?.cloudSyncedAt || null;
         const isTarget = targetWorkspaceId && targetWorkspaceId === item.id;
         const needsCloudLeads = isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
 
         if (needsCloudLeads) {
-          try {
-            const { data: fullCloudRow, error: leadErr } = await fetchFullCloudWorkspaceRow(supabase, item.id);
-
-            if (!leadErr && fullCloudRow && Array.isArray(fullCloudRow.leads)) {
-              if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
-                leads = mergeWorkspaceLeads(localWs.leads, fullCloudRow.leads, {
-                  workspaceId: item.id,
-                  localWsUpdatedAt: localWs.updatedAt,
-                  cloudWsUpdatedAt: item.updated_at,
-                  deletedLeadIds: localWs.deletedLeadIds || [],
-                  unionSentEmails: unionSentEmailsFor.includes(item.id)
-                });
-              } else {
-                leads = fullCloudRow.leads;
-              }
-            } else if (localWs && Array.isArray(localWs.leads)) {
-              leads = localWs.leads;
-            }
-          } catch (e) {
-            if (localWs && Array.isArray(localWs.leads)) {
-              leads = localWs.leads;
-            }
+          const { data: fullCloudRow, error: leadErr } = await fetchFullCloudWorkspaceRow(supabase, item.id);
+          // Never dress local (or partial) leads up as the cloud copy: callers treat the result as
+          // authoritative and would mark stale data clean or drop leads the fetch missed.
+          if (leadErr || !fullCloudRow || !Array.isArray(fullCloudRow.leads)) {
+            throw (leadErr instanceof Error ? leadErr : new Error(leadErr?.message || `Could not load leads for ${item.id}`));
+          }
+          if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
+            const deletedLeadIds = [...(localWs.deletedLeadIds || []), ...(fullCloudRow.sequence_config?.deletedLeadIds || [])];
+            const cutoff = localOnlyCutoffFor(localWs, fullCloudRow.updated_at);
+            leads = mergeWorkspaceLeads(localWs.leads, fullCloudRow.leads, {
+              workspaceId: item.id,
+              localWsUpdatedAt: localWs.updatedAt,
+              cloudWsUpdatedAt: fullCloudRow.updated_at,
+              deletedLeadIds,
+              localOnlyCutoff: cutoff,
+              unionSentEmails: unionSentEmailsFor.includes(item.id)
+            });
+            cloudSyncedAt = cloudSyncedAtAfterMerge(localWs.leads, fullCloudRow.leads, cutoff, fullCloudRow.updated_at, deletedLeadIds);
+          } else {
+            leads = fullCloudRow.leads;
+            cloudSyncedAt = fullCloudRow.updated_at;
           }
         } else {
           leads = localWs.leads;
@@ -476,10 +498,12 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
             return refilled;
           })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
-          updatedAt: item.updated_at || item.created_at || new Date().toISOString()
+          updatedAt: item.updated_at || item.created_at || new Date().toISOString(),
+          cloudSyncedAt
         };
       }));
 
+      lastCloudFetchOk = true;
       return workspacesWithLeads;
     }
   } catch (err) {
@@ -493,6 +517,23 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 let lastCloudErrorMsg = null;
 export function getLastCloudError() {
   return lastCloudErrorMsg;
+}
+
+// Whether the most recent fetchWorkspacesFromCloud returned real cloud data (it returns the local
+// fallback on any failure, which callers must not merge as if it were the cloud copy).
+let lastCloudFetchOk = false;
+export function getLastCloudFetchOk() {
+  return lastCloudFetchOk;
+}
+
+// Cutoff for mergeWorkspaceLeads' localOnlyCutoff: the cloud version this device last synced with.
+// Local leads newer than that may be pending uploads; older ones missing from the cloud were deleted.
+// A device that never recorded a sync (pre-fix cache) defers to the cloud copy entirely.
+export function localOnlyCutoffFor(localWs, cloudUpdatedAt) {
+  const synced = new Date(localWs?.cloudSyncedAt || 0).getTime();
+  if (Number.isFinite(synced) && synced > 0) return synced;
+  const cloud = new Date(cloudUpdatedAt || 0).getTime();
+  return Number.isFinite(cloud) ? cloud : 0;
 }
 
 // Crewlix (20k+ leads) ships its authoritative baseline in the bundle, so the cloud row only needs
@@ -605,7 +646,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
   }
 
   for (let attempt = 1; attempt <= MAX_SAVE_ATTEMPTS; attempt++) {
-    const { data: existingRow, error: checkErr } = await fetchFullCloudWorkspaceRow(supabase, ws.id);
+    const { data: existingRow, error: checkErr } = await fetchFullCloudWorkspaceRow(supabase, ws.id, { allowIncomplete: true });
 
     if (checkErr) {
       lastCloudErrorMsg = checkErr.message || String(checkErr);
@@ -635,7 +676,10 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
           workspaceId: ws.id,
           localWsUpdatedAt: ws.updatedAt,
           cloudWsUpdatedAt: existingRow.updated_at,
-          deletedLeadIds: mergedDeleted
+          deletedLeadIds: mergedDeleted,
+          // A complete cloud copy decides which old leads still exist, so a stale device can't push
+          // back leads removed elsewhere. An incomplete read keeps everything to repair the cloud.
+          localOnlyCutoff: existingRow.incomplete ? undefined : localOnlyCutoffFor(ws, existingRow.updated_at)
         });
       }
     }
@@ -662,11 +706,18 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     const existingChunkIds = new Set(existingRow?.existingChunkIds || []);
 
     // 🛡️ ANTI-DOWNGRADE SHIELD:
-    // If Cloud currently has 50k+ leads (prevChunkCount >= 17), and local device is attempting
-    // to save fewer than 50,000 leads (e.g. 20,113 baseline on initial boot), REFUSE to overwrite!
-    if (prevChunkCount >= 17 && compactedLeads.length < 50000) {
-      console.warn(`[ANTI-DOWNGRADE SHIELD] Blocked autosave: Cloud holds ${prevChunkCount} chunks (51k+ leads), while local only has ${compactedLeads.length} leads.`);
-      return true;
+    // A save may only shrink the cloud by leads that were deliberately deleted (newly tombstoned).
+    // Any bigger drop means this device is missing data (e.g. a 20,113 baseline boot), so refuse.
+    // (This used to be a fixed 50,000 floor, which also blocked legitimate deletes below 50k.)
+    if (existingRow) {
+      const cloudDeletedSet = new Set(cloudDeleted.map(String));
+      const newlyDeleted = mergedDeleted.filter(id => !cloudDeletedSet.has(id)).length;
+      const cloudTotal = Number(existingRow.sequence_config?.totalLeads) || (existingRow.leads || []).length;
+      if (compactedLeads.length < cloudTotal - newlyDeleted) {
+        console.warn(`[ANTI-DOWNGRADE SHIELD] Blocked save: cloud holds ${cloudTotal} leads, only ${newlyDeleted} newly deleted, but this device would write ${compactedLeads.length}.`);
+        lastCloudErrorMsg = `Refused to shrink ${ws.id} from ${cloudTotal} to ${compactedLeads.length} leads (only ${newlyDeleted} deletions)`;
+        return false;
+      }
     }
 
     const mergedActivity = mergeActivityLogs(ws.activityLog || [], existingRow?.activity_log || []);
@@ -759,12 +810,17 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       }
     }
 
-    // Clean up any stale chunks if total chunk count decreased (ONLY IF leads >= 50,000)
-    if (prevChunkCount > chunks.length && compactedLeads.length >= 50000) {
-      for (let c = chunks.length; c < prevChunkCount; c++) {
-        const staleId = `${CHUNK_PREFIX}${ws.id}__${String(c).padStart(4, '0')}`;
-        await supabase.from('workspaces').delete().eq('id', staleId);
-      }
+    // Clean up partitions past the new chunk count (readers ignore them, but they'd linger forever)
+    const staleChunkIds = Array.from(existingChunkIds).filter(id => {
+      const k = parseInt(String(id).split('__').pop(), 10) || 0;
+      return k >= chunks.length;
+    });
+    for (let c = chunks.length; c < prevChunkCount; c++) {
+      const staleId = `${CHUNK_PREFIX}${ws.id}__${String(c).padStart(4, '0')}`;
+      if (!staleChunkIds.includes(staleId)) staleChunkIds.push(staleId);
+    }
+    for (const staleId of staleChunkIds) {
+      await supabase.from('workspaces').delete().eq('id', staleId);
     }
 
     lastSavedRows.set(ws.id, {

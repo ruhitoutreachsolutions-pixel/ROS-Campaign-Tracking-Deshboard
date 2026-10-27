@@ -31,11 +31,13 @@ import {
   fetchWarriorsFromSupabase,
   saveWarriorsToSupabase,
   getLastCloudError,
+  getLastCloudFetchOk,
+  localOnlyCutoffFor,
   fetchSheetsConfigFromCloud,
   saveSheetsConfigToCloud,
   fetchFullCloudWorkspaceRow
 } from '../services/db';
-import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones } from '../services/storage';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 import { 
@@ -732,10 +734,12 @@ export function WorkspaceProvider({ children }) {
       setWorkspaces(prev => {
         const next = prev.map(w => {
           if (w.id === targetWs.id) {
+            // The sheet is a backup that may predate recent deletes: tombstones always apply
             const merged = mergeWorkspaceLeads(w.leads || [], cleanLeads, {
               workspaceId: targetWs.id,
               localWsUpdatedAt: w.updatedAt,
-              cloudWsUpdatedAt: new Date().toISOString()
+              cloudWsUpdatedAt: new Date().toISOString(),
+              deletedLeadIds: [...(w.deletedLeadIds || []), ...(w.sequenceConfig?.deletedLeadIds || [])]
             });
             return {
               ...w,
@@ -769,6 +773,14 @@ export function WorkspaceProvider({ children }) {
 
   // Track whether IndexedDB initial load has finished
   const idbLoadedRef = useRef(false);
+  // The boot cloud sync waits on this so it merges against the full IndexedDB copy, not the
+  // truncated localStorage one; cloudMergedRef stops a late IndexedDB load overwriting the merge.
+  const resolveIdbReadyRef = useRef(() => {});
+  const idbReadyRef = useRef(null);
+  if (!idbReadyRef.current) {
+    idbReadyRef.current = new Promise(resolve => { resolveIdbReadyRef.current = resolve; });
+  }
+  const cloudMergedRef = useRef(false);
   // Track whether initial cloud sync has completed (prevents pushing stale local state on mount)
   const isCloudSyncedRef = useRef(false);
   const workspacesRef = useRef(workspaces);
@@ -807,12 +819,17 @@ export function WorkspaceProvider({ children }) {
       const cloudDeleted = Array.isArray(cloudRow.sequence_config?.deletedLeadIds) ? cloudRow.sequence_config.deletedLeadIds : [];
       const deletedLeadIds = capTombstones([...(target.deletedLeadIds || []), ...cloudDeleted], wsId);
 
+      const cutoff = cloudRow.incomplete ? undefined : localOnlyCutoffFor(target, cloudRow.updated_at);
       const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
         workspaceId: wsId,
         localWsUpdatedAt: target.updatedAt,
         cloudWsUpdatedAt: cloudRow.updated_at,
-        deletedLeadIds
+        deletedLeadIds,
+        localOnlyCutoff: cutoff
       }).map(sanitizeLeadState);
+      const cloudSyncedAt = cutoff === undefined
+        ? target.cloudSyncedAt
+        : cloudSyncedAtAfterMerge(target.leads, cloudRow.leads, cutoff, cloudRow.updated_at, deletedLeadIds);
 
       const nextUpdated = Math.max(tsOf(target.updatedAt), cloudTime);
       if (wasClean) {
@@ -837,6 +854,7 @@ export function WorkspaceProvider({ children }) {
         ...meta,
         leads: mergedLeads,
         deletedLeadIds,
+        cloudSyncedAt,
         activityLog: Array.isArray(cloudRow.activity_log)
           ? mergeActivityLogs(w.activityLog || [], cloudRow.activity_log)
           : (w.activityLog || []),
@@ -896,15 +914,13 @@ export function WorkspaceProvider({ children }) {
         const idbData = await loadWorkspacesFromLocal(null);
         if (isMounted && Array.isArray(idbData) && idbData.length > 0) {
           setWorkspaces(prev => {
-            const prevTotalLeads = prev.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
-            const idbTotalLeads = idbData.reduce((acc, w) => acc + (w.leads?.length || 0), 0);
             idbLoadedRef.current = true;
-            // If IndexedDB has more or equal leads, or newer updates, adopt it
-            if (idbTotalLeads >= prevTotalLeads) {
-              const deletedIds = getDeletedWorkspaceIds();
-              return sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
-            }
-            return prev;
+            // IndexedDB holds the full local copy (localStorage only a quota-truncated one), so it
+            // replaces the boot state, but never a state the cloud sync already merged: a stale
+            // cache with MORE leads used to win here and undo deletes made on other devices.
+            if (cloudMergedRef.current) return prev;
+            const deletedIds = getDeletedWorkspaceIds();
+            return sanitizeWorkspaceLeads(idbData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id)));
           });
         } else {
           idbLoadedRef.current = true;
@@ -912,6 +928,8 @@ export function WorkspaceProvider({ children }) {
       } catch (err) {
         console.warn('Error loading from IndexedDB:', err);
         idbLoadedRef.current = true;
+      } finally {
+        resolveIdbReadyRef.current();
       }
     }
     initFromIDB();
@@ -1040,22 +1058,27 @@ export function WorkspaceProvider({ children }) {
         let needsCrewlixUnionMigration = false;
         try { needsCrewlixUnionMigration = localStorage.getItem(STORAGE_KEY_CREWLIX_UNION_DONE) !== 'true'; } catch (e) {}
 
+        // Merge against the full IndexedDB copy (bounded wait so a broken IDB can't block sync)
+        await Promise.race([idbReadyRef.current, new Promise(r => setTimeout(r, 15000))]);
+        await new Promise(r => setTimeout(r, 0));
+        if (!isMounted) return;
+
         const cloudData = await fetchWorkspacesFromCloud(workspacesRef.current, currentWorkspaceIdRef.current, {
           unionSentEmailsFor: needsCrewlixUnionMigration ? ['ws_crewlixukltd'] : []
         });
         if (!isMounted) return;
 
-        // Ensure device gets all leads: If Supabase returns empty/stale or <50k leads, auto-hydrate from Google Sheets!
-        const cloudCrewlix = Array.isArray(cloudData) ? cloudData.find(c => c && c.id === 'ws_crewlixukltd') : null;
-        const cloudLeadCount = cloudCrewlix?.leads?.length || 0;
-
-        if (!cloudCrewlix || cloudLeadCount < 50000) {
+        // On failure fetchWorkspacesFromCloud hands back this device's own copy; merging that as
+        // "cloud" used to stamp stale local leads as authoritative. Fall back to Google Sheets only
+        // when Supabase is unreachable and this device has no full copy. (The old trigger was any
+        // cloud count below 50k, which pulled the older sheet copy back in after legit deletes.)
+        if (!getLastCloudFetchOk()) {
           const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
           if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
-            console.log('[DualCloudFailover] Device lead count is below 50k, auto-hydrating all leads from Google Sheets...');
+            console.log('[DualCloudFailover] Supabase unavailable and device copy incomplete, pulling leads from Google Sheets...');
             await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
-            // Do not abort with return: allow merging with any cloud chunks
           }
+          return;
         }
 
         if (!Array.isArray(cloudData) || cloudData.length === 0) {
@@ -1080,25 +1103,32 @@ export function WorkspaceProvider({ children }) {
               }
 
               // SMART LEAD-LEVEL MERGE WITH AUTHORITATIVE CLOUD RECONCILIATION:
+              // cloudWs.leads is the complete cloud copy already merged with this device's pending
+              // leads, so it decides which older leads still exist (deletes elsewhere stick here).
+              const deletedLeadIds = [
+                ...(localWs.deletedLeadIds || []),
+                ...(cloudWs.deletedLeadIds || [])
+              ];
+              const cutoff = localOnlyCutoffFor(localWs, cloudWs.cloudSyncedAt || cloudWs.updatedAt);
               const rawMergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
                 workspaceId: localWs.id,
                 localWsUpdatedAt: localWs.updatedAt,
                 cloudWsUpdatedAt: cloudWs.updatedAt,
-                deletedLeadIds: [
-                  ...(localWs.deletedLeadIds || []),
-                  ...(cloudWs.deletedLeadIds || [])
-                ],
+                deletedLeadIds,
+                localOnlyCutoff: cutoff,
                 unionSentEmails: localWs.id === 'ws_crewlixukltd' && needsCrewlixUnionMigration
               });
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
-              const localSent = (localWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
-              const cloudSent = (cloudWs.leads || []).filter(l => l && (l.email1 || l.email2 || l.email3)).length;
+              // Computed by fetchWorkspacesFromCloud against the raw cloud leads (cloudWs.leads here
+              // already includes this device's pending leads, so it can't be recomputed from them)
+              const cloudSyncedAt = cloudWs.cloudSyncedAt || localWs.cloudSyncedAt || null;
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
 
-              const isCloudAuth = (cloudTime >= localTime && cloudSent >= localSent) || 
-                                  (cloudWs.leads?.length >= (localWs.leads?.length || 0) && cloudTime >= localTime) ||
-                                  ((cloudWs.leads?.length || 0) > (localWs.leads?.length || 0) + 100);
+              // The newer write wins workspace settings. Lead counts and sent counts no longer
+              // decide it: a legit delete lowers the cloud count, and that used to make a stale
+              // device "authoritative" and push its old leads back.
+              const isCloudAuth = cloudTime >= localTime;
               // Any local lead edited after the cloud's last write cannot be in the cloud yet
               const hasUnsyncedLeadEdits = (localWs.leads || []).some(l => l && tsOf(l.updatedAt) > cloudTime);
 
@@ -1111,10 +1141,8 @@ export function WorkspaceProvider({ children }) {
                 ...(isCloudAuth ? localWs : cloudWs),
                 ...(isCloudAuth ? cloudWs : localWs),
                 leads: mergedLeads,
-                deletedLeadIds: Array.from(new Set([
-                  ...(localWs.deletedLeadIds || []),
-                  ...(cloudWs.deletedLeadIds || [])
-                ])),
+                cloudSyncedAt,
+                deletedLeadIds: capTombstones(deletedLeadIds, localWs.id),
                 activityLog: isCloudAuth
                   ? (cloudWs.activityLog?.length ? cloudWs.activityLog : localWs.activityLog || [])
                   : ((localWs.activityLog?.length || 0) >= (cloudWs.activityLog?.length || 0) ? localWs.activityLog : cloudWs.activityLog || []),
@@ -1144,6 +1172,7 @@ export function WorkspaceProvider({ children }) {
           }
 
           isCloudSyncedRef.current = true;
+          cloudMergedRef.current = true;
           return cleanMerged;
         });
       } catch (err) {
@@ -4182,7 +4211,8 @@ export function WorkspaceProvider({ children }) {
     try {
       const target = targetWsId || currentWorkspaceId;
       const cloudData = await fetchWorkspacesFromCloud(workspaces, target);
-      if (Array.isArray(cloudData) && cloudData.length > 0) {
+      // On failure the call returns this device's own copy; don't present that as a cloud pull
+      if (getLastCloudFetchOk() && Array.isArray(cloudData) && cloudData.length > 0) {
         const deletedIds = getDeletedWorkspaceIds();
         const valid = sanitizeWorkspaceLeads(
           cloudData.filter(w => w && w.id && !w.id.startsWith('__ros_') && !deletedIds.includes(w.id))

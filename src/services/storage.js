@@ -310,20 +310,56 @@ export async function loadWorkspacesFromLocal(fallbackWorkspaces = []) {
   return fallbackWorkspaces;
 }
 
+// Newest timestamp a lead carries (edit, import or creation)
+export function leadTimestamp(lead) {
+  if (!lead) return 0;
+  const t = Math.max(
+    new Date(lead.updatedAt || 0).getTime() || 0,
+    new Date(lead.importedAt || 0).getTime() || 0,
+    new Date(lead.createdAt || 0).getTime() || 0
+  );
+  return Number.isFinite(t) ? t : 0;
+}
+
+// The cloudSyncedAt to record after merging a complete cloud copy with localOnlyCutoff = cutoff.
+// It only moves up to the cloud's time when no local-only lead is still waiting to upload;
+// otherwise the next merge would treat that pending lead as deleted elsewhere and drop it.
+export function cloudSyncedAtAfterMerge(localLeads, cloudLeads, cutoff, cloudUpdatedAt, deletedLeadIds = []) {
+  const deleted = deletedLeadIds instanceof Set ? deletedLeadIds : new Set(deletedLeadIds || []);
+  const cloudIds = new Set();
+  const cloudEmails = new Set();
+  (cloudLeads || []).forEach(l => {
+    if (!l) return;
+    if (l.id) cloudIds.add(String(l.id));
+    if (l.email) cloudEmails.add(String(l.email).toLowerCase().trim());
+  });
+  const hasPending = (localLeads || []).some(l => l && !deleted.has(l.id) &&
+    !(l.id && cloudIds.has(String(l.id))) &&
+    !(l.email && cloudEmails.has(String(l.email).toLowerCase().trim())) &&
+    leadTimestamp(l) > cutoff);
+  return hasPending ? new Date(cutoff).toISOString() : cloudUpdatedAt;
+}
+
 // Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation
+// options.localOnlyCutoff (ms): pass it when cloudLeads is a COMPLETE cloud copy. A local lead the
+// cloud doesn't have is then kept only if it was added/edited after this device last synced with
+// the cloud (an upload still pending). Anything older was in the cloud then and has since been
+// removed on another device, so keeping it would resurrect the delete.
 export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = {}) {
   const wsId = options.workspaceId || 'ws_crewlixukltd';
   const deletedSet = new Set(options.deletedLeadIds || []);
   const isValid = (l) => l && (l.id || l.email) && !deletedSet.has(l.id) && !isLeadPermanentlyPurged(l, wsId);
+  const cutoff = Number.isFinite(options.localOnlyCutoff) ? options.localOnlyCutoff : null;
+  const keepLocalOnly = (l) => cutoff === null || leadTimestamp(l) > cutoff;
 
   const validLocal = (Array.isArray(localLeads) ? localLeads : []).filter(isValid);
   const validCloud = (Array.isArray(cloudLeads) ? cloudLeads : []).filter(isValid);
 
   if (validLocal.length === 0) {
-    return validCloud.map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean);
+    return refillFromBaseline(validCloud.map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean), wsId, deletedSet);
   }
   if (validCloud.length === 0) {
-    return validLocal.map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean);
+    return refillFromBaseline(validLocal.filter(keepLocalOnly).map(l => sanitizeLeadForWorkspace(l, wsId)).filter(Boolean), wsId, deletedSet);
   }
 
   const leadMap = new Map();
@@ -479,6 +515,7 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
   });
 
   // 2. Merge cloud leads non-destructively by ID or matching email address
+  const cloudBackedKeys = new Set();
   validCloud.forEach(cLead => {
     const key = cLead.id ? String(cLead.id) : (cLead.email ? `email:${cLead.email.toLowerCase().trim()}` : `gen_${Math.random()}`);
     const emailKey = cLead.email ? cLead.email.toLowerCase().trim() : null;
@@ -493,14 +530,17 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     if (matchKey && leadMap.has(matchKey)) {
       const existing = leadMap.get(matchKey);
       leadMap.set(matchKey, mergeTwoLeads(existing, cLead));
+      cloudBackedKeys.add(matchKey);
     } else {
       leadMap.set(key, cLead);
+      cloudBackedKeys.add(key);
       if (emailKey) emailToKeyMap.set(emailKey, key);
     }
   });
 
-  const mergedLeads = Array.from(leadMap.values())
-    .map(l => sanitizeLeadForWorkspace(l, wsId))
+  const mergedLeads = Array.from(leadMap.entries())
+    .filter(([key, l]) => cloudBackedKeys.has(key) || keepLocalOnly(l))
+    .map(([, l]) => sanitizeLeadForWorkspace(l, wsId))
     .filter(Boolean);
 
   // Deliberately deleted leads stay deleted on every workspace (they used to be re-added)
