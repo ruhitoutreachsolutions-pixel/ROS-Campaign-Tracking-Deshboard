@@ -248,13 +248,14 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
         
         <div className="flex items-center gap-1.5 sm:gap-2 bg-[#111827] p-1.5 rounded-2xl border border-[#1E3A5F] overflow-x-auto max-w-full no-scrollbar">
           {[
-            { id: 'pipeline', label: 'Interested Leads Pipeline', icon: Target, badge: `${metrics.interestedCount || 0}` },
-            { id: 'sequences', label: 'Sequence Funnel & Steps', icon: Layers, badge: '3 Steps' },
-            { id: 'activity', label: 'Live Sending Activity', icon: Activity, badge: `${activityLog.length}` },
-            { id: 'leads', label: 'All Campaign Leads', icon: FolderOpen, badge: `${leads.length}` },
+            { id: 'pipeline', label: 'Interested Leads Pipeline', shortLabel: 'Pipeline', icon: Target, badge: `${metrics.interestedCount || 0}` },
+            { id: 'sequences', label: 'Sequence Funnel & Steps', shortLabel: 'Funnel', icon: Layers, badge: '3 Steps' },
+            { id: 'activity', label: 'Live Sending Activity', shortLabel: 'Activity', icon: Activity, badge: `${activityLog.length}` },
+            { id: 'leads', label: 'All Campaign Leads', shortLabel: 'All Leads', icon: FolderOpen, badge: `${leads.length}` },
             ...(hasChatAccess ? [{ 
               id: 'chat', 
               label: 'Agency Chat', 
+              shortLabel: 'Chat',
               icon: MessageSquare, 
               badge: chatUnreadCount > 0 ? `${chatUnreadCount}` : null 
             }] : [])
@@ -265,16 +266,19 @@ export default function ClientPortalView({ onOpenLeadDetail }) {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 ${
+                className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 border ${
                   isSelected
-                    ? 'bg-[#00C2FF] text-[#0A0A0A] shadow-md shadow-[#00C2FF]/20'
-                    : 'text-gray-400 hover:text-white hover:bg-[#0A0A0A]'
+                    ? 'bg-gradient-to-r from-[#00C2FF] to-[#0099FF] text-[#0A0A0A] border-[#00C2FF] shadow-lg shadow-[#00C2FF]/20 font-black'
+                    : 'text-gray-300 hover:text-white hover:bg-[#1E3A5F]/40 border-transparent hover:border-[#1E3A5F]'
                 }`}
               >
-                <IconComponent className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                <span>{tab.label}</span>
+                <IconComponent className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isSelected ? 'text-[#0A0A0A]' : 'text-gray-400'}`} />
+                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="sm:hidden">{tab.shortLabel || tab.label}</span>
                 {tab.badge && (
-                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#0A0A0A] text-[#00E5A0]'}`}>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
+                    isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#0A0A0A] text-[#00E5A0] border border-[#1E3A5F]'
+                  }`}>
                     {tab.badge}
                   </span>
                 )}

@@ -54,3 +54,12 @@
 .green-glow {
   box-shadow: 0 0 15px rgba(0, 229, 160, 0.15);
 }
+
+/* No Scrollbar Utility across all browsers */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

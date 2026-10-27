@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useWorkspace } from './context/WorkspaceContext';
 import Navbar from './components/Navbar';
 import LoginScreen from './components/LoginScreen';
@@ -27,6 +27,8 @@ import UnsubscribeLinkModal from './components/UnsubscribeLinkModal';
 import { 
   BarChart3, 
   Send, 
+  ChevronLeft,
+  ChevronRight,
   Target, 
   Table, 
   Sparkles, 
@@ -93,23 +95,25 @@ export default function App() {
 
   const availableTabs = useMemo(() => {
     const tabs = [
-      { id: 'dispatcher', label: 'Mail Merge Dispatcher', icon: Send, badge: 'Fast', role: 'both' },
-      { id: 'pipeline', label: 'Interested Pipeline', icon: Target, badge: `${safeMetrics.interestedCount || 0}`, role: 'both' },
-      { id: 'telemetry', label: 'Campaign Analytics', icon: BarChart3, role: 'both' },
-      { id: 'leads', label: 'All Leads Sheet', icon: Table, badge: `${safeMetrics.totalLeads || 0}`, role: 'both' },
-      { id: 'email-copies', label: 'Email Copies & Notes', icon: Mail, role: 'both' },
+      { id: 'dispatcher', label: 'Mail Merge Dispatcher', shortLabel: 'Dispatcher', icon: Send, badge: 'Fast', role: 'both' },
+      { id: 'pipeline', label: 'Interested Pipeline', shortLabel: 'Pipeline', icon: Target, badge: `${safeMetrics.interestedCount || 0}`, role: 'both' },
+      { id: 'telemetry', label: 'Campaign Analytics', shortLabel: 'Analytics', icon: BarChart3, role: 'both' },
+      { id: 'leads', label: 'All Leads Sheet', shortLabel: 'All Leads', icon: Table, badge: `${safeMetrics.totalLeads || 0}`, role: 'both' },
+      { id: 'email-copies', label: 'Email Copies & Notes', shortLabel: 'Email Copies', icon: Mail, role: 'both' },
       { 
         id: 'form-submissions', 
         label: 'Form Submissions', 
+        shortLabel: 'Forms',
         icon: Globe, 
         badge: pendingFormsCount > 0 ? `${pendingFormsCount}` : null,
         badgeColor: 'amber',
         role: 'both' 
       },
-      { id: 'payments', label: 'Payments & Invoices', icon: CreditCard, role: 'admin' },
+      { id: 'payments', label: 'Payments & Invoices', shortLabel: 'Invoices', icon: CreditCard, role: 'admin' },
       { 
         id: 'tasks', 
         label: 'Tasks & Approvals', 
+        shortLabel: 'Tasks',
         icon: CheckSquare, 
         badge: pendingApprovalsCount > 0 ? `${pendingApprovalsCount}` : null,
         badgeColor: 'amber',
@@ -118,6 +122,7 @@ export default function App() {
       { 
         id: 'chat', 
         label: 'Chat', 
+        shortLabel: 'Chat',
         icon: MessageSquare, 
         badge: chatUnreadCount > 0 ? `${chatUnreadCount}` : null,
         badgeColor: 'cyan',
@@ -154,6 +159,43 @@ export default function App() {
       window.__rosSetActiveTab = setActiveAdminTab;
     }
   }, [activeAdminTab, setActiveAdminTabRef]);
+
+  // Tabs container horizontal scrolling helpers
+  const tabsContainerRef = useRef(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const checkTabsScroll = () => {
+    if (!tabsContainerRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = tabsContainerRef.current;
+    setCanScrollLeft(scrollLeft > 4);
+    setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 4);
+  };
+
+  useEffect(() => {
+    checkTabsScroll();
+    window.addEventListener('resize', checkTabsScroll);
+    return () => window.removeEventListener('resize', checkTabsScroll);
+  }, [availableTabs]);
+
+  useEffect(() => {
+    if (!tabsContainerRef.current) return;
+    const activeBtn = tabsContainerRef.current.querySelector(`[data-tab-id="${activeAdminTab}"]`);
+    if (activeBtn) {
+      activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    }
+    setTimeout(checkTabsScroll, 300);
+  }, [activeAdminTab]);
+
+  const handleScrollTabs = (direction) => {
+    if (!tabsContainerRef.current) return;
+    const distance = 260;
+    tabsContainerRef.current.scrollBy({
+      left: direction === 'left' ? -distance : distance,
+      behavior: 'smooth'
+    });
+    setTimeout(checkTabsScroll, 300);
+  };
 
   // Handle lead click from any subcomponent
   const handleOpenLeadDetail = (lead) => {
@@ -331,7 +373,7 @@ export default function App() {
       )}
 
       {/* MAIN CONTENT CONTAINER (FULL WIDTH FLUID LAYOUT) */}
-      <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 xl:px-12 py-5 sm:py-7 space-y-6 sm:space-y-8">
+      <main className="flex-1 w-full px-3 sm:px-5 lg:px-6 xl:px-8 py-4 sm:py-6 space-y-5 sm:space-y-6">
         
         {effectiveRole === 'client' ? (
           // ==========================================
@@ -344,51 +386,97 @@ export default function App() {
           // ==========================================
           <div className="space-y-6 sm:space-y-8">
             
-            {/* Header with role badge and tabs */}
-            <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 pb-4 border-b border-[#1E3A5F]">
-              <div>
-                <div className="flex flex-wrap items-center gap-2.5">
+            {/* TIER 1: HIGH-TECH OPERATIONS COMMAND SUB-HEADER */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#1E3A5F]/80">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-widest border ${
                     isAdmin 
-                      ? 'bg-[#00C2FF]/10 text-[#00C2FF] border-[#00C2FF]/30' 
+                      ? 'bg-[#00C2FF]/10 text-[#00C2FF] border-[#00C2FF]/30 shadow-sm' 
                       : 'bg-sky-500/20 text-sky-300 border-sky-400/30'
                   }`}>
                     {isAdmin ? 'Agency Admin Hub' : `ROS Warrior · ${currentUser?.name || 'Manager'}`}
                   </span>
-                  <span className="text-xs text-[#7B7B7B] font-mono">
+                  <span className="inline-flex items-center gap-1.5 text-xs text-[#7B7B7B] font-mono bg-[#111827] px-2.5 py-0.5 rounded-lg border border-[#1E3A5F]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00E5A0] animate-pulse" />
                     Workspace: <strong className="text-white">{currentWorkspace?.name}</strong>
                   </span>
-                  <NotificationButton showLabelAlways={true} />
                 </div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1">
+                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-white tracking-tight">
                   ROS Campaign <span className="text-[#00C2FF]">Operations</span>
                 </h1>
               </div>
 
-              {/* Navigation Tabs Bar */}
-              <div className="flex items-center gap-1.5 bg-[#111827] p-1.5 rounded-2xl border border-[#1E3A5F] overflow-x-auto max-w-full no-scrollbar">
+              {/* Operations Status Indicators */}
+              <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#111827] border border-[#1E3A5F] text-xs font-mono">
+                  <span className="text-[#7B7B7B]">Active View:</span>
+                  <span className="text-[#00C2FF] font-semibold">
+                    {availableTabs.find(t => t.id === activeAdminTab)?.label || 'Dispatcher'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#111827] border border-[#1E3A5F] text-xs font-mono">
+                  <span className="w-2 h-2 rounded-full bg-[#00E5A0] animate-ping" />
+                  <span className="text-[#00E5A0] font-bold">{safeMetrics.totalLeads?.toLocaleString() || 0}</span>
+                  <span className="text-[#7B7B7B] text-[11px]">Leads Loaded</span>
+                </div>
+              </div>
+            </div>
+
+            {/* TIER 2: FULL-WIDTH SEGMENTED NAVIGATION TAB BAR */}
+            <div className="relative w-full group/nav">
+              {/* Left scroll chevron */}
+              {canScrollLeft && (
+                <button
+                  type="button"
+                  onClick={() => handleScrollTabs('left')}
+                  className="absolute left-1 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-[#111827] border border-[#00C2FF]/60 text-[#00C2FF] flex items-center justify-center shadow-lg shadow-[#00C2FF]/20 hover:bg-[#00C2FF] hover:text-[#0A0A0A] transition cursor-pointer"
+                  title="Scroll tabs left"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Left fade gradient when scrollable */}
+              {canScrollLeft && (
+                <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-[#0A0A0A] to-transparent pointer-events-none z-10 rounded-l-2xl" />
+              )}
+
+              {/* Scrollable Tabs Track */}
+              <div
+                ref={tabsContainerRef}
+                onScroll={checkTabsScroll}
+                className="flex items-center gap-1.5 p-1.5 bg-[#111827] rounded-2xl border border-[#1E3A5F] overflow-x-auto no-scrollbar scroll-smooth"
+              >
                 {availableTabs.map(tab => {
                   const IconComp = tab.icon;
                   const isSelected = activeAdminTab === tab.id;
                   const isAmberBadge = tab.badgeColor === 'amber';
+                  const isCyanBadge = tab.badgeColor === 'cyan';
 
                   return (
                     <button
                       key={tab.id}
+                      data-tab-id={tab.id}
                       onClick={() => setActiveAdminTab(tab.id)}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 ${
+                      className={`flex items-center gap-1.5 sm:gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex-shrink-0 border ${
                         isSelected
-                          ? 'bg-[#00C2FF] text-[#0A0A0A] shadow-md shadow-[#00C2FF]/20'
-                          : 'text-gray-400 hover:text-white hover:bg-[#0A0A0A]'
+                          ? 'bg-gradient-to-r from-[#00C2FF] to-[#0099FF] text-[#0A0A0A] border-[#00C2FF] shadow-lg shadow-[#00C2FF]/25 font-black'
+                          : 'text-gray-300 hover:text-white hover:bg-[#1E3A5F]/40 border-transparent hover:border-[#1E3A5F]'
                       }`}
                     >
-                      <IconComp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                      <span>{tab.label}</span>
+                      <IconComp className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${isSelected ? 'text-[#0A0A0A]' : 'text-gray-400'}`} />
+                      {/* Responsive Labels: Full on 2xl screens, concise on laptops/smaller */}
+                      <span className="hidden 2xl:inline">{tab.label}</span>
+                      <span className="2xl:hidden">{tab.shortLabel || tab.label}</span>
+
                       {tab.badge && (
-                        <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                          isAmberBadge 
-                            ? (isSelected ? 'bg-amber-900 text-amber-200' : 'bg-amber-500 text-slate-950 font-black animate-pulse')
-                            : (isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#0A0A0A] text-[#00E5A0]')
+                        <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
+                          isAmberBadge
+                            ? (isSelected ? 'bg-amber-950 text-amber-200' : 'bg-amber-500 text-slate-950 font-black animate-pulse')
+                            : isCyanBadge
+                            ? (isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#00C2FF] text-[#0A0A0A] font-black')
+                            : (isSelected ? 'bg-[#0A0A0A] text-[#00C2FF]' : 'bg-[#0A0A0A] text-[#00E5A0] border border-[#1E3A5F]')
                         }`}>
                           {tab.badge}
                         </span>
@@ -397,6 +485,23 @@ export default function App() {
                   );
                 })}
               </div>
+
+              {/* Right fade gradient when scrollable */}
+              {canScrollRight && (
+                <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-[#0A0A0A] to-transparent pointer-events-none z-10 rounded-r-2xl" />
+              )}
+
+              {/* Right scroll chevron */}
+              {canScrollRight && (
+                <button
+                  type="button"
+                  onClick={() => handleScrollTabs('right')}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-[#111827] border border-[#00C2FF]/60 text-[#00C2FF] flex items-center justify-center shadow-lg shadow-[#00C2FF]/20 hover:bg-[#00C2FF] hover:text-[#0A0A0A] transition cursor-pointer"
+                  title="Scroll tabs right"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             {/* Top KPI Stat Cards */}

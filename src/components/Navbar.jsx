@@ -117,7 +117,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#1E3A5F] bg-[#0A0A0A]/95 backdrop-blur-md">
-      <div className="w-full px-4 sm:px-6 lg:px-8 xl:px-12 h-16 flex items-center justify-between gap-3 sm:gap-4">
+      <div className="w-full px-3 sm:px-5 lg:px-6 xl:px-8 h-16 flex items-center justify-between gap-2 sm:gap-3">
         
         {/* LEFT: BRAND LOGO */}
         <div className="flex items-center gap-6">
@@ -240,7 +240,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
         </div>
 
         {/* RIGHT: CONTROLS, AUTO-SYNC PILL & AUTH */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           
           {/* DESKTOP NOTIFICATIONS BUTTON (GLOBAL ACROSS ALL PORTALS) */}
           <NotificationButton />
@@ -257,7 +257,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
               title="Open ROS Real-Time Chat"
             >
               <MessageSquare className="w-3.5 h-3.5 text-[#00C2FF]" />
-              <span className="hidden sm:inline">Chat</span>
+              <span className="hidden md:inline">Chat</span>
               {chatUnreadCount > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-[#00C2FF] text-[#0A0A0A] font-black text-[10px]">
                   {chatUnreadCount}
@@ -279,7 +279,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isAutoSyncing ? 'bg-[#00C2FF]' : 'bg-[#00E5A0]'} opacity-75`} />
               <span className={`relative inline-flex rounded-full h-2 w-2 ${isAutoSyncing ? 'bg-[#00C2FF]' : 'bg-[#00E5A0]'}`} />
             </span>
-            <span className="hidden sm:inline text-[#7B7B7B] text-[11px]">
+            <span className="hidden xl:inline text-[#7B7B7B] text-[11px]">
               {isAutoSyncing ? 'Syncing...' : 'Auto-Sync:'}
             </span>
             <span className="text-[11px] font-semibold text-[#00E5A0] group-hover:text-white transition-colors">
@@ -314,7 +314,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
                 ? 'text-[#00E5A0]' 
                 : 'text-gray-400'
             }`} />
-            <span className="hidden sm:inline text-[11px] font-semibold">
+            <span className="hidden lg:inline text-[11px] font-semibold">
               {sheetsSyncStatus === 'out_of_sync' 
                 ? 'Sheets: Out of Sync' 
                 : isGoogleSheetsConfigured() 
@@ -335,7 +335,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
             title="Unsubscribe Hub: Copy sequence links & view real-time unsubscribed contacts log"
           >
             <Link2 className="w-3.5 h-3.5 text-[#00C2FF] group-hover:text-rose-400 transition-colors" />
-            <span className="hidden sm:inline text-[11px] font-semibold text-gray-300 group-hover:text-white">
+            <span className="hidden xl:inline text-[11px] font-semibold text-gray-300 group-hover:text-white">
               Unsub Hub
             </span>
             {linkUnsubsTotal > 0 && (
@@ -361,7 +361,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
           {isAdmin && (
             <button
               onClick={onOpenWorkspaceSettings}
-              className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#111827] hover:bg-[#1E3A5F] border border-[#1E3A5F] text-xs font-semibold text-gray-300 hover:text-white transition-all cursor-pointer"
+              className="hidden 2xl:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#111827] hover:bg-[#1E3A5F] border border-[#1E3A5F] text-xs font-semibold text-gray-300 hover:text-white transition-all cursor-pointer"
               title="Edit Client Username, Password, and Campaign Settings"
             >
               <KeyRound className="w-3.5 h-3.5 text-[#00E5A0]" />
@@ -414,7 +414,7 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
               ) : (
                 <>
                   <Share2 className="w-3.5 h-3.5 text-[#00C2FF]" />
-                  <span className="hidden sm:inline">Share Client Access</span>
+                  <span className="hidden xl:inline">Share Client Access</span>
                 </>
               )}
             </button>
