@@ -110,7 +110,7 @@ function buildHarness(srcRoot) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'ros-sync-sim-'));
   const files = ['services/db.js', 'services/storage.js', 'services/googleSheetsService.js', 'utils/helpers.js'];
   fs.writeFileSync(path.join(out, 'fakeSupabase.mjs'),
-    'export function createClient() { return globalThis.__ROS_FAKE_SUPABASE__; }\n');
+    'export function createClient(url, key) { globalThis.__ROS_CLIENT_ARGS__ = { url, key }; return globalThis.__ROS_FAKE_SUPABASE__; }\n');
   for (const rel of files) {
     let code = fs.readFileSync(path.join(srcRoot, 'src', rel), 'utf8');
     const depth = rel.split('/').length - 1;
@@ -127,6 +127,10 @@ function buildHarness(srcRoot) {
 }
 
 const harness = buildHarness(ROOT);
+// A browser that was once pointed at an older project still has those credentials saved
+const STALE_URL = 'https://oldprojectoldprojectx.supabase.co';
+localStorage.setItem('ros_supabase_url_v2', STALE_URL);
+localStorage.setItem('ros_supabase_key_v2', 'eyJhbGciOiJIUzI1NiJ9.eyJyZWYiOiJvbGRwcm9qZWN0In0.stalestalestalestalestalestalestalestalestale');
 const db = await import(pathToFileURL(path.join(harness, 'services', 'db.mjs')).href);
 const storage = await import(pathToFileURL(path.join(harness, 'services', 'storage.mjs')).href);
 const baseline = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'data', 'crewlixAuthoritative20113.json'), 'utf8'));
@@ -204,6 +208,19 @@ const live = process.argv.includes('--live-seed');
 
 const seeded = live ? await seedFromLive() : await seedSynthetic(54408);
 console.log(`Seeded cloud (${live ? 'live read-only snapshot' : 'synthetic'}): ${seeded} leads, ${[...table.keys()].filter(k => k.startsWith('__ros_chunk__')).length} partition rows\n`);
+
+// --- Stale per-browser credentials must never redirect the portal
+if (db.SUPABASE_PROJECT_REF) {
+  console.log('--- Locked Supabase project');
+  db.getSupabaseClient();
+  const used = globalThis.__ROS_CLIENT_ARGS__ || {};
+  check('Client ignores credentials saved for an older project', used.url === `https://${db.SUPABASE_PROJECT_REF}.supabase.co`, used.url);
+  check('Stale saved credentials are purged from the browser', localStorage.getItem('ros_supabase_url_v2') === null && localStorage.getItem('ros_supabase_key_v2') === null);
+  check('Settings modal cannot save a different project', db.saveSupabaseConfig(STALE_URL, 'eyJx.eyJy.zzz') === false && db.getSupabaseConfig().url === used.url);
+  const oldCache = { cloudSyncedAt: iso(T0 - HOUR), cloudSyncedProject: 'oldprojectoldprojectx' };
+  check('A sync marker from another project is not trusted', db.localOnlyCutoffFor(oldCache, iso(T0)) === new Date(iso(T0)).getTime());
+  console.log('');
+}
 
 // --- Device A boots fresh and pulls everything
 let deviceA = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));

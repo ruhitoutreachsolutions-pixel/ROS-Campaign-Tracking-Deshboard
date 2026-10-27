@@ -9,11 +9,28 @@ import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 const DEFAULT_SUPABASE_URL = 'https://efpywnwavldrycjspdel.supabase.co';
 const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmcHl3bndhdmxkcnljanNwZGVsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMzE4MDEsImV4cCI6MjEwODYwNzgwMX0.i0wlV3E3CiLL9uZ5JCVr5hfYnkwywhWUCvjDp5zcz0s';
 
-const ENV_SUPABASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
-const ENV_SUPABASE_ANON_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
+// The project is locked: every device, browser and build uses exactly this database. Credentials
+// saved in a browser's localStorage (or VITE_SUPABASE_* build env) used to override it, so a device
+// that had once been pointed at an older project kept reading that project's stale leads.
+export const SUPABASE_PROJECT_REF = 'efpywnwavldrycjspdel';
 
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
+const LEGACY_SUPABASE_STORAGE_KEYS = [STORAGE_KEY_SUPABASE_URL, STORAGE_KEY_SUPABASE_KEY, 'ros_supabase_url', 'ros_supabase_key'];
+
+// Removes any per-browser Supabase override so it can never point this device elsewhere again
+function purgeSavedSupabaseOverrides() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    LEGACY_SUPABASE_STORAGE_KEYS.forEach(k => {
+      const v = localStorage.getItem(k);
+      if (v !== null && v.trim() !== DEFAULT_SUPABASE_URL && v.trim() !== DEFAULT_SUPABASE_ANON_KEY) {
+        console.log(`[Supabase] Removed stale saved credential "${k}"; using project ${SUPABASE_PROJECT_REF}`);
+      }
+      if (v !== null) localStorage.removeItem(k);
+    });
+  } catch (e) {}
+}
 export const SYSTEM_META_ID = '__ros_system_metadata__';
 export const DNC_REGISTRY_ID = '__ros_dnc_registry_v1__';
 export const CHUNK_SIZE = 3000;
@@ -244,29 +261,9 @@ export function isValidSupabaseKey(key) {
 
 // 1. Get active Supabase client (singleton cached for stable realtime connection)
 export function getSupabaseClient() {
-  let savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
-  let savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
-
-  // Auto-Migration Guard: If localStorage holds any old deprecated project, purge it so all clients upgrade cleanly
-  if (savedUrl && (savedUrl.includes('dyqcthbetwenvctjvfim') || savedUrl.includes('kmjqbctguwighqwezwq'))) {
-    console.log('Migrating device to authoritative Crewlix UK Ltd Supabase database...');
-    try {
-      localStorage.removeItem(STORAGE_KEY_SUPABASE_URL);
-      localStorage.removeItem(STORAGE_KEY_SUPABASE_KEY);
-      savedUrl = null;
-      savedKey = null;
-    } catch (e) {}
-  }
-  
-  // Guard: if savedKey is invalid (e.g. autofilled browser password), purge it and fallback to authoritative anon key
-  const validSavedKey = isValidSupabaseKey(savedKey) ? savedKey.trim() : null;
-  if (savedKey && !validSavedKey && typeof localStorage !== 'undefined') {
-    console.warn('Purged invalid Supabase API key from localStorage');
-    try { localStorage.removeItem(STORAGE_KEY_SUPABASE_KEY); } catch (e) {}
-  }
-
-  const url = (savedUrl && savedUrl.startsWith('http')) ? savedUrl.trim() : (ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL);
-  const key = validSavedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+  purgeSavedSupabaseOverrides();
+  const url = DEFAULT_SUPABASE_URL;
+  const key = DEFAULT_SUPABASE_ANON_KEY;
 
   if (url && key && url.startsWith('http')) {
     const clientKey = `${url.trim()}___${key.trim()}`;
@@ -291,26 +288,16 @@ export function getSupabaseClient() {
   return null;
 }
 
+// Kept for the settings modal: never stores anything (the project is locked). Returns true only for
+// the authoritative credentials, so a different project can't be connected from any browser.
 export function saveSupabaseConfig(url, key) {
-  if (url && key && typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORAGE_KEY_SUPABASE_URL, url.trim());
-    localStorage.setItem(STORAGE_KEY_SUPABASE_KEY, key.trim());
-    return true;
-  }
-  return false;
+  purgeSavedSupabaseOverrides();
+  return String(url || '').trim().replace(/\/+$/, '') === DEFAULT_SUPABASE_URL &&
+    String(key || '').trim() === DEFAULT_SUPABASE_ANON_KEY;
 }
 
 export function getSupabaseConfig() {
-  let savedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_URL) : null;
-  let savedKey = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_SUPABASE_KEY) : null;
-  if (savedUrl && (savedUrl.includes('dyqcthbetwenvctjvfim') || savedUrl.includes('kmjqbctguwighqwezwq'))) {
-    savedUrl = null;
-    savedKey = null;
-  }
-  return {
-    url: savedUrl || ENV_SUPABASE_URL || DEFAULT_SUPABASE_URL,
-    key: savedKey || ENV_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY
-  };
+  return { url: DEFAULT_SUPABASE_URL, key: DEFAULT_SUPABASE_ANON_KEY, locked: true };
 }
 
 export function isCloudDatabaseConnected() {
@@ -499,7 +486,8 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
           })(),
           createdAt: item.created_at || new Date().toISOString().split('T')[0],
           updatedAt: item.updated_at || item.created_at || new Date().toISOString(),
-          cloudSyncedAt
+          cloudSyncedAt,
+          cloudSyncedProject: SUPABASE_PROJECT_REF
         };
       }));
 
@@ -528,9 +516,10 @@ export function getLastCloudFetchOk() {
 
 // Cutoff for mergeWorkspaceLeads' localOnlyCutoff: the cloud version this device last synced with.
 // Local leads newer than that may be pending uploads; older ones missing from the cloud were deleted.
-// A device that never recorded a sync (pre-fix cache) defers to the cloud copy entirely.
+// A device that never recorded a sync with THIS project (pre-fix cache, or a cache built against an
+// older Supabase project) defers to the cloud copy entirely.
 export function localOnlyCutoffFor(localWs, cloudUpdatedAt) {
-  const synced = new Date(localWs?.cloudSyncedAt || 0).getTime();
+  const synced = localWs?.cloudSyncedProject === SUPABASE_PROJECT_REF ? new Date(localWs?.cloudSyncedAt || 0).getTime() : 0;
   if (Number.isFinite(synced) && synced > 0) return synced;
   const cloud = new Date(cloudUpdatedAt || 0).getTime();
   return Number.isFinite(cloud) ? cloud : 0;

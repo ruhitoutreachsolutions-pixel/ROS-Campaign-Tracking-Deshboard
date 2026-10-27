@@ -33,6 +33,7 @@ import {
   getLastCloudError,
   getLastCloudFetchOk,
   localOnlyCutoffFor,
+  SUPABASE_PROJECT_REF,
   fetchSheetsConfigFromCloud,
   saveSheetsConfigToCloud,
   fetchFullCloudWorkspaceRow
@@ -855,6 +856,7 @@ export function WorkspaceProvider({ children }) {
         leads: mergedLeads,
         deletedLeadIds,
         cloudSyncedAt,
+        cloudSyncedProject: SUPABASE_PROJECT_REF,
         activityLog: Array.isArray(cloudRow.activity_log)
           ? mergeActivityLogs(w.activityLog || [], cloudRow.activity_log)
           : (w.activityLog || []),
@@ -1142,6 +1144,7 @@ export function WorkspaceProvider({ children }) {
                 ...(isCloudAuth ? cloudWs : localWs),
                 leads: mergedLeads,
                 cloudSyncedAt,
+                cloudSyncedProject: SUPABASE_PROJECT_REF,
                 deletedLeadIds: capTombstones(deletedLeadIds, localWs.id),
                 activityLog: isCloudAuth
                   ? (cloudWs.activityLog?.length ? cloudWs.activityLog : localWs.activityLog || [])

@@ -62,8 +62,8 @@ export default function CloudSyncModal({ isOpen, onClose, initialTab = 'supabase
 
   // Supabase state
   const existingConfig = getSupabaseConfig();
-  const [supabaseUrl, setSupabaseUrl] = useState(existingConfig.url || '');
-  const [supabaseKey, setSupabaseKey] = useState(existingConfig.key || '');
+  const [supabaseUrl] = useState(existingConfig.url || '');
+  const [supabaseKey] = useState(existingConfig.key || '');
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -179,8 +179,12 @@ create policy "Allow all access" on workspaces for all using (true) with check (
       return;
     }
 
+    // The project is locked in db.js; this only clears any stale per-browser override
+    if (!saveSupabaseConfig(supabaseUrl, supabaseKey)) {
+      setErrorMessage('This portal is locked to the Crewlix UK Ltd Supabase project and cannot be pointed at another database.');
+      return;
+    }
     setIsSaving(true);
-    saveSupabaseConfig(supabaseUrl, supabaseKey);
 
     try {
       const ok = await saveWorkspacesToCloud(workspaces);
@@ -487,7 +491,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#00C2FF] uppercase tracking-wider">
                     <Cloud className="w-3.5 h-3.5" />
-                    <span>Supabase Cloud Connection (Free Tier)</span>
+                    <span>Supabase Cloud Connection (Locked · same on every device)</span>
                   </div>
                   <a
                     href="https://supabase.com/dashboard"
@@ -506,8 +510,8 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                   <input
                     type="url"
                     required
+                    readOnly
                     value={supabaseUrl}
-                    onChange={(e) => setSupabaseUrl(e.target.value)}
                     placeholder="https://xyzabcdefghijklm.supabase.co"
                     className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] focus:border-[#00C2FF] rounded-lg text-white text-xs font-mono outline-none"
                   />
@@ -522,8 +526,8 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                     required
                     autoComplete="new-password"
                     spellCheck={false}
+                    readOnly
                     value={supabaseKey}
-                    onChange={(e) => setSupabaseKey(e.target.value)}
                     placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                     className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] focus:border-[#00C2FF] rounded-lg text-white text-xs font-mono outline-none"
                   />
@@ -554,7 +558,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                   disabled={isSaving}
                   className="w-full py-2.5 rounded-xl bg-[#00C2FF] hover:bg-[#00C2FF]/90 text-[#0A0A0A] text-xs font-bold transition-all shadow cursor-pointer mt-2"
                 >
-                  {isSaving ? 'Connecting & Uploading Leads...' : 'Connect Supabase & Sync Leads to Cloud'}
+                  {isSaving ? 'Syncing Leads...' : 'Sync Leads to Cloud'}
                 </button>
               </div>
             </form>
