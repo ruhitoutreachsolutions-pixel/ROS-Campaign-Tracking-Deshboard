@@ -732,9 +732,14 @@ export function WorkspaceProvider({ children }) {
       setWorkspaces(prev => {
         const next = prev.map(w => {
           if (w.id === targetWs.id) {
+            const merged = mergeWorkspaceLeads(w.leads || [], cleanLeads, {
+              workspaceId: targetWs.id,
+              localWsUpdatedAt: w.updatedAt,
+              cloudWsUpdatedAt: new Date().toISOString()
+            });
             return {
               ...w,
-              leads: cleanLeads,
+              leads: merged,
               updatedAt: new Date().toISOString()
             };
           }
@@ -1040,16 +1045,16 @@ export function WorkspaceProvider({ children }) {
         });
         if (!isMounted) return;
 
-        // Ensure device gets all 51,452 leads: If Supabase returns empty/stale or <50k leads, auto-hydrate from Google Sheets!
+        // Ensure device gets all leads: If Supabase returns empty/stale or <50k leads, auto-hydrate from Google Sheets!
         const cloudCrewlix = Array.isArray(cloudData) ? cloudData.find(c => c && c.id === 'ws_crewlixukltd') : null;
         const cloudLeadCount = cloudCrewlix?.leads?.length || 0;
 
         if (!cloudCrewlix || cloudLeadCount < 50000) {
           const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
           if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
-            console.log('[DualCloudFailover] Device lead count is below 50k, auto-hydrating all 51,452 leads from Google Sheets...');
+            console.log('[DualCloudFailover] Device lead count is below 50k, auto-hydrating all leads from Google Sheets...');
             await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
-            return;
+            // Do not abort with return: allow merging with any cloud chunks
           }
         }
 
@@ -1091,7 +1096,9 @@ export function WorkspaceProvider({ children }) {
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
 
-              const isCloudAuth = cloudTime >= localTime && cloudSent >= localSent;
+              const isCloudAuth = (cloudTime >= localTime && cloudSent >= localSent) || 
+                                  (cloudWs.leads?.length >= (localWs.leads?.length || 0) && cloudTime >= localTime) ||
+                                  ((cloudWs.leads?.length || 0) > (localWs.leads?.length || 0) + 100);
               // Any local lead edited after the cloud's last write cannot be in the cloud yet
               const hasUnsyncedLeadEdits = (localWs.leads || []).some(l => l && tsOf(l.updatedAt) > cloudTime);
 

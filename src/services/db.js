@@ -73,23 +73,39 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
     if (mainErr) return { data: null, error: mainErr };
     if (!mainRow) return { data: null, error: null };
 
-    // Fetch any partition chunk rows for this workspace (using ilike for robust multi-underscore matching)
-    const { data: chunkRows, error: chunkErr } = await supabase
+    // Fetch chunk IDs list first (lightweight query ~1 KB, avoids 15MB socket truncation)
+    const { data: chunkHeaderRows, error: chunkErr } = await supabase
       .from('workspaces')
-      .select('id, leads')
-      .ilike('id', `%${CHUNK_PREFIX}${wsId}%`);
+      .select('id')
+      .ilike('id', `%${CHUNK_PREFIX}${wsId}%`)
+      .order('id', { ascending: true });
 
     let fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
+    const existingChunkIds = (chunkHeaderRows || []).map(r => r.id);
 
-    if (!chunkErr && Array.isArray(chunkRows) && chunkRows.length > 0) {
-      chunkRows.sort((a, b) => {
-        const idxA = parseInt(a.id.split('__').pop(), 10) || 0;
-        const idxB = parseInt(b.id.split('__').pop(), 10) || 0;
-        return idxA - idxB;
-      });
-      for (const cr of chunkRows) {
-        if (Array.isArray(cr.leads) && cr.leads.length > 0) {
-          fullLeads.push(...cr.leads);
+    if (!chunkErr && Array.isArray(existingChunkIds) && existingChunkIds.length > 0) {
+      // Fetch in safe batches of 4 chunks (~2.5 MB per batch)
+      const BATCH_SIZE = 4;
+      for (let i = 0; i < existingChunkIds.length; i += BATCH_SIZE) {
+        const batchIds = existingChunkIds.slice(i, i + BATCH_SIZE);
+        const { data: batchData, error: batchErr } = await supabase
+          .from('workspaces')
+          .select('id, leads')
+          .in('id', batchIds)
+          .order('id', { ascending: true });
+
+        if (!batchErr && Array.isArray(batchData)) {
+          // Sort numerically by partition index
+          batchData.sort((a, b) => {
+            const idxA = parseInt(a.id.split('__').pop(), 10) || 0;
+            const idxB = parseInt(b.id.split('__').pop(), 10) || 0;
+            return idxA - idxB;
+          });
+          for (const cr of batchData) {
+            if (Array.isArray(cr.leads) && cr.leads.length > 0) {
+              fullLeads.push(...cr.leads);
+            }
+          }
         }
       }
     }
@@ -97,7 +113,8 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId) {
     return {
       data: {
         ...mainRow,
-        leads: fullLeads
+        leads: fullLeads,
+        existingChunkIds
       },
       error: null
     };
@@ -642,6 +659,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     const currentHashes = chunks.map(computeChunkHash);
     const prevHashes = Array.isArray(existingRow?.sequence_config?.chunkHashes) ? existingRow.sequence_config.chunkHashes : [];
     const prevChunkCount = Number(existingRow?.sequence_config?.chunkCount) || 1;
+    const existingChunkIds = new Set(existingRow?.existingChunkIds || []);
 
     // 🛡️ ANTI-DOWNGRADE SHIELD:
     // If Cloud currently has 50k+ leads (prevChunkCount >= 17), and local device is attempting
@@ -709,13 +727,14 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       return false;
     }
 
-    // Upsert any subsequent partition chunks (1 .. N-1) with delta skip
+    // Upsert any subsequent partition chunks (1 .. N-1) with bulletproof delta skip
     for (let k = 1; k < chunks.length; k++) {
-      if (prevHashes[k] && prevHashes[k] === currentHashes[k]) {
-        // Delta optimization: chunk content identical, skip upload
+      const chunkRowId = `${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`;
+      // DELTA OPTIMIZATION GUARD:
+      // Only skip upload if the chunk row ALREADY EXISTS in the cloud table AND its hash is identical!
+      if (existingChunkIds.has(chunkRowId) && prevHashes[k] && prevHashes[k] === currentHashes[k]) {
         continue;
       }
-      const chunkRowId = `${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`;
       const chunkPayload = {
         id: chunkRowId,
         name: `${ws.name || ws.id} (Partition ${k})`,
