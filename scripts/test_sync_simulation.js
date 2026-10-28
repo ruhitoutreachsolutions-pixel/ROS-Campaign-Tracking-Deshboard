@@ -476,6 +476,13 @@ check('Only the partition holding the edited lead was rewritten', rewritten.leng
 const afterEdit = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
 check('No lead id is stored twice', afterEdit.data.leads.length === new Set(afterEdit.data.leads.map(l => l.id)).size);
 
+console.log('\n--- A save with nothing new writes nothing');
+const inStep = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+const rowsBefore = new Map([...table.entries()].map(([k, v]) => [k, v.updated_at]));
+check('Save of an unchanged copy succeeds', await db.saveWorkspacesToCloud([{ ...inStep, updatedAt: iso(Date.now()) }], WS_ID), db.getLastCloudError() || '');
+check('...without committing or touching any row (other portals have nothing to pull)',
+  db.getLastSaveWasNoop() && [...rowsBefore.entries()].every(([k, t]) => table.get(k)?.updated_at === t));
+
 check('Both portals show the same Sent count', sentCount(v1.leads) === sentCount(v2.leads) && sentCount(v1.leads) === both.size, `${sentCount(v1.leads)} / ${sentCount(v2.leads)} / cloud ${both.size}`);
 
 fs.rmSync(harness, { recursive: true, force: true });

@@ -91,6 +91,11 @@ let lastSaveDeferred = false;
 export function getLastSaveDeferred() {
   return lastSaveDeferred;
 }
+// The last save found the cloud already identical and wrote nothing
+let lastSaveWasNoop = false;
+export function getLastSaveWasNoop() {
+  return lastSaveWasNoop;
+}
 
 // Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together.
 // Returns an error unless every partition loaded, every partition is the version the main row
@@ -908,6 +913,34 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       updated_at: nowIso
     };
 
+    // Nothing to write: the cloud already holds exactly this. Committing anyway bumped updated_at,
+    // which made every other portal pull and (when it believed it had changes) save again, so
+    // portals traded identical commits every few seconds.
+    if (existingRow && !unionMerge) {
+      const cfg = existingRow.sequence_config || {};
+      const sameLeads = chunks.length === Number(cfg.chunkCount) &&
+        Array.isArray(cfg.chunkHashes) && currentHashes.every((h, k) => cfg.chunkHashes[k] === h) &&
+        currentHashes.every((h, k) => k === 0 || storedChunkHashes[`${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`] === h);
+      const comparable = (row) => JSON.stringify([
+        row.name, row.client_name, row.client_email, row.campaign_name, row.active_sending_account,
+        row.sending_accounts, row.client_credentials,
+        (row.activity_log || []).map(a => a && (a.id || a.timestamp)),
+        Object.keys(row.sequence_config || {}).filter(k => row.sequence_config[k] !== undefined).sort().map(k => [k, row.sequence_config[k]])
+      ]);
+      if (sameLeads && comparable(payload) === comparable(existingRow)) {
+        lastSaveWasNoop = true;
+        lastSavedRows.set(ws.id, {
+          id: ws.id,
+          leads: leadsToSave,
+          activity_log: existingRow.activity_log || [],
+          sequence_config: cfg,
+          updated_at: existingRow.updated_at,
+          savedLocalUpdatedAt: ws.updatedAt
+        });
+        return true;
+      }
+    }
+
     // Partitions 1..N-1 go up BEFORE the main row: the main row (with its chunkHashes) is the
     // commit point, so readers never see a committed copy whose partitions are still old. A
     // partition is skipped only when the row in the table already holds exactly this content.
@@ -1025,6 +1058,7 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
   const deletedIds = getLocalDeletedIds();
   lastCloudErrorMsg = null;
   lastSaveDeferred = false;
+  lastSaveWasNoop = false;
 
   let hasError = false;
   for (const ws of workspaces) {

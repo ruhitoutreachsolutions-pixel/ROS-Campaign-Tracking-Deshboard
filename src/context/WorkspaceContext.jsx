@@ -34,6 +34,7 @@ import {
   getLastCloudFetchOk,
   getLastCloudFetchDamaged,
   getLastSaveDeferred,
+  getLastSaveWasNoop,
   localOnlyCutoffFor,
   SUPABASE_PROJECT_REF,
   fetchSheetsConfigFromCloud,
@@ -897,8 +898,10 @@ export function WorkspaceProvider({ children }) {
     if (ok && ws) {
       cleanStampRef.current[targetId] = Math.max(cleanStampRef.current[targetId] || 0, tsOf(ws.updatedAt));
       const saved = getLastSavedRow(targetId);
+      const wroteNothing = getLastSaveWasNoop();
       if (saved) applyCloudRowToState(targetId, saved, { fromOwnSave: true });
-      broadcastRealtimeEvent('WORKSPACE_SAVED', {
+      // The cloud already held all of it: nothing for other portals to pull
+      if (!wroteNothing) broadcastRealtimeEvent('WORKSPACE_SAVED', {
         workspaceId: targetId,
         updatedAt: saved?.updated_at || new Date().toISOString()
       }).catch(() => {});
