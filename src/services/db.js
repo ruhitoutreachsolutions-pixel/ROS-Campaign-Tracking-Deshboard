@@ -80,6 +80,17 @@ export function computeChunkHash(leads) {
 // when its updated_at or content hash changed, so a save or poll usually transfers the main row plus
 // the one or two partitions that actually changed instead of all ~15 MB.
 const partitionCache = new Map();
+// An out-of-step partition newer than the last commit counts as another portal's save in progress
+// for this long; after that its writer is presumed dead and the partition is repaired.
+const STUCK_PARTITION_MS = 3 * 60 * 1000;
+// Partitions this device uploaded for a save it hasn't committed yet (row id -> content hash)
+const ownUncommittedPartitions = new Map();
+// The last save failed only because other portals were saving at the same time (it retries on
+// its own, so the portal doesn't need to warn about it)
+let lastSaveDeferred = false;
+export function getLastSaveDeferred() {
+  return lastSaveDeferred;
+}
 
 // Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together.
 // Returns an error unless every partition loaded, every partition is the version the main row
@@ -97,6 +108,7 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     let chunkLeads = new Map();
     let missingChunks = [];
     let staleChunks = [];
+    let stuckChunks = [];
     let expectedChunkCount = 0;
     const chunkIndexOf = (id) => parseInt(String(id).split('__').pop(), 10) || 0;
     const ownPrefix = `${CHUNK_PREFIX}${wsId}__`;
@@ -178,6 +190,14 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
         const have = headerById.get(id)?.sequence_config?.hash;
         return Boolean(want && have && want !== have);
       });
+      // Out of step and NOT a save in progress: written before the main row's last commit (left by
+      // a save that lost a race and never retried), or untouched for minutes (its writer died).
+      // Only these need repairing; an in-progress save commits on its own.
+      const mainTime = new Date(mainRow.updated_at || 0).getTime();
+      stuckChunks = staleChunks.filter(id => {
+        const t = new Date(headerById.get(id)?.updated_at || 0).getTime();
+        return t < mainTime || Date.now() - t > STUCK_PARTITION_MS;
+      });
       if (staleChunks.length === 0) break;
     }
 
@@ -191,8 +211,9 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     const incomplete = missingChunks.length > 0 || staleChunks.length > 0 || missingPartitions || (expectedTotal !== null && fullLeads.length !== expectedTotal);
     if (incomplete && !options.allowIncomplete) {
       const err = new Error(`Incomplete cloud copy of ${wsId}: got ${fullLeads.length}${expectedTotal !== null ? ` of ${expectedTotal}` : ''} leads (${missingChunks.length} partition(s) failed to load, ${staleChunks.length} out of step)`);
-      // Damaged (not just slow): a device holding the full set should rebuild it
-      err.cloudDamaged = missingChunks.length === 0;
+      // Damaged (not just slow, and not another portal's save still uploading): a device
+      // holding the full set should rebuild it
+      err.cloudDamaged = missingChunks.length === 0 && staleChunks.length === stuckChunks.length;
       return { data: null, error: err };
     }
 
@@ -212,6 +233,8 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
         // from the table (the cloud copy itself is damaged and needs repairing from a device)
         failedChunkIds: missingChunks,
         staleChunkIds: staleChunks,
+        // Out-of-step partitions of a save that is still uploading (it will commit or retry itself)
+        inProgressChunkIds: staleChunks.filter(id => !stuckChunks.includes(id)),
         partitionsMissing: missingPartitions
       },
       error: null
@@ -394,6 +417,7 @@ function getLocalDeletedIds() {
 export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWorkspaceId = null, mergeOptions = {}) {
   const unionSentEmailsFor = Array.isArray(mergeOptions.unionSentEmailsFor) ? mergeOptions.unionSentEmailsFor : [];
   lastCloudFetchOk = false;
+  lastCloudFetchDamaged = false;
   const safeFallback = Array.isArray(fallbackWorkspaces) 
     ? fallbackWorkspaces.filter(w => w && w.id === PRIMARY_WORKSPACE_ID) 
     : [];
@@ -570,9 +594,17 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
   } catch (err) {
     console.warn('Cloud database fetch failed:', err);
     lastCloudErrorMsg = err.message || String(err);
+    lastCloudFetchDamaged = !!err?.cloudDamaged;
   }
 
   return safeFallback;
+}
+
+// Whether the most recent failed fetchWorkspacesFromCloud found the cloud copy damaged (as opposed
+// to unreachable, slow, or mid-save by another portal)
+let lastCloudFetchDamaged = false;
+export function getLastCloudFetchDamaged() {
+  return lastCloudFetchDamaged;
 }
 
 let lastCloudErrorMsg = null;
@@ -723,6 +755,20 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       lastCloudErrorMsg = `Could not read ${existingRow.failedChunkIds.length} cloud partition(s) of ${ws.id}; will retry`;
       return false;
     }
+    // Another portal's save is uploading partitions right now: wait for it to commit instead of
+    // racing it (racing used to make every portal re-save in turn, a storm of full writes).
+    // Partitions this device itself wrote for a save that lost the race don't count.
+    const othersInProgress = (existingRow?.inProgressChunkIds || [])
+      .filter(id => ownUncommittedPartitions.get(id) !== existingRow.storedChunkHashes?.[id]);
+    if (othersInProgress.length > 0) {
+      if (attempt < MAX_SAVE_ATTEMPTS) {
+        await new Promise(r => setTimeout(r, 2500 + Math.random() * 2000));
+        continue;
+      }
+      lastSaveDeferred = true;
+      lastCloudErrorMsg = `Another portal is saving ${ws.id}; will retry`;
+      return false;
+    }
     // Partitions out of step with the main row: another save was interrupted (or lost a race)
     // between writing partitions and committing. Their content is still a merged superset, so
     // merge as a union and commit a consistent copy, without flagging a rebuild.
@@ -769,6 +815,29 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       .map(l => sanitizeLeadForWorkspace(l, ws.id))
       .filter(Boolean);
     leadsToSave = refillFromBaseline(leadsToSave, ws.id, mergedDeletedSet);
+
+    // Keep the order the cloud already stores (new leads go at the end). Each device holds its
+    // leads in its own order, and saving in that order rewrote nearly every partition on every
+    // save: slow, big uploads that kept other portals' reads out of step.
+    if (Array.isArray(existingRow?.leads) && existingRow.leads.length > 0) {
+      const cloudPos = new Map();
+      existingRow.leads.forEach((l, i) => { if (l && l.id && !cloudPos.has(String(l.id))) cloudPos.set(String(l.id), i); });
+      const rank = (l) => cloudPos.has(String(l.id)) ? cloudPos.get(String(l.id)) : Number.MAX_SAFE_INTEGER;
+      leadsToSave = leadsToSave
+        .map((l, i) => ({ l, i }))
+        .sort((a, b) => (rank(a.l) - rank(b.l)) || (a.i - b.i))
+        .map(x => x.l);
+    }
+
+    // One row per lead id, whatever the inputs held
+    const savedIds = new Set();
+    leadsToSave = leadsToSave.filter(l => {
+      const id = String(l.id || '');
+      if (!id) return true;
+      if (savedIds.has(id)) return false;
+      savedIds.add(id);
+      return true;
+    });
 
     // Compact all leads to strip redundant empty strings / defaults
     const compactedLeads = leadsToSave.map(compactLeadForCloud).filter(Boolean);
@@ -872,6 +941,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
           .upsert(chunkPayload, { onConflict: 'id' }));
         if (!chunkSaveErr) break;
       }
+      if (!chunkSaveErr) ownUncommittedPartitions.set(chunkRowId, currentHashes[k]);
       if (chunkSaveErr) {
         console.warn(`Error uploading chunk ${k} for ${ws.id}:`, chunkSaveErr);
         lastCloudErrorMsg = `Could not upload partition ${k} of ${ws.id}: ${chunkSaveErr.message || chunkSaveErr}`;
@@ -910,9 +980,14 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
         await new Promise(r => setTimeout(r, 150 * attempt + Math.random() * 200));
         continue;
       }
+      lastSaveDeferred = true;
       lastCloudErrorMsg = `Workspace ${ws.id} kept changing in the cloud during save; will retry on next sync.`;
       return false;
     }
+    // Committed: every partition written above is now part of the cloud copy
+    Array.from(ownUncommittedPartitions.keys())
+      .filter(id => id.startsWith(`${CHUNK_PREFIX}${ws.id}__`))
+      .forEach(id => ownUncommittedPartitions.delete(id));
 
     // Clean up partitions past the new chunk count (readers ignore them, but they'd linger forever)
     const staleChunkIds = Array.from(existingChunkIds).filter(id => {
@@ -949,6 +1024,7 @@ export async function saveWorkspacesToCloud(workspaces, targetWorkspaceId = null
 
   const deletedIds = getLocalDeletedIds();
   lastCloudErrorMsg = null;
+  lastSaveDeferred = false;
 
   let hasError = false;
   for (const ws of workspaces) {

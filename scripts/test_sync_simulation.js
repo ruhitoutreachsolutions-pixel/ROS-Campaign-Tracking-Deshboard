@@ -415,12 +415,27 @@ stats.chunkWriteFailures.clear();
 check('Retry uploads it', await db.saveWorkspacesToCloud([failer], WS_ID), db.getLastCloudError() || '');
 check('Cloud holds the retried sends', (await cloudSent()) === 610, `${await cloudSent()}`);
 
-console.log('\n--- A save interrupted between partitions and commit');
+console.log('\n--- Another portal\'s save still uploading its partitions');
+const cleanPartition = clone(table.get(failedPartition));
+const commitDuring = table.get(WS_ID).updated_at;
+const uploading = clone(cleanPartition);
+uploading.leads[1] = { ...uploading.leads[1], notes: 'not committed yet', updatedAt: iso(Date.now()) };
+uploading.sequence_config = { ...uploading.sequence_config, hash: 'uploading' };
+uploading.updated_at = iso(Date.now() + 1000);
+table.set(failedPartition, uploading);
+const midSave = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('Readers skip the read but do NOT treat it as damage (no save storm)', !!midSave.error && midSave.error.cloudDamaged === false, String(midSave.error?.message || ''));
+const waiter = markSent(crewlix(await db.fetchWorkspacesFromCloud([failer], WS_ID)) || failer, 25000, 3);
+check('A save waits for the other portal instead of racing it', (await db.saveWorkspacesToCloud([waiter], WS_ID)) === false && db.getLastSaveDeferred() && table.get(WS_ID).updated_at === commitDuring, db.getLastCloudError() || '');
+table.set(failedPartition, cleanPartition); // the other portal's save gave up; its partition is back in step
+check('Once it is done, the waiting save goes through', await db.saveWorkspacesToCloud([waiter], WS_ID), db.getLastCloudError() || '');
+
+console.log('\n--- A save that lost the race and never retried');
 const repairedBefore = table.get(WS_ID).sequence_config.repairedAt;
 const half = clone(table.get(failedPartition));
 half.leads[0] = { ...half.leads[0], notes: 'written by an interrupted save', updatedAt: iso(Date.now()) };
 half.sequence_config = { ...half.sequence_config, hash: 'interrupted' };
-half.updated_at = iso(Date.now());
+half.updated_at = iso(new Date(table.get(WS_ID).updated_at).getTime() - 1000); // before the last commit
 table.set(failedPartition, half);
 const outOfStep = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
 check('Readers notice the partition is out of step with the commit', !!outOfStep.error && outOfStep.error.cloudDamaged === true, String(outOfStep.error?.message || ''));
@@ -449,6 +464,18 @@ const p2Ids = p2.leads.slice(41100, 41175).map(l => l.id);
 check('Both portals\' sends are in the cloud', p1Ids.every(id => both.has(id)) && p2Ids.every(id => both.has(id)), `${both.size} sent leads`);
 const v1 = crewlix(await db.fetchWorkspacesFromCloud([p1], WS_ID));
 const v2 = crewlix(await db.fetchWorkspacesFromCloud([p2], WS_ID));
+console.log('\n--- A small edit rewrites only its own partition');
+const shuffled = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+shuffled.leads.reverse(); // this device holds its leads in a different order
+await tick();
+const edited = markSent(shuffled, 100, 1);
+const stampsBefore = new Map([...table.entries()].filter(([k]) => k.startsWith('__ros_chunk__')).map(([k, v]) => [k, v.updated_at]));
+check('Edit save succeeds', await db.saveWorkspacesToCloud([edited], WS_ID), db.getLastCloudError() || '');
+const rewritten = [...stampsBefore.keys()].filter(k => table.get(k)?.updated_at !== stampsBefore.get(k));
+check('Only the partition holding the edited lead was rewritten', rewritten.length <= 1, `${rewritten.length} partitions rewritten`);
+const afterEdit = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('No lead id is stored twice', afterEdit.data.leads.length === new Set(afterEdit.data.leads.map(l => l.id)).size);
+
 check('Both portals show the same Sent count', sentCount(v1.leads) === sentCount(v2.leads) && sentCount(v1.leads) === both.size, `${sentCount(v1.leads)} / ${sentCount(v2.leads)} / cloud ${both.size}`);
 
 fs.rmSync(harness, { recursive: true, force: true });

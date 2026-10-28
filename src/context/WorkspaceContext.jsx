@@ -32,6 +32,8 @@ import {
   saveWarriorsToSupabase,
   getLastCloudError,
   getLastCloudFetchOk,
+  getLastCloudFetchDamaged,
+  getLastSaveDeferred,
   localOnlyCutoffFor,
   SUPABASE_PROJECT_REF,
   fetchSheetsConfigFromCloud,
@@ -901,6 +903,9 @@ export function WorkspaceProvider({ children }) {
         updatedAt: saved?.updated_at || new Date().toISOString()
       }).catch(() => {});
       delete saveFailureToastRef.current[targetId];
+    } else if (!ok && ws && getLastSaveDeferred()) {
+      // Other portals were saving at the same moment; this one retries on its next cycle
+      console.log(`[CloudSync] ${getLastCloudError() || 'Save deferred'}`);
     } else if (!ok && ws) {
       // Failed saves used to be console-only, so imports/edits looked done but never reached
       // other portals. Changes stay queued locally and retry every 45s; tell the user once.
@@ -1087,9 +1092,9 @@ export function WorkspaceProvider({ children }) {
         // cloud count below 50k, which pulled the older sheet copy back in after legit deletes.)
         if (!getLastCloudFetchOk()) {
           const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
-          // Let the autosave try: its own read decides whether the cloud is reachable, and a damaged
-          // cloud copy gets rebuilt from this device if it holds (nearly) the full set
-          if (localCrewlix) cleanStampRef.current[localCrewlix.id] = -1;
+          // A damaged cloud copy gets rebuilt from this device if it holds (nearly) the full set.
+          // (Not for timeouts or another portal's save in progress: that only adds load.)
+          if (localCrewlix && getLastCloudFetchDamaged()) cleanStampRef.current[localCrewlix.id] = -1;
           if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
             console.log('[DualCloudFailover] Supabase unavailable and device copy incomplete, pulling leads from Google Sheets...');
             await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');

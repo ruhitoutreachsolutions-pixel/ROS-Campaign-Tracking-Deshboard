@@ -364,9 +364,12 @@ export function countLeadsAheadOfCloud(localLeads, cloudLeads, deletedLeadIds = 
   let ahead = 0;
   (localLeads || []).forEach(l => {
     if (!l || deleted.has(l.id)) return;
-    let cloudTs = l.id ? byId.get(String(l.id)) : undefined;
-    if (cloudTs === undefined && l.email) cloudTs = byEmail.get(String(l.email).toLowerCase().trim());
-    if (cloudTs === undefined || leadTimestamp(l) > cloudTs) ahead++;
+    // The merge folds cloud leads sharing an email into one lead carrying the newest time of the
+    // group, so compare against the newest cloud copy by id or email
+    const idTs = l.id ? byId.get(String(l.id)) : undefined;
+    const emailTs = l.email ? byEmail.get(String(l.email).toLowerCase().trim()) : undefined;
+    if (idTs === undefined && emailTs === undefined) { ahead++; return; }
+    if (leadTimestamp(l) > Math.max(idTs ?? -1, emailTs ?? -1)) ahead++;
   });
   return ahead;
 }
