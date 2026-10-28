@@ -344,6 +344,33 @@ export function cloudSyncedAtAfterMerge(localLeads, cloudLeads, cutoff, cloudUpd
   return unionMode ? null : new Date(cutoff).toISOString();
 }
 
+// How many of these local leads the cloud copy does not hold yet: missing from it (matched by id,
+// then email) or edited here after the cloud's version. Anything above 0 means this device must
+// upload, no matter how the workspace timestamps compare (another portal saving after this one's
+// edits used to make them look synced, so they never left this device).
+export function countLeadsAheadOfCloud(localLeads, cloudLeads, deletedLeadIds = []) {
+  const deleted = deletedLeadIds instanceof Set ? deletedLeadIds : new Set(deletedLeadIds || []);
+  const byId = new Map();
+  const byEmail = new Map();
+  (cloudLeads || []).forEach(l => {
+    if (!l) return;
+    const t = leadTimestamp(l);
+    if (l.id) byId.set(String(l.id), Math.max(byId.get(String(l.id)) ?? -1, t));
+    if (l.email) {
+      const e = String(l.email).toLowerCase().trim();
+      byEmail.set(e, Math.max(byEmail.get(e) ?? -1, t));
+    }
+  });
+  let ahead = 0;
+  (localLeads || []).forEach(l => {
+    if (!l || deleted.has(l.id)) return;
+    let cloudTs = l.id ? byId.get(String(l.id)) : undefined;
+    if (cloudTs === undefined && l.email) cloudTs = byEmail.get(String(l.email).toLowerCase().trim());
+    if (cloudTs === undefined || leadTimestamp(l) > cloudTs) ahead++;
+  });
+  return ahead;
+}
+
 // Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation
 // options.localOnlyCutoff (ms): pass it when cloudLeads is a COMPLETE cloud copy. A local lead the
 // cloud doesn't have is then kept only if it was added/edited after this device last synced with

@@ -38,7 +38,7 @@ import {
   saveSheetsConfigToCloud,
   fetchFullCloudWorkspaceRow
 } from '../services/db';
-import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge } from '../services/storage';
+import { saveWorkspacesToLocal, loadWorkspacesFromLocal, mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge, countLeadsAheadOfCloud } from '../services/storage';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 import { 
@@ -808,7 +808,9 @@ export function WorkspaceProvider({ children }) {
 
   // Merge a cloud row (or realtime lead delta) into local state. If the local copy had no
   // unsaved edits, the result is marked clean so it is not uploaded back.
-  function applyCloudRowToState(wsId, cloudRow) {
+  // options.fromOwnSave: the row this device just wrote (no need to compare it against local leads;
+  // edits made while the save ran are newer than the clean stamp and stay dirty on their own).
+  function applyCloudRowToState(wsId, cloudRow, options = {}) {
     if (!wsId || !cloudRow || !Array.isArray(cloudRow.leads)) return;
     const cloudTime = tsOf(cloudRow.updated_at);
     knownCloudTimeRef.current[wsId] = Math.max(knownCloudTimeRef.current[wsId] || 0, cloudTime);
@@ -833,7 +835,13 @@ export function WorkspaceProvider({ children }) {
         : cloudSyncedAtAfterMerge(target.leads, cloudRow.leads, cutoff, cloudRow.updated_at, deletedLeadIds);
 
       const nextUpdated = Math.max(tsOf(target.updatedAt), cloudTime);
-      if (wasClean) {
+      // Another portal's write can still lack leads this device changed (its save lost a race, or
+      // this device's own upload failed earlier): keep uploading until the cloud holds them.
+      const aheadOfCloud = options.fromOwnSave ? 0 : countLeadsAheadOfCloud(mergedLeads, cloudRow.leads, deletedLeadIds);
+      if (aheadOfCloud > 0) {
+        console.log(`[CloudSync] ${aheadOfCloud} lead change(s) on this device are missing from the cloud copy of ${wsId}; uploading.`);
+        cleanStampRef.current[wsId] = -1;
+      } else if (wasClean) {
         cleanStampRef.current[wsId] = Math.max(cleanStampRef.current[wsId] || 0, nextUpdated);
       }
 
@@ -872,6 +880,9 @@ export function WorkspaceProvider({ children }) {
     if (!supabase || !wsId) return;
     const { data: cloudRow, error } = await fetchFullCloudWorkspaceRow(supabase, wsId);
     if (!error && cloudRow) applyCloudRowToState(wsId, cloudRow);
+    // Cloud copy damaged (partitions gone or out of step): queue an upload so the save path can
+    // rebuild it from this device (its shield refuses devices that don't hold the full set)
+    else if (error?.cloudDamaged) cleanStampRef.current[wsId] = -1;
   }
 
   // Wraps the raw cloud save: after a targeted save succeeds, marks the saved state clean,
@@ -884,7 +895,7 @@ export function WorkspaceProvider({ children }) {
     if (ok && ws) {
       cleanStampRef.current[targetId] = Math.max(cleanStampRef.current[targetId] || 0, tsOf(ws.updatedAt));
       const saved = getLastSavedRow(targetId);
-      if (saved) applyCloudRowToState(targetId, saved);
+      if (saved) applyCloudRowToState(targetId, saved, { fromOwnSave: true });
       broadcastRealtimeEvent('WORKSPACE_SAVED', {
         workspaceId: targetId,
         updatedAt: saved?.updated_at || new Date().toISOString()
@@ -1076,6 +1087,9 @@ export function WorkspaceProvider({ children }) {
         // cloud count below 50k, which pulled the older sheet copy back in after legit deletes.)
         if (!getLastCloudFetchOk()) {
           const localCrewlix = workspacesRef.current.find(w => w && w.id === 'ws_crewlixukltd');
+          // Let the autosave try: its own read decides whether the cloud is reachable, and a damaged
+          // cloud copy gets rebuilt from this device if it holds (nearly) the full set
+          if (localCrewlix) cleanStampRef.current[localCrewlix.id] = -1;
           if ((localCrewlix?.leads?.length || 0) < 50000 && isGoogleSheetsConfigured()) {
             console.log('[DualCloudFailover] Supabase unavailable and device copy incomplete, pulling leads from Google Sheets...');
             await pullWorkspaceLeadsFromGoogleSheet('ws_crewlixukltd');
@@ -1131,12 +1145,21 @@ export function WorkspaceProvider({ children }) {
               // decide it: a legit delete lowers the cloud count, and that used to make a stale
               // device "authoritative" and push its old leads back.
               const isCloudAuth = cloudTime >= localTime;
-              // Any local lead edited after the cloud's last write cannot be in the cloud yet
-              const hasUnsyncedLeadEdits = (localWs.leads || []).some(l => l && tsOf(l.updatedAt) > cloudTime);
+              // Leads this device holds that the cloud lacks or has older. (This used to be "edited
+              // after the cloud's last write", so once any portal saved after this one's edits, those
+              // edits counted as synced and never left the device: 1,125 sends here, 600 in the cloud.)
+              const hasUnsyncedLeadEdits = cloudWs.localAheadOfCloud === null || cloudWs.localAheadOfCloud === undefined
+                ? (localWs.leads || []).some(l => l && tsOf(l.updatedAt) > cloudTime)
+                : cloudWs.localAheadOfCloud > 0;
+              if (hasUnsyncedLeadEdits) {
+                console.log(`[CloudSync] ${cloudWs.localAheadOfCloud ?? 'Some'} lead change(s) on this device are not in the cloud yet; uploading.`);
+              }
 
               knownCloudTimeRef.current[localWs.id] = Math.max(knownCloudTimeRef.current[localWs.id] || 0, cloudTime);
               if (isCloudAuth && !hasUnsyncedLeadEdits) {
                 cleanStampRef.current[localWs.id] = tsOf(cloudWs.updatedAt);
+              } else {
+                cleanStampRef.current[localWs.id] = -1;
               }
 
               return {

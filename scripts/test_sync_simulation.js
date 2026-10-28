@@ -42,7 +42,7 @@ globalThis.localStorage = {
 // ---------------------------------------------------------------------------
 const table = new Map();
 const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
-const stats = { chunkReadFailures: new Set() };
+const stats = { chunkReadFailures: new Set(), chunkWriteFailures: new Set() };
 
 function likeToRegex(pattern) {
   const esc = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.');
@@ -88,6 +88,7 @@ class Query {
     }
     if (this.op === 'upsert') {
       const p = clone(this.payload);
+      if (stats.chunkWriteFailures.has(p.id)) return { data: null, error: { message: 'simulated upload failure' } };
       table.set(p.id, { ...(table.get(p.id) || {}), ...p });
       return { data: null, error: null };
     }
@@ -152,6 +153,8 @@ async function seedFromLive() {
   const rows = await get(`select=*&or=(id.eq.${WS_ID},id.like.__ros_chunk__${WS_ID}__*)`);
   rows.forEach(r => table.set(r.id, r));
   const main = table.get(WS_ID);
+  // The scenarios start from a healthy cloud; the rebuild scenario below sets its own flag
+  delete main.sequence_config.repairedAt;
   return main.sequence_config.totalLeads;
 }
 
@@ -309,6 +312,10 @@ const stitched = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
 check('Stale partition past chunkCount is ignored', !stitched.error && stitched.data.leads.length === main.sequence_config.totalLeads, `${stitched.data?.leads.length}`);
 table.delete(staleId);
 
+// Partitions this device already has cached aren't downloaded again; a timeout only matters for
+// one that changed since (rewritten by another device), so touch it first
+const touch = (id) => table.set(id, { ...table.get(id), updated_at: iso(Date.now() + 1) });
+touch(`__ros_chunk__${WS_ID}__0003`);
 stats.chunkReadFailures.add(`__ros_chunk__${WS_ID}__0003`);
 const partial = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
 check('A partition that fails to load makes the read an error, not a partial copy', !!partial.error && !partial.data, String(partial.error?.message || ''));
@@ -359,10 +366,90 @@ check('Device C uploads them', await db.saveWorkspacesToCloud([bootC], WS_ID), d
 const pulledFull = crewlix(await db.fetchWorkspacesFromCloud([editedDevice], WS_ID));
 check('Every device converges on the recovered set', sameSet(ids(pulledFull), await cloudIds()) && extras.every(e => ids(pulledFull).has(e.id)), `${pulledFull.leads.length}`);
 
+touch(`__ros_chunk__${WS_ID}__0002`);
 stats.chunkReadFailures.add(`__ros_chunk__${WS_ID}__0002`);
 const updatedBefore = table.get(WS_ID).updated_at;
 check('A read timeout never triggers a rebuild write', (await db.saveWorkspacesToCloud([{ ...editedDevice, updatedAt: new Date().toISOString() }], WS_ID)) === false && table.get(WS_ID).updated_at === updatedBefore);
 stats.chunkReadFailures.clear();
+
+// --- Lead edits (sent marks) must reach every device, whatever order the portals save in
+const SENT = 'Email Sent - 31/12/99'; // a date no seeded lead carries
+const sentCount = (leads) => (leads || []).filter(l => l && l.email1 === SENT).length;
+const cloudSent = async () => sentCount((await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID)).data?.leads);
+const markSent = (ws, from, n) => {
+  const now = Date.now();
+  const leads = ws.leads.map((l, i) => (i >= from && i < from + n ? { ...l, email1: SENT, status: 'sent_1', updatedAt: iso(now) } : l));
+  return { ...ws, leads, updatedAt: iso(now) };
+};
+const tick = () => new Promise(r => setTimeout(r, 5));
+
+console.log('\n--- Sent marks whose upload failed, then another portal saved');
+let you = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+let warrior = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+await tick();
+you = markSent(you, 40000, 525); // this portal's upload never went through
+await tick();
+warrior = markSent(warrior, 50000, 75);
+check('Warrior saves its 75 sends', await db.saveWorkspacesToCloud([warrior], WS_ID), db.getLastCloudError() || '');
+const cloudAfterWarrior = table.get(WS_ID).updated_at;
+const oldRuleSaysSynced = !you.leads.some(l => new Date(l.updatedAt || 0).getTime() > new Date(cloudAfterWarrior).getTime());
+const youBoot = crewlix(await db.fetchWorkspacesFromCloud([you], WS_ID));
+check('Old rule (edited after the cloud\'s last write) would have called these sends synced', oldRuleSaysSynced);
+check('Reload detects the 525 sends missing from the cloud', youBoot.localAheadOfCloud === 525, `ahead=${youBoot.localAheadOfCloud}`);
+check('This portal still shows all 600 sends', sentCount(youBoot.leads) === 600, `${sentCount(youBoot.leads)}`);
+check('Upload of the missing sends succeeds', await db.saveWorkspacesToCloud([youBoot], WS_ID), db.getLastCloudError() || '');
+check('Cloud now holds all 600 sends', (await cloudSent()) === 600, `${await cloudSent()}`);
+const warriorPull = crewlix(await db.fetchWorkspacesFromCloud([warrior], WS_ID));
+check('Warrior\'s portal shows the same 600 sends', sentCount(warriorPull.leads) === 600, `${sentCount(warriorPull.leads)}`);
+check('A device already in step is not asked to upload again', warriorPull.localAheadOfCloud === 0, `ahead=${warriorPull.localAheadOfCloud}`);
+
+console.log('\n--- A partition upload failure commits nothing');
+const commitBefore = table.get(WS_ID).updated_at;
+let failer = markSent(warriorPull, 30000, 10);
+const failedPartition = `__ros_chunk__${WS_ID}__0010`;
+stats.chunkWriteFailures.add(failedPartition);
+check('Save reports failure when a partition cannot be uploaded', (await db.saveWorkspacesToCloud([failer], WS_ID)) === false, db.getLastCloudError() || '');
+check('Main row was not committed', table.get(WS_ID).updated_at === commitBefore);
+check('Cloud still reads as one consistent copy', !(await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID)).error);
+stats.chunkWriteFailures.clear();
+check('Retry uploads it', await db.saveWorkspacesToCloud([failer], WS_ID), db.getLastCloudError() || '');
+check('Cloud holds the retried sends', (await cloudSent()) === 610, `${await cloudSent()}`);
+
+console.log('\n--- A save interrupted between partitions and commit');
+const repairedBefore = table.get(WS_ID).sequence_config.repairedAt;
+const half = clone(table.get(failedPartition));
+half.leads[0] = { ...half.leads[0], notes: 'written by an interrupted save', updatedAt: iso(Date.now()) };
+half.sequence_config = { ...half.sequence_config, hash: 'interrupted' };
+half.updated_at = iso(Date.now());
+table.set(failedPartition, half);
+const outOfStep = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('Readers notice the partition is out of step with the commit', !!outOfStep.error && outOfStep.error.cloudDamaged === true, String(outOfStep.error?.message || ''));
+await tick();
+const fixer = markSent(crewlix(await db.fetchWorkspacesFromCloud([failer], WS_ID)) || failer, 20000, 5);
+check('Next save commits a consistent copy', await db.saveWorkspacesToCloud([fixer], WS_ID), db.getLastCloudError() || '');
+const healed = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('Cloud reads cleanly again', !healed.error);
+check('The interrupted save\'s edit was kept', healed.data?.leads.some(l => l.notes === 'written by an interrupted save'));
+check('No rebuild flag for an out-of-step partition', healed.data?.sequence_config?.repairedAt === repairedBefore);
+
+console.log('\n--- Two portals saving at the same moment');
+const base = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+await tick();
+const p1 = markSent(base, 41000, 75);
+const p2 = markSent(clone(base), 41100, 75); // same partition as p1
+const [r1, r2] = await Promise.all([db.saveWorkspacesToCloud([p1], WS_ID), db.saveWorkspacesToCloud([p2], WS_ID)]);
+// A portal whose save failed retries on its next cycle
+if (!r1) await db.saveWorkspacesToCloud([p1], WS_ID);
+if (!r2) await db.saveWorkspacesToCloud([p2], WS_ID);
+const concurrent = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('Cloud is consistent after concurrent saves', !concurrent.error, String(concurrent.error?.message || ''));
+const both = new Set((concurrent.data?.leads || []).filter(l => l.email1 === SENT).map(l => l.id));
+const p1Ids = p1.leads.slice(41000, 41075).map(l => l.id);
+const p2Ids = p2.leads.slice(41100, 41175).map(l => l.id);
+check('Both portals\' sends are in the cloud', p1Ids.every(id => both.has(id)) && p2Ids.every(id => both.has(id)), `${both.size} sent leads`);
+const v1 = crewlix(await db.fetchWorkspacesFromCloud([p1], WS_ID));
+const v2 = crewlix(await db.fetchWorkspacesFromCloud([p2], WS_ID));
+check('Both portals show the same Sent count', sentCount(v1.leads) === sentCount(v2.leads) && sentCount(v1.leads) === both.size, `${sentCount(v1.leads)} / ${sentCount(v2.leads)} / cloud ${both.size}`);
 
 fs.rmSync(harness, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);

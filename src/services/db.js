@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge, countLeadsAheadOfCloud } from './storage';
 import { fetchDncRegistryFromGoogleSheets } from './googleSheetsService';
 import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
@@ -76,88 +76,142 @@ export function computeChunkHash(leads) {
   return String(hash);
 }
 
+// Partitions this device already downloaded, keyed by row id. A partition is only downloaded again
+// when its updated_at or content hash changed, so a save or poll usually transfers the main row plus
+// the one or two partitions that actually changed instead of all ~15 MB.
+const partitionCache = new Map();
+
 // Fetches the main workspace row AND all partition chunks, seamlessly stitching the leads together.
-// Returns an error unless every partition loaded and the count matches sequence_config.totalLeads;
+// Returns an error unless every partition loaded, every partition is the version the main row
+// committed (its hash matches sequence_config.chunkHashes) and the count matches totalLeads;
 // options.allowIncomplete instead returns what loaded, flagged `incomplete` (used by the save path,
 // which merges this device's leads in and so repairs the cloud copy).
 export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
   if (!supabase || !wsId) return { data: null, error: 'No client or workspace ID' };
 
   try {
-    const { data: mainRow, error: mainErr } = await supabase
-      .from('workspaces')
-      .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, sequence_config, activity_log, created_at, updated_at')
-      .eq('id', wsId)
-      .maybeSingle();
-
-    if (mainErr) return { data: null, error: mainErr };
-    if (!mainRow) return { data: null, error: null };
-
-    // Fetch chunk IDs list first (lightweight query ~1 KB, avoids 15MB socket truncation)
-    const { data: chunkHeaderRows, error: chunkErr } = await supabase
-      .from('workspaces')
-      .select('id')
-      .ilike('id', `%${CHUNK_PREFIX}${wsId}%`)
-      .order('id', { ascending: true });
-
-    if (chunkErr) return { data: null, error: chunkErr };
-
+    let mainRow = null;
+    let existingChunkIds = [];
+    let liveChunkIds = [];
+    let headerById = new Map();
+    let chunkLeads = new Map();
+    let missingChunks = [];
+    let staleChunks = [];
+    let expectedChunkCount = 0;
     const chunkIndexOf = (id) => parseInt(String(id).split('__').pop(), 10) || 0;
-    const cfg = mainRow.sequence_config || {};
-    const expectedChunkCount = Number(cfg.chunkCount) || 0;
-    const expectedTotal = Number.isFinite(Number(cfg.totalLeads)) && cfg.totalLeads !== undefined ? Number(cfg.totalLeads) : null;
     const ownPrefix = `${CHUNK_PREFIX}${wsId}__`;
-    const existingChunkIds = (chunkHeaderRows || []).map(r => r.id)
-      .filter(id => id.startsWith(ownPrefix) && /^\d{4}$/.test(id.slice(ownPrefix.length)));
-    // Only partitions 1..chunkCount-1 belong to the current save. Rows past that are leftovers
-    // from a bigger save; stitching them in would resurrect leads deleted since.
-    const liveChunkIds = existingChunkIds
-      .filter(id => { const k = chunkIndexOf(id); return k >= 1 && (!expectedChunkCount || k < expectedChunkCount); })
-      .sort((a, b) => chunkIndexOf(a) - chunkIndexOf(b));
 
-    const chunkLeads = new Map();
-    const loadChunks = async (ids) => {
-      const { data: batchData, error: batchErr } = await supabase
+    // A save writes its partitions first and then commits the main row, so a partition can briefly
+    // be newer than the main row that lists it. Re-read once after a pause before calling it stale.
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass > 0) await new Promise(r => setTimeout(r, 1500));
+      const { data: mainData, error: mainErr } = await supabase
         .from('workspaces')
-        .select('id, leads')
-        .in('id', ids);
-      if (batchErr || !Array.isArray(batchData)) return;
-      batchData.forEach(cr => chunkLeads.set(cr.id, Array.isArray(cr.leads) ? cr.leads : []));
-    };
-    // Fetch in safe batches of 4 chunks (~2.5 MB per batch), then retry missing ones singly
-    const BATCH_SIZE = 4;
-    for (let i = 0; i < liveChunkIds.length; i += BATCH_SIZE) {
-      await loadChunks(liveChunkIds.slice(i, i + BATCH_SIZE));
-    }
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const missing = liveChunkIds.filter(id => !chunkLeads.has(id));
-      if (missing.length === 0) break;
-      for (const id of missing) await loadChunks([id]);
+        .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, sequence_config, activity_log, created_at, updated_at')
+        .eq('id', wsId)
+        .maybeSingle();
+
+      if (mainErr) return { data: null, error: mainErr };
+      if (!mainData) return { data: null, error: null };
+      mainRow = mainData;
+
+      // Partition headers first (tiny query: id, time and content hash, no leads)
+      const { data: chunkHeaderRows, error: chunkErr } = await supabase
+        .from('workspaces')
+        .select('id, updated_at, sequence_config')
+        .ilike('id', `%${CHUNK_PREFIX}${wsId}%`)
+        .order('id', { ascending: true });
+
+      if (chunkErr) return { data: null, error: chunkErr };
+
+      const cfg = mainRow.sequence_config || {};
+      expectedChunkCount = Number(cfg.chunkCount) || 0;
+      const ownHeaders = (chunkHeaderRows || [])
+        .filter(r => r && r.id && r.id.startsWith(ownPrefix) && /^\d{4}$/.test(r.id.slice(ownPrefix.length)));
+      headerById = new Map(ownHeaders.map(r => [r.id, r]));
+      existingChunkIds = ownHeaders.map(r => r.id);
+      // Only partitions 1..chunkCount-1 belong to the current save. Rows past that are leftovers
+      // from a bigger save; stitching them in would resurrect leads deleted since.
+      liveChunkIds = existingChunkIds
+        .filter(id => { const k = chunkIndexOf(id); return k >= 1 && (!expectedChunkCount || k < expectedChunkCount); })
+        .sort((a, b) => chunkIndexOf(a) - chunkIndexOf(b));
+
+      chunkLeads = new Map();
+      const cacheKeyOf = (h) => `${h?.updated_at || ''}|${h?.sequence_config?.hash || ''}`;
+      const toFetch = [];
+      liveChunkIds.forEach(id => {
+        const cached = partitionCache.get(id);
+        if (cached && cached.key === cacheKeyOf(headerById.get(id))) chunkLeads.set(id, cached.leads);
+        else toFetch.push(id);
+      });
+      const loadChunks = async (ids) => {
+        const { data: batchData, error: batchErr } = await supabase
+          .from('workspaces')
+          .select('id, leads, updated_at, sequence_config')
+          .in('id', ids);
+        if (batchErr || !Array.isArray(batchData)) return;
+        batchData.forEach(cr => {
+          const leads = Array.isArray(cr.leads) ? cr.leads : [];
+          chunkLeads.set(cr.id, leads);
+          headerById.set(cr.id, { id: cr.id, updated_at: cr.updated_at, sequence_config: cr.sequence_config });
+          partitionCache.set(cr.id, { key: cacheKeyOf(cr), leads });
+        });
+      };
+      // Fetch in safe batches of 4 chunks (~2.5 MB per batch), then retry missing ones singly
+      const BATCH_SIZE = 4;
+      for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
+        await loadChunks(toFetch.slice(i, i + BATCH_SIZE));
+      }
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const missing = liveChunkIds.filter(id => !chunkLeads.has(id));
+        if (missing.length === 0) break;
+        for (const id of missing) await loadChunks([id]);
+      }
+
+      missingChunks = liveChunkIds.filter(id => !chunkLeads.has(id));
+      // A partition whose content isn't the version the main row committed: a save still in
+      // progress, or one that died between writing partitions and committing
+      const committedHashes = Array.isArray(cfg.chunkHashes) ? cfg.chunkHashes : [];
+      staleChunks = liveChunkIds.filter(id => {
+        if (!chunkLeads.has(id)) return false;
+        const want = committedHashes[chunkIndexOf(id)];
+        const have = headerById.get(id)?.sequence_config?.hash;
+        return Boolean(want && have && want !== have);
+      });
+      if (staleChunks.length === 0) break;
     }
 
     // A partial copy must never be treated as the cloud state: every reader merges it as
     // authoritative, so missing partitions would look like deleted leads (and vice versa).
-    const missingChunks = liveChunkIds.filter(id => !chunkLeads.has(id));
+    const cfg = mainRow.sequence_config || {};
+    const expectedTotal = Number.isFinite(Number(cfg.totalLeads)) && cfg.totalLeads !== undefined ? Number(cfg.totalLeads) : null;
     const fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
     liveChunkIds.forEach(id => { if (chunkLeads.has(id)) fullLeads.push(...chunkLeads.get(id)); });
     const missingPartitions = expectedChunkCount > 1 && liveChunkIds.length < expectedChunkCount - 1;
-    const incomplete = missingChunks.length > 0 || missingPartitions || (expectedTotal !== null && fullLeads.length !== expectedTotal);
+    const incomplete = missingChunks.length > 0 || staleChunks.length > 0 || missingPartitions || (expectedTotal !== null && fullLeads.length !== expectedTotal);
     if (incomplete && !options.allowIncomplete) {
-      return {
-        data: null,
-        error: new Error(`Incomplete cloud copy of ${wsId}: got ${fullLeads.length}${expectedTotal !== null ? ` of ${expectedTotal}` : ''} leads (${missingChunks.length} partition(s) failed to load)`)
-      };
+      const err = new Error(`Incomplete cloud copy of ${wsId}: got ${fullLeads.length}${expectedTotal !== null ? ` of ${expectedTotal}` : ''} leads (${missingChunks.length} partition(s) failed to load, ${staleChunks.length} out of step)`);
+      // Damaged (not just slow): a device holding the full set should rebuild it
+      err.cloudDamaged = missingChunks.length === 0;
+      return { data: null, error: err };
     }
+
+    const storedChunkHashes = {};
+    headerById.forEach((h, id) => { storedChunkHashes[id] = h?.sequence_config?.hash || null; });
 
     return {
       data: {
         ...mainRow,
         leads: fullLeads,
         existingChunkIds,
+        // The content hash each partition row actually holds (the save skips rewriting a
+        // partition only when this matches, not when the main row merely claims it)
+        storedChunkHashes,
         incomplete,
         // Partition rows that exist but failed to load (retry later) vs rows that are gone
         // from the table (the cloud copy itself is damaged and needs repairing from a device)
         failedChunkIds: missingChunks,
+        staleChunkIds: staleChunks,
         partitionsMissing: missingPartitions
       },
       error: null
@@ -399,7 +453,10 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
         let leads = [];
         let cloudSyncedAt = localWs?.cloudSyncedAt || null;
         const isTarget = targetWorkspaceId && targetWorkspaceId === item.id;
-        const needsCloudLeads = isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
+        // Crewlix is always read in full: comparing workspace timestamps can't tell whether this
+        // device's lead edits are in the cloud (unchanged partitions come from the cache anyway).
+        const needsCloudLeads = item.id === PRIMARY_WORKSPACE_ID || isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
+        let rawCloudLeads = null;
 
         if (needsCloudLeads) {
           const { data: fullCloudRow, error: leadErr } = await fetchFullCloudWorkspaceRow(supabase, item.id);
@@ -408,6 +465,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
           if (leadErr || !fullCloudRow || !Array.isArray(fullCloudRow.leads)) {
             throw (leadErr instanceof Error ? leadErr : new Error(leadErr?.message || `Could not load leads for ${item.id}`));
           }
+          rawCloudLeads = fullCloudRow.leads;
           if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
             const deletedLeadIds = [...(localWs.deletedLeadIds || []), ...(fullCloudRow.sequence_config?.deletedLeadIds || [])];
             const cutoff = localOnlyCutoffFor(localWs, fullCloudRow.updated_at, fullCloudRow.sequence_config);
@@ -428,8 +486,16 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
           leads = localWs.leads;
         }
 
+        const deletedForAhead = [
+          ...((item.sequence_config && item.sequence_config.deletedLeadIds) || []),
+          ...(localWs?.deletedLeadIds || [])
+        ];
+        // Leads this device holds that the cloud lacks or has an older version of (null = unknown)
+        const localAheadOfCloud = rawCloudLeads ? countLeadsAheadOfCloud(leads, rawCloudLeads, deletedForAhead) : null;
+
         return {
           id: item.id,
+          localAheadOfCloud,
           name: item.name,
           clientName: item.client_name || item.name,
           clientEmail: item.client_email || '',
@@ -657,8 +723,13 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       lastCloudErrorMsg = `Could not read ${existingRow.failedChunkIds.length} cloud partition(s) of ${ws.id}; will retry`;
       return false;
     }
+    // Partitions out of step with the main row: another save was interrupted (or lost a race)
+    // between writing partitions and committing. Their content is still a merged superset, so
+    // merge as a union and commit a consistent copy, without flagging a rebuild.
+    const hasStalePartitions = (existingRow?.staleChunkIds?.length || 0) > 0;
     // Partition rows gone from the table: this save rebuilds the cloud copy from this device
-    const isRepair = !!existingRow?.incomplete;
+    const isRepair = !!existingRow?.incomplete && !hasStalePartitions;
+    const unionMerge = isRepair || hasStalePartitions;
 
     const cloudDeleted = Array.isArray(existingRow?.sequence_config?.deletedLeadIds) ? existingRow.sequence_config.deletedLeadIds : [];
     const localDeleted = Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || []);
@@ -673,8 +744,10 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
         ? existingRow.leads.filter(l => !isLeadPermanentlyPurged(l, ws.id))
         : [];
 
-      // Bulk (untargeted) save: skip when the cloud already holds everything this device has
-      if (!isTargeted && cloudTime >= localTime && cleanCloudLeads.length >= (ws.leads?.length || 0)) {
+      // Bulk (untargeted) save: skip when the cloud already holds every lead of this device at the
+      // same or a newer version (counts and workspace times alone hid unsynced edits)
+      if (!isTargeted && !unionMerge && cloudTime >= localTime &&
+          countLeadsAheadOfCloud(ws.leads || [], cleanCloudLeads, mergedDeleted) === 0) {
         return true;
       }
 
@@ -686,7 +759,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
           deletedLeadIds: mergedDeleted,
           // A complete cloud copy decides which old leads still exist, so a stale device can't push
           // back leads removed elsewhere. An incomplete read keeps everything to repair the cloud.
-          localOnlyCutoff: isRepair ? undefined : localOnlyCutoffFor(ws, existingRow.updated_at, existingRow.sequence_config)
+          localOnlyCutoff: unionMerge ? undefined : localOnlyCutoffFor(ws, existingRow.updated_at, existingRow.sequence_config)
         });
       }
     }
@@ -708,7 +781,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     if (chunks.length === 0) chunks.push([]);
 
     const currentHashes = chunks.map(computeChunkHash);
-    const prevHashes = Array.isArray(existingRow?.sequence_config?.chunkHashes) ? existingRow.sequence_config.chunkHashes : [];
+    const storedChunkHashes = existingRow?.storedChunkHashes || {};
     const prevChunkCount = Number(existingRow?.sequence_config?.chunkCount) || 1;
     const existingChunkIds = new Set(existingRow?.existingChunkIds || []);
 
@@ -766,6 +839,49 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       updated_at: nowIso
     };
 
+    // Partitions 1..N-1 go up BEFORE the main row: the main row (with its chunkHashes) is the
+    // commit point, so readers never see a committed copy whose partitions are still old. A
+    // partition is skipped only when the row in the table already holds exactly this content.
+    // (Partitions used to go up after the commit with errors ignored, so a failed upload left an
+    // old partition behind for good: later saves trusted the claimed hash and never rewrote it.)
+    let chunkUploadFailed = false;
+    for (let k = 1; k < chunks.length; k++) {
+      const chunkRowId = `${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`;
+      if (existingChunkIds.has(chunkRowId) && storedChunkHashes[chunkRowId] === currentHashes[k]) {
+        continue;
+      }
+      const chunkPayload = {
+        id: chunkRowId,
+        name: `${ws.name || ws.id} (Partition ${k})`,
+        client_name: 'ROS Chunk Partition',
+        client_email: '',
+        campaign_name: ws.campaignName || '',
+        active_sending_account: 'system',
+        sending_accounts: ['system'],
+        client_credentials: {},
+        sequence_config: { partitionIndex: k, workspaceId: ws.id, hash: currentHashes[k] },
+        activity_log: [],
+        leads: chunks[k],
+        updated_at: nowIso
+      };
+
+      let chunkSaveErr = null;
+      for (let tryNo = 0; tryNo < 2; tryNo++) {
+        ({ error: chunkSaveErr } = await supabase
+          .from('workspaces')
+          .upsert(chunkPayload, { onConflict: 'id' }));
+        if (!chunkSaveErr) break;
+      }
+      if (chunkSaveErr) {
+        console.warn(`Error uploading chunk ${k} for ${ws.id}:`, chunkSaveErr);
+        lastCloudErrorMsg = `Could not upload partition ${k} of ${ws.id}: ${chunkSaveErr.message || chunkSaveErr}`;
+        chunkUploadFailed = true;
+        break;
+      }
+    }
+    // Nothing committed: the cloud still describes the previous save, and this one retries
+    if (chunkUploadFailed) return false;
+
     let writeError = null;
     let conflict = false;
 
@@ -796,38 +912,6 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       }
       lastCloudErrorMsg = `Workspace ${ws.id} kept changing in the cloud during save; will retry on next sync.`;
       return false;
-    }
-
-    // Upsert any subsequent partition chunks (1 .. N-1) with bulletproof delta skip
-    for (let k = 1; k < chunks.length; k++) {
-      const chunkRowId = `${CHUNK_PREFIX}${ws.id}__${String(k).padStart(4, '0')}`;
-      // DELTA OPTIMIZATION GUARD:
-      // Only skip upload if the chunk row ALREADY EXISTS in the cloud table AND its hash is identical!
-      if (existingChunkIds.has(chunkRowId) && prevHashes[k] && prevHashes[k] === currentHashes[k]) {
-        continue;
-      }
-      const chunkPayload = {
-        id: chunkRowId,
-        name: `${ws.name || ws.id} (Partition ${k})`,
-        client_name: 'ROS Chunk Partition',
-        client_email: '',
-        campaign_name: ws.campaignName || '',
-        active_sending_account: 'system',
-        sending_accounts: ['system'],
-        client_credentials: {},
-        sequence_config: { partitionIndex: k, workspaceId: ws.id, hash: currentHashes[k] },
-        activity_log: [],
-        leads: chunks[k],
-        updated_at: nowIso
-      };
-
-      const { error: chunkSaveErr } = await supabase
-        .from('workspaces')
-        .upsert(chunkPayload, { onConflict: 'id' });
-
-      if (chunkSaveErr) {
-        console.warn(`Error uploading chunk ${k} for ${ws.id}:`, chunkSaveErr);
-      }
     }
 
     // Clean up partitions past the new chunk count (readers ignore them, but they'd linger forever)
