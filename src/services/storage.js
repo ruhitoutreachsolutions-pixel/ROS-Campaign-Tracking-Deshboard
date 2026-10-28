@@ -324,7 +324,10 @@ export function leadTimestamp(lead) {
 // The cloudSyncedAt to record after merging a complete cloud copy with localOnlyCutoff = cutoff.
 // It only moves up to the cloud's time when no local-only lead is still waiting to upload;
 // otherwise the next merge would treat that pending lead as deleted elsewhere and drop it.
+// cutoff undefined means a union merge: every local-only lead is pending, and the marker stays
+// unset (null) so merges keep the union until they've been uploaded.
 export function cloudSyncedAtAfterMerge(localLeads, cloudLeads, cutoff, cloudUpdatedAt, deletedLeadIds = []) {
+  const unionMode = !Number.isFinite(cutoff);
   const deleted = deletedLeadIds instanceof Set ? deletedLeadIds : new Set(deletedLeadIds || []);
   const cloudIds = new Set();
   const cloudEmails = new Set();
@@ -336,8 +339,9 @@ export function cloudSyncedAtAfterMerge(localLeads, cloudLeads, cutoff, cloudUpd
   const hasPending = (localLeads || []).some(l => l && !deleted.has(l.id) &&
     !(l.id && cloudIds.has(String(l.id))) &&
     !(l.email && cloudEmails.has(String(l.email).toLowerCase().trim())) &&
-    leadTimestamp(l) > cutoff);
-  return hasPending ? new Date(cutoff).toISOString() : cloudUpdatedAt;
+    (unionMode || leadTimestamp(l) > cutoff));
+  if (!hasPending) return cloudUpdatedAt;
+  return unionMode ? null : new Date(cutoff).toISOString();
 }
 
 // Smart Lead-Level Merge with Authoritative Cloud Sync & Non-Destructive Reconciliation

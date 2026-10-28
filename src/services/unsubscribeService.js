@@ -160,10 +160,13 @@ export async function processUnsubscribeRequest({ email, workspaceId, reason }) 
 
         const updatedActivity = [newActivity, ...(wsRow.activity_log || [])].slice(0, 500);
 
+        // Lead rows are NOT written here. This page only sees partition 0 of a chunked workspace, so
+        // rewriting `leads` added duplicate copies of leads stored in other partitions and left
+        // sequence_config.totalLeads wrong (devices then rejected the cloud copy as incomplete).
+        // The DNC registry saved above is applied to the lead by every portal on its next sync.
         await supabase
           .from('workspaces')
           .update({
-            leads: wsLeads,
             activity_log: updatedActivity,
             updated_at: nowIso
           })

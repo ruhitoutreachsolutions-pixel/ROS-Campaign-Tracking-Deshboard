@@ -106,7 +106,9 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     const cfg = mainRow.sequence_config || {};
     const expectedChunkCount = Number(cfg.chunkCount) || 0;
     const expectedTotal = Number.isFinite(Number(cfg.totalLeads)) && cfg.totalLeads !== undefined ? Number(cfg.totalLeads) : null;
-    const existingChunkIds = (chunkHeaderRows || []).map(r => r.id);
+    const ownPrefix = `${CHUNK_PREFIX}${wsId}__`;
+    const existingChunkIds = (chunkHeaderRows || []).map(r => r.id)
+      .filter(id => id.startsWith(ownPrefix) && /^\d{4}$/.test(id.slice(ownPrefix.length)));
     // Only partitions 1..chunkCount-1 belong to the current save. Rows past that are leftovers
     // from a bigger save; stitching them in would resurrect leads deleted since.
     const liveChunkIds = existingChunkIds
@@ -152,7 +154,11 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
         ...mainRow,
         leads: fullLeads,
         existingChunkIds,
-        incomplete
+        incomplete,
+        // Partition rows that exist but failed to load (retry later) vs rows that are gone
+        // from the table (the cloud copy itself is damaged and needs repairing from a device)
+        failedChunkIds: missingChunks,
+        partitionsMissing: missingPartitions
       },
       error: null
     };
@@ -306,6 +312,7 @@ export function isCloudDatabaseConnected() {
 
 // Sole authoritative active workspace
 export const PRIMARY_WORKSPACE_ID = 'ws_crewlixukltd';
+const isPrimaryWorkspaceRow = (rowId) => rowId === PRIMARY_WORKSPACE_ID || String(rowId).startsWith(`${CHUNK_PREFIX}${PRIMARY_WORKSPACE_ID}__`);
 
 // Permanently purged workspaces that must NEVER be loaded or re-saved
 export const PERMANENTLY_PURGED_WS_IDS = [
@@ -403,7 +410,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
           }
           if (localWs && Array.isArray(localWs.leads) && localWs.leads.length > 0) {
             const deletedLeadIds = [...(localWs.deletedLeadIds || []), ...(fullCloudRow.sequence_config?.deletedLeadIds || [])];
-            const cutoff = localOnlyCutoffFor(localWs, fullCloudRow.updated_at);
+            const cutoff = localOnlyCutoffFor(localWs, fullCloudRow.updated_at, fullCloudRow.sequence_config);
             leads = mergeWorkspaceLeads(localWs.leads, fullCloudRow.leads, {
               workspaceId: item.id,
               localWsUpdatedAt: localWs.updatedAt,
@@ -518,8 +525,12 @@ export function getLastCloudFetchOk() {
 // Local leads newer than that may be pending uploads; older ones missing from the cloud were deleted.
 // A device that never recorded a sync with THIS project (pre-fix cache, or a cache built against an
 // older Supabase project) defers to the cloud copy entirely.
-export function localOnlyCutoffFor(localWs, cloudUpdatedAt) {
+// Returns undefined (merge as a union, drop nothing) when the cloud copy was rebuilt after losing
+// partitions and this device hasn't synced since: the rebuild may have missed leads it holds.
+export function localOnlyCutoffFor(localWs, cloudUpdatedAt, cloudConfig = null) {
   const synced = localWs?.cloudSyncedProject === SUPABASE_PROJECT_REF ? new Date(localWs?.cloudSyncedAt || 0).getTime() : 0;
+  const repairedAt = new Date(cloudConfig?.repairedAt || 0).getTime();
+  if (Number.isFinite(repairedAt) && repairedAt > 0 && !(synced >= repairedAt)) return undefined;
   if (Number.isFinite(synced) && synced > 0) return synced;
   const cloud = new Date(cloudUpdatedAt || 0).getTime();
   return Number.isFinite(cloud) ? cloud : 0;
@@ -641,6 +652,13 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       lastCloudErrorMsg = checkErr.message || String(checkErr);
       return false;
     }
+    // Partitions that exist but timed out: the true cloud state is unknown, so don't write now
+    if (existingRow?.failedChunkIds?.length > 0) {
+      lastCloudErrorMsg = `Could not read ${existingRow.failedChunkIds.length} cloud partition(s) of ${ws.id}; will retry`;
+      return false;
+    }
+    // Partition rows gone from the table: this save rebuilds the cloud copy from this device
+    const isRepair = !!existingRow?.incomplete;
 
     const cloudDeleted = Array.isArray(existingRow?.sequence_config?.deletedLeadIds) ? existingRow.sequence_config.deletedLeadIds : [];
     const localDeleted = Array.isArray(ws.deletedLeadIds) ? ws.deletedLeadIds : (ws.sequenceConfig?.deletedLeadIds || []);
@@ -668,7 +686,7 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
           deletedLeadIds: mergedDeleted,
           // A complete cloud copy decides which old leads still exist, so a stale device can't push
           // back leads removed elsewhere. An incomplete read keeps everything to repair the cloud.
-          localOnlyCutoff: existingRow.incomplete ? undefined : localOnlyCutoffFor(ws, existingRow.updated_at)
+          localOnlyCutoff: isRepair ? undefined : localOnlyCutoffFor(ws, existingRow.updated_at, existingRow.sequence_config)
         });
       }
     }
@@ -701,11 +719,21 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
     if (existingRow) {
       const cloudDeletedSet = new Set(cloudDeleted.map(String));
       const newlyDeleted = mergedDeleted.filter(id => !cloudDeletedSet.has(id)).length;
-      const cloudTotal = Number(existingRow.sequence_config?.totalLeads) || (existingRow.leads || []).length;
-      if (compactedLeads.length < cloudTotal - newlyDeleted) {
-        console.warn(`[ANTI-DOWNGRADE SHIELD] Blocked save: cloud holds ${cloudTotal} leads, only ${newlyDeleted} newly deleted, but this device would write ${compactedLeads.length}.`);
-        lastCloudErrorMsg = `Refused to shrink ${ws.id} from ${cloudTotal} to ${compactedLeads.length} leads (only ${newlyDeleted} deletions)`;
+      const storedTotal = (existingRow.leads || []).length;
+      const claimedTotal = Number(existingRow.sequence_config?.totalLeads) || storedTotal;
+      // Leads actually present in the cloud may only shrink by deliberate deletions
+      const tooSmallVsStored = compactedLeads.length < storedTotal - newlyDeleted;
+      // When partitions were lost, only a device holding (nearly) the whole set may rebuild it,
+      // never e.g. a fresh 20,113-baseline boot
+      const tooSmallForRepair = isRepair && compactedLeads.length < Math.floor(0.95 * (claimedTotal - newlyDeleted));
+      if (tooSmallVsStored || tooSmallForRepair) {
+        const shownTotal = isRepair ? claimedTotal : storedTotal;
+        console.warn(`[ANTI-DOWNGRADE SHIELD] Blocked save: cloud holds ${shownTotal} leads, only ${newlyDeleted} newly deleted, but this device would write ${compactedLeads.length}.`);
+        lastCloudErrorMsg = `Refused to shrink ${ws.id} from ${shownTotal} to ${compactedLeads.length} leads (only ${newlyDeleted} deletions)`;
         return false;
+      }
+      if (isRepair) {
+        console.warn(`[CloudRepair] ${ws.id}: cloud partitions were missing (${storedTotal} of ${claimedTotal} leads stored); rebuilding from this device's ${compactedLeads.length} leads.`);
       }
     }
 
@@ -728,7 +756,10 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
         chunkCount: chunks.length,
         chunkSize: CHUNK_SIZE,
         totalLeads: compactedLeads.length,
-        chunkHashes: currentHashes
+        chunkHashes: currentHashes,
+        // When the cloud copy was last rebuilt after losing partitions. Devices that synced
+        // before this merge in union mode once, so leads only they still hold come back.
+        repairedAt: isRepair ? nowIso : (existingRow?.sequence_config?.repairedAt || undefined)
       },
       activity_log: mergedActivity,
       leads: chunks[0], // Primary chunk stored in workspace main row
@@ -864,11 +895,15 @@ export async function deleteWorkspaceFromCloud(wsId) {
       .delete()
       .eq('id', wsId);
 
-    // Also delete any partition chunks for this workspace
-    await supabase
-      .from('workspaces')
-      .delete()
-      .like('id', `${CHUNK_PREFIX}${wsId}__%`);
+    // Also delete this workspace's partition chunks, matched exactly (LIKE's '_' wildcard would also
+    // hit other workspaces whose id starts with this one)
+    const { data: rows } = await supabase.from('workspaces').select('id');
+    for (const r of (rows || [])) {
+      const rest = r?.id?.startsWith(`${CHUNK_PREFIX}${wsId}__`) ? r.id.slice(`${CHUNK_PREFIX}${wsId}__`.length) : null;
+      if (rest !== null && /^\d{4}$/.test(rest)) {
+        await supabase.from('workspaces').delete().eq('id', r.id);
+      }
+    }
 
     if (error) {
       console.warn(`Error deleting workspace ${wsId} from Supabase:`, error);
@@ -890,17 +925,21 @@ export async function purgeUnwantedWorkspacesFromCloud() {
   const supabase = getSupabaseClient();
   if (!supabase) return false;
 
-  let cleanedCount = 0;
-  for (const id of PERMANENTLY_PURGED_WS_IDS) {
-    try {
-      // 1. Delete main workspace row
-      const { error: err1 } = await supabase.from('workspaces').delete().eq('id', id);
-      if (!err1) cleanedCount++;
+  // Rows are matched by exact id only. This used to delete with LIKE '__ros_chunk__<id>__%', but
+  // '_' is a LIKE wildcard, so the 'ws_crewlix' / 'ws_crewlixuk' patterns also matched every
+  // '__ros_chunk__ws_crewlixukltd__NNNN' partition: each portal load wiped Crewlix's leads.
+  const { data: rows, error: listErr } = await supabase.from('workspaces').select('id');
+  if (listErr || !Array.isArray(rows)) return 0;
+  const doomed = rows.map(r => r.id).filter(rowId => rowId && !isPrimaryWorkspaceRow(rowId) &&
+    PERMANENTLY_PURGED_WS_IDS.some(id => rowId === id || rowId.startsWith(`${CHUNK_PREFIX}${id}__`) && /^\d{4}$/.test(rowId.slice(`${CHUNK_PREFIX}${id}__`.length))));
 
-      // 2. Delete all partition chunk rows for this workspace
-      await supabase.from('workspaces').delete().like('id', `${CHUNK_PREFIX}${id}__%`);
+  let cleanedCount = 0;
+  for (const rowId of doomed) {
+    try {
+      const { error } = await supabase.from('workspaces').delete().eq('id', rowId);
+      if (!error) cleanedCount++;
     } catch (e) {
-      console.warn(`[PurgeCloud] Could not delete ${id}:`, e.message);
+      console.warn(`[PurgeCloud] Could not delete ${rowId}:`, e.message);
     }
   }
 

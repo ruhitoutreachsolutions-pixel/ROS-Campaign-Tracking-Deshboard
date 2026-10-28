@@ -8,7 +8,9 @@
 //      tombstones are gone, plus one lead imported offline that never uploaded.
 //   4. B pulls (fetchWorkspacesFromCloud) and must hold A's leads + its pending import, nothing else.
 //   5. B saves; A pulls again; both devices must hold the identical lead set.
-// Also checks the stitcher ignores stale partitions past chunkCount and refuses partial copies.
+// Also checks the stitcher ignores stale partitions past chunkCount and refuses partial copies,
+// that the boot-time purge never deletes Crewlix partitions, and that a device holding the full
+// set rebuilds the cloud after partitions were wiped (while a baseline-only device can't).
 //
 // Usage:  node scripts/test_sync_simulation.js [--live-seed]
 //   --live-seed  seed the fake table from a READ-ONLY fetch of the live Supabase rows
@@ -57,6 +59,8 @@ class Query {
   is(col, val) { this.filters.push(r => (r[col] ?? null) === val); return this; }
   in(col, vals) { const s = new Set(vals.map(String)); this.filters.push(r => s.has(String(r[col]))); return this; }
   ilike(col, pattern) { const re = likeToRegex(pattern); this.filters.push(r => re.test(String(r[col]))); return this; }
+  // Real SQL LIKE semantics: '_' is a single-character wildcard (what wiped the Crewlix partitions)
+  like(col, pattern) { const re = likeToRegex(pattern.replace(/\*/g, '%')); this.filters.push(r => new RegExp(re.source).test(String(r[col]))); return this; }
   order(col, opts = {}) { this.orderBy = { col, asc: opts.ascending !== false }; return this; }
   maybeSingle() { this.single = true; return this; }
   pick(row, cols) {
@@ -196,7 +200,7 @@ function deviceBoot(localWs, cloudWs) {
   const deletedLeadIds = [...(localWs.deletedLeadIds || []), ...(cloudWs.deletedLeadIds || [])];
   const leads = storage.mergeWorkspaceLeads(localWs.leads, cloudWs.leads, {
     workspaceId: WS_ID, deletedLeadIds,
-    localOnlyCutoff: db.localOnlyCutoffFor ? db.localOnlyCutoffFor(localWs, cloudWs.cloudSyncedAt || cloudWs.updatedAt) : undefined
+    localOnlyCutoff: db.localOnlyCutoffFor ? db.localOnlyCutoffFor(localWs, cloudWs.cloudSyncedAt || cloudWs.updatedAt, cloudWs.sequenceConfig) : undefined
   });
   return { ...localWs, ...cloudWs, leads, deletedLeadIds: Array.from(new Set(deletedLeadIds)), cloudSyncedAt: cloudWs.cloudSyncedAt };
 }
@@ -312,6 +316,52 @@ const beforeFail = crewlix([deviceA]).leads.length;
 const failedPull = await db.fetchWorkspacesFromCloud([deviceA], WS_ID);
 check('fetchWorkspacesFromCloud reports the failure instead of passing local data off as cloud',
   (db.getLastCloudFetchOk ? !db.getLastCloudFetchOk() : false) && crewlix(failedPull).leads.length === beforeFail);
+stats.chunkReadFailures.clear();
+
+// --- Boot-time purge of retired workspaces must never touch Crewlix
+console.log('\n--- Purge of retired workspaces');
+const crewlixRowsBefore = [...table.keys()].filter(k => k === WS_ID || k.startsWith(`__ros_chunk__${WS_ID}__`)).sort();
+table.set('ws_crewlix', { id: 'ws_crewlix', leads: [], updated_at: iso(T0) });
+table.set('__ros_chunk__ws_crewlix__0001', { id: '__ros_chunk__ws_crewlix__0001', leads: [], updated_at: iso(T0) });
+await db.purgeUnwantedWorkspacesFromCloud();
+const crewlixRowsAfter = [...table.keys()].filter(k => k === WS_ID || k.startsWith(`__ros_chunk__${WS_ID}__`)).sort();
+check('Purge leaves every Crewlix partition in place', sameSet(new Set(crewlixRowsBefore), new Set(crewlixRowsAfter)), `${crewlixRowsBefore.length} -> ${crewlixRowsAfter.length} rows`);
+check('Purge still removes the retired workspace and its partitions', !table.has('ws_crewlix') && !table.has('__ros_chunk__ws_crewlix__0001'));
+
+// --- Recovery after partitions were wiped (the 2026-10-28 incident)
+console.log('\n--- Rebuild after partitions were wiped');
+const fullSet = await cloudIds();
+const fullDevice = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+// Device C synced before the wipe and holds 30 leads nobody else has
+const extras = Array.from({ length: 30 }, (_, i) => ({ id: `ld_only_on_c_${i}`, email: `onlyc${i}@example.test`, campaignName: 'Only C',
+  importedAt: iso(T0 - 24 * HOUR), updatedAt: iso(T0 - 24 * HOUR) }));
+const deviceC = { ...clone(fullDevice), leads: [...clone(fullDevice.leads), ...extras] };
+const wipe = () => [...table.keys()].filter(k => k.startsWith(`__ros_chunk__${WS_ID}__`)).forEach(k => table.delete(k));
+wipe();
+check('Wiped cloud is rejected by readers', !!(await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID)).error);
+
+const baselineOnly = { ...clone(fullDevice), leads: clone(baseline.leads), updatedAt: new Date().toISOString() };
+check('A device holding only the baseline may NOT rebuild the cloud', (await db.saveWorkspacesToCloud([baselineOnly], WS_ID)) === false, db.getLastCloudError() || '');
+
+const editedDevice = { ...clone(fullDevice), updatedAt: new Date().toISOString() };
+editedDevice.leads[5] = { ...editedDevice.leads[5], notes: 'edited while cloud was broken', updatedAt: new Date().toISOString() };
+check('The device with the full set rebuilds the cloud', await db.saveWorkspacesToCloud([editedDevice], WS_ID), db.getLastCloudError() || '');
+const rebuilt = await db.fetchFullCloudWorkspaceRow(fakeClient, WS_ID);
+check('Rebuilt cloud is complete and readable', !rebuilt.error && sameSet(ids(rebuilt.data), fullSet), `${rebuilt.data?.leads.length} of ${fullSet.size}`);
+check('Its pending edit reached the cloud', rebuilt.data?.leads.some(l => l.notes === 'edited while cloud was broken'));
+check('Rebuild is flagged (repairedAt) for other devices', !!rebuilt.data?.sequence_config?.repairedAt);
+
+const pulledC = crewlix(await db.fetchWorkspacesFromCloud([deviceC], WS_ID));
+const bootC = deviceBoot(deviceC, pulledC);
+check('Device C keeps leads only it held (union after a rebuild)', extras.every(e => ids(bootC).has(e.id)), `${bootC.leads.length}`);
+bootC.updatedAt = new Date().toISOString();
+check('Device C uploads them', await db.saveWorkspacesToCloud([bootC], WS_ID), db.getLastCloudError() || '');
+const pulledFull = crewlix(await db.fetchWorkspacesFromCloud([editedDevice], WS_ID));
+check('Every device converges on the recovered set', sameSet(ids(pulledFull), await cloudIds()) && extras.every(e => ids(pulledFull).has(e.id)), `${pulledFull.leads.length}`);
+
+stats.chunkReadFailures.add(`__ros_chunk__${WS_ID}__0002`);
+const updatedBefore = table.get(WS_ID).updated_at;
+check('A read timeout never triggers a rebuild write', (await db.saveWorkspacesToCloud([{ ...editedDevice, updatedAt: new Date().toISOString() }], WS_ID)) === false && table.get(WS_ID).updated_at === updatedBefore);
 stats.chunkReadFailures.clear();
 
 fs.rmSync(harness, { recursive: true, force: true });

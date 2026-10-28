@@ -820,7 +820,7 @@ export function WorkspaceProvider({ children }) {
       const cloudDeleted = Array.isArray(cloudRow.sequence_config?.deletedLeadIds) ? cloudRow.sequence_config.deletedLeadIds : [];
       const deletedLeadIds = capTombstones([...(target.deletedLeadIds || []), ...cloudDeleted], wsId);
 
-      const cutoff = cloudRow.incomplete ? undefined : localOnlyCutoffFor(target, cloudRow.updated_at);
+      const cutoff = cloudRow.incomplete ? undefined : localOnlyCutoffFor(target, cloudRow.updated_at, cloudRow.sequence_config);
       const mergedLeads = mergeWorkspaceLeads(target.leads || [], cloudRow.leads, {
         workspaceId: wsId,
         localWsUpdatedAt: target.updatedAt,
@@ -828,7 +828,7 @@ export function WorkspaceProvider({ children }) {
         deletedLeadIds,
         localOnlyCutoff: cutoff
       }).map(sanitizeLeadState);
-      const cloudSyncedAt = cutoff === undefined
+      const cloudSyncedAt = cloudRow.incomplete
         ? target.cloudSyncedAt
         : cloudSyncedAtAfterMerge(target.leads, cloudRow.leads, cutoff, cloudRow.updated_at, deletedLeadIds);
 
@@ -1111,7 +1111,7 @@ export function WorkspaceProvider({ children }) {
                 ...(localWs.deletedLeadIds || []),
                 ...(cloudWs.deletedLeadIds || [])
               ];
-              const cutoff = localOnlyCutoffFor(localWs, cloudWs.cloudSyncedAt || cloudWs.updatedAt);
+              const cutoff = localOnlyCutoffFor(localWs, cloudWs.cloudSyncedAt || cloudWs.updatedAt, cloudWs.sequenceConfig);
               const rawMergedLeads = mergeWorkspaceLeads(localWs.leads || [], cloudWs.leads || [], {
                 workspaceId: localWs.id,
                 localWsUpdatedAt: localWs.updatedAt,
@@ -1123,7 +1123,7 @@ export function WorkspaceProvider({ children }) {
               const mergedLeads = rawMergedLeads.map(sanitizeLeadState);
               // Computed by fetchWorkspacesFromCloud against the raw cloud leads (cloudWs.leads here
               // already includes this device's pending leads, so it can't be recomputed from them)
-              const cloudSyncedAt = cloudWs.cloudSyncedAt || localWs.cloudSyncedAt || null;
+              const cloudSyncedAt = cloudWs.cloudSyncedAt !== undefined ? cloudWs.cloudSyncedAt : (localWs.cloudSyncedAt || null);
               const localTime = new Date(localWs.updatedAt || localWs.createdAt || 0).getTime();
               const cloudTime = new Date(cloudWs.updatedAt || cloudWs.createdAt || 0).getTime();
 
