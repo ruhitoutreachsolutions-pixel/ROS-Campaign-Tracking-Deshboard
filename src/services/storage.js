@@ -549,6 +549,12 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
   });
 
   // 2. Merge cloud leads non-destructively by ID or matching email address
+  // Leads the cloud stores under their own id are separate rows even when they share an email (an
+  // import can hold the same address twice). Matching by email only pairs a cloud lead with a local
+  // lead the cloud does NOT hold (the same contact added on two devices). Folding two cloud rows into
+  // one left this device one lead short, so every later save was refused as a shrink and its sends
+  // never left the device.
+  const cloudIdKeys = new Set(validCloud.filter(l => l.id).map(l => String(l.id)));
   const cloudBackedKeys = new Set();
   validCloud.forEach(cLead => {
     const key = cLead.id ? String(cLead.id) : (cLead.email ? `email:${cLead.email.toLowerCase().trim()}` : `gen_${Math.random()}`);
@@ -558,7 +564,8 @@ export function mergeWorkspaceLeads(localLeads = [], cloudLeads = [], options = 
     if (leadMap.has(key)) {
       matchKey = key;
     } else if (emailKey && emailToKeyMap.has(emailKey)) {
-      matchKey = emailToKeyMap.get(emailKey);
+      const candidate = emailToKeyMap.get(emailKey);
+      if (!cloudIdKeys.has(candidate) && !cloudBackedKeys.has(candidate)) matchKey = candidate;
     }
 
     if (matchKey && leadMap.has(matchKey)) {

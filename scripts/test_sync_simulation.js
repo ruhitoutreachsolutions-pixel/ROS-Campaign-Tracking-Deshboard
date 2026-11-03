@@ -485,6 +485,27 @@ check('...without committing or touching any row (other portals have nothing to 
 
 check('Both portals show the same Sent count', sentCount(v1.leads) === sentCount(v2.leads) && sentCount(v1.leads) === both.size, `${sentCount(v1.leads)} / ${sentCount(v2.leads)} / cloud ${both.size}`);
 
+console.log('\n--- An import with two rows for the same email reaches another portal');
+let importer = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+let teammate = crewlix(await db.fetchWorkspacesFromCloud([], WS_ID));
+await tick();
+const twins = [
+  { id: 'ld_twin_a', email: 'twin@example.test', firstName: 'Twin A', campaignName: 'Imported', importedAt: iso(Date.now()), updatedAt: iso(Date.now()) },
+  { id: 'ld_twin_b', email: 'twin@example.test', firstName: 'Twin B', campaignName: 'Imported', importedAt: iso(Date.now()), updatedAt: iso(Date.now()) }
+];
+importer = { ...importer, leads: [...importer.leads, ...twins], updatedAt: iso(Date.now()) };
+check('Importer saves both rows', await db.saveWorkspacesToCloud([importer], WS_ID), db.getLastCloudError() || '');
+teammate = crewlix(await db.fetchWorkspacesFromCloud([teammate], WS_ID));
+check('Teammate\'s portal receives both rows (not folded into one)', ['ld_twin_a', 'ld_twin_b'].every(id => ids(teammate).has(id)), `${teammate.leads.filter(l => l.email === 'twin@example.test').length} row(s)`);
+await tick();
+teammate = markSent(teammate, 1000, 75);
+check('Teammate\'s sends upload afterwards (no "Refused to shrink")', await db.saveWorkspacesToCloud([teammate], WS_ID), db.getLastCloudError() || '');
+// A portal that already folded the pair under the old merge gets the missing row back
+const folded = { ...teammate, leads: teammate.leads.filter(l => l.id !== 'ld_twin_b'), updatedAt: iso(Date.now()) };
+const refolded = crewlix(await db.fetchWorkspacesFromCloud([folded], WS_ID));
+check('A portal missing one of the pair gets it back on its next pull', ids(refolded).has('ld_twin_b'));
+check('...and can save again', await db.saveWorkspacesToCloud([{ ...refolded, updatedAt: iso(Date.now()) }], WS_ID), db.getLastCloudError() || '');
+
 fs.rmSync(harness, { recursive: true, force: true });
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);
