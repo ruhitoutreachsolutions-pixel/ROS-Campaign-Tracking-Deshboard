@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge, countLeadsAheadOfCloud } from './storage';
+import { mergeWorkspaceLeads, isLeadPermanentlyPurged, sanitizeLeadForWorkspace, refillFromBaseline, capTombstones, cloudSyncedAtAfterMerge, countLeadsAheadOfCloud, getCachedPartitionFromLocal, saveCachedPartitionToLocal, getMultipleCachedPartitions } from './storage';
 import { fetchDncRegistryFromGoogleSheets } from './googleSheetsService';
 import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
 import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
@@ -155,6 +155,19 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
 
       chunkLeads = new Map();
       const cacheKeyOf = (h) => `${h?.updated_at || ''}|${h?.sequence_config?.hash || ''}`;
+      
+      // Hydrate in-memory partition cache from persistent IndexedDB so page refreshes never re-download
+      try {
+        const localCachedPartitions = await getMultipleCachedPartitions(liveChunkIds);
+        localCachedPartitions.forEach((entry, id) => {
+          if (!partitionCache.has(id)) {
+            partitionCache.set(id, entry);
+          }
+        });
+      } catch (cacheErr) {
+        console.warn('[Cache] Could not read IndexedDB partitions:', cacheErr);
+      }
+
       const toFetch = [];
       liveChunkIds.forEach(id => {
         const cached = partitionCache.get(id);
@@ -171,7 +184,9 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
           const leads = Array.isArray(cr.leads) ? cr.leads : [];
           chunkLeads.set(cr.id, leads);
           headerById.set(cr.id, { id: cr.id, updated_at: cr.updated_at, sequence_config: cr.sequence_config });
-          partitionCache.set(cr.id, { key: cacheKeyOf(cr), leads });
+          const cacheEntry = { key: cacheKeyOf(cr), leads };
+          partitionCache.set(cr.id, cacheEntry);
+          saveCachedPartitionToLocal(cr.id, cacheKeyOf(cr), leads).catch(() => {});
         });
       };
       // Fetch in safe batches of 4 chunks (~2.5 MB per batch), then retry missing ones singly
@@ -484,7 +499,7 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
         const isTarget = targetWorkspaceId && targetWorkspaceId === item.id;
         // Crewlix is always read in full: comparing workspace timestamps can't tell whether this
         // device's lead edits are in the cloud (unchanged partitions come from the cache anyway).
-        const needsCloudLeads = item.id === PRIMARY_WORKSPACE_ID || isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
+        const needsCloudLeads = isTarget || unionSentEmailsFor.includes(item.id) || !localWs || !Array.isArray(localWs.leads) || localWs.leads.length === 0 || (cloudTime > localTime + 2000);
         let rawCloudLeads = null;
 
         if (needsCloudLeads) {

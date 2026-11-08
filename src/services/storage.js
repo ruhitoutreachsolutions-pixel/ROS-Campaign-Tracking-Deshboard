@@ -45,6 +45,71 @@ function openDB() {
 }
 
 // Historical deleted campaigns that must never be merged or resurrected from stale local caches
+// ---------------------------------------------------------------------------
+// PERSISTENT PARTITION CACHE (INDEXEDDB)
+// Caches downloaded lead partition chunks locally on each laptop so that
+// browser page reloads and tab refreshes NEVER re-download 18MB over the wire.
+// ---------------------------------------------------------------------------
+export async function getCachedPartitionFromLocal(chunkId) {
+  try {
+    const db = await openDB();
+    if (!db) return null;
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.get('chunk_' + chunkId);
+    return await new Promise((resolve) => {
+      req.onsuccess = () => resolve(req.result ? req.result.data : null);
+      req.onerror = () => resolve(null);
+    });
+  } catch (err) {
+    return null;
+  }
+}
+
+export async function saveCachedPartitionToLocal(chunkId, key, leads) {
+  try {
+    const db = await openDB();
+    if (!db) return false;
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.put({
+      key: 'chunk_' + chunkId,
+      cacheKey: key,
+      data: { key, leads },
+      updatedAt: new Date().toISOString()
+    });
+    return await new Promise((resolve) => {
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch (err) {
+    return false;
+  }
+}
+
+export async function getMultipleCachedPartitions(chunkIds) {
+  try {
+    const db = await openDB();
+    if (!db || !Array.isArray(chunkIds) || chunkIds.length === 0) return new Map();
+    const map = new Map();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    await Promise.all(chunkIds.map(id => new Promise((resolve) => {
+      const req = store.get('chunk_' + id);
+      req.onsuccess = () => {
+        if (req.result && req.result.data) {
+          map.set(id, req.result.data);
+        }
+        resolve();
+      };
+      req.onerror = () => resolve();
+    })));
+    return map;
+  } catch (err) {
+    return new Map();
+  }
+}
+
 export const PERMANENTLY_PURGED_CAMPAIGNS = {
   'ws_zrnl1fjb': new Set([
     'Banqueting-halls-UK-Campaign-2',
