@@ -411,7 +411,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
     } else if (!result.connected) {
       setCloudSyncToast({
         type: 'warning',
-        message: `⚠️ Cloud Database not connected. Click "Setup Supabase" to enable worldwide sync.`,
+        message: `⚠️ Cloud Database not connected. Click "Cloud Settings" to enable worldwide sync.`,
         action: () => onOpenCloudSync && onOpenCloudSync()
       });
     } else {
@@ -484,7 +484,7 @@ export default function LeadsTable({ onOpenImportModal, onOpenLeadDetail, onOpen
                 onClick={cloudSyncToast.action}
                 className="px-3 py-1 rounded-xl bg-[#00C2FF] text-[#0A0A0A] font-bold text-xs hover:bg-[#00C2FF]/90 transition-all cursor-pointer"
               >
-                Setup Supabase
+                Cloud Settings
               </button>
             )}
             <button

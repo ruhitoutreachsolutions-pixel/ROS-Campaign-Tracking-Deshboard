@@ -238,7 +238,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     if (sharedOk) {
       setSheetsMessage('Google Sheets configuration saved and applied to all Admin, Warrior & Client portals.');
     } else {
-      setSheetsError('Saved on this device only — could not publish to the cloud, so other portals will not pick it up yet. Check the Supabase connection and save again.');
+      setSheetsError('Saved on this device only — could not publish to the cloud, so other portals will not pick it up yet. Check the cloud database connection and save again.');
     }
     if (refreshSheetsStatus) refreshSheetsStatus();
     setTimeout(() => setSheetsMessage(''), 4000);

@@ -90,7 +90,7 @@ export default function GoogleSheetsSyncPopup({ isOpen, onClose, onOpenSettings 
             </span>
           </div>
           <div className="flex items-center justify-between text-gray-400">
-            <span>Primary Store (Supabase):</span>
+            <span>Primary Store (Railway Cloud):</span>
             <span className="text-[#00E5A0] font-semibold flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" /> Saved Securely
             </span>

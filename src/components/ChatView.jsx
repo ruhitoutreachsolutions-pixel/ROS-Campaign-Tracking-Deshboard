@@ -514,7 +514,7 @@ export default function ChatView() {
                   </div>
                   <h4 className="text-sm font-bold text-white">Direct Conversation with {activeContact.name}</h4>
                   <p className="text-xs text-gray-400 max-w-sm mt-1">
-                    Messages are delivered in real time across all devices and safely persisted in Supabase.
+                    Messages are delivered in real time across all devices and safely persisted in Railway Cloud.
                   </p>
                 </div>
               ) : (
@@ -618,7 +618,7 @@ export default function ChatView() {
               </form>
               <div className="text-[10px] text-gray-500 mt-1.5 ml-2 font-mono flex items-center justify-between">
                 <span>Shift + Enter for new line · Real-time encrypted channel</span>
-                <span className="text-[#00E5A0]">⚡ Supabase Realtime Active</span>
+                <span className="text-[#00E5A0]">⚡ Railway Realtime Active</span>
               </div>
             </div>
           </>
@@ -783,7 +783,7 @@ export default function ChatView() {
                 You are about to permanently delete <strong className="text-red-400 font-mono font-bold">{selectedMsgIds.size}</strong> message(s) from this conversation.
               </p>
               <p className="text-xs text-gray-400">
-                These messages will be erased from Supabase Cloud Database and synced across all devices in real time.
+                These messages will be erased from Railway Cloud Database and synced across all devices in real time.
               </p>
             </div>
 
