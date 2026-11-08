@@ -165,23 +165,18 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     setStatusMessage('');
 
     if (!supabaseUrl.trim() || !supabaseKey.trim()) {
-      setErrorMessage('Please enter both Supabase Project URL and Anon Public API Key.');
-      return;
-    }
-
-    if (!supabaseUrl.includes('.supabase.co')) {
-      setErrorMessage('Invalid Supabase URL. It should look like: https://xxxx.supabase.co');
+      setErrorMessage('Please enter both Cloud Database URL and Anon Public API Key.');
       return;
     }
 
     if (!supabaseKey.trim().startsWith('eyJ')) {
-      setErrorMessage('Invalid Supabase Anon Key. Anon keys must be a JWT starting with "eyJ...". Make sure you did not autofill a password.');
+      setErrorMessage('Invalid Anon Key. Anon keys must be a JWT starting with "eyJ...". Make sure you did not autofill a password.');
       return;
     }
 
     // The project is locked in db.js; this only clears any stale per-browser override
     if (!saveSupabaseConfig(supabaseUrl, supabaseKey)) {
-      setErrorMessage('This portal is locked to the Crewlix UK Ltd Supabase project and cannot be pointed at another database.');
+      setErrorMessage('This portal is locked to the authoritative cloud project and cannot be pointed at another database.');
       return;
     }
     setIsSaving(true);
@@ -189,13 +184,13 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     try {
       const ok = await saveWorkspacesToCloud(workspaces);
       if (ok) {
-        setStatusMessage(`Successfully connected to Supabase! Uploaded ${workspaces.length} workspace(s) and ${workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)} leads to the cloud database.`);
+        setStatusMessage(`Successfully connected to Railway Cloud! Uploaded ${workspaces.length} workspace(s) and ${workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)} leads to the cloud database.`);
       } else {
         const err = getLastCloudError();
-        setErrorMessage(err ? `Supabase sync error: ${err}` : 'Supabase credentials saved. Please make sure you ran the SQL Table Setup in Supabase.');
+        setErrorMessage(err ? `Cloud sync error: ${err}` : 'Cloud credentials saved.');
       }
     } catch (err) {
-      setErrorMessage(`Connection error: ${err.message || 'Please check your Supabase URL, Key, and SQL Table.'}`);
+      setErrorMessage(`Connection error: ${err.message || 'Please check your Cloud URL and Key.'}`);
     } finally {
       setIsSaving(false);
     }
@@ -363,7 +358,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
           <div>
             <h3 className="text-base font-bold text-white">Dual-Cloud Database & Redundancy Settings</h3>
             <p className="text-xs text-[#7B7B7B]">
-              Real-time synchronization between Supabase PostgreSQL and Google Sheets.
+              Real-time synchronization between Railway PostgreSQL and Google Sheets.
             </p>
           </div>
         </div>
@@ -379,7 +374,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>Primary: Supabase Cloud</span>
+            <span>Primary: Railway Cloud</span>
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00E5A0]' : 'bg-gray-500'}`} />
           </button>
 
@@ -427,12 +422,12 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-[#00E5A0] animate-pulse shadow-lg shadow-[#00E5A0]/50' : 'bg-amber-400'}`} />
                 <div>
                   <div className="text-xs font-bold text-white">
-                    {isConnected ? '🟢 Supabase Cloud Database Connected' : '🟡 Browser Storage Mode (Local Only)'}
+                    {isConnected ? '🟢 Railway PostgreSQL Database Connected' : '🟡 Browser Storage Mode (Local Only)'}
                   </div>
                   <div className="text-[11px] text-[#7B7B7B]">
                     {isConnected 
-                      ? 'All leads and client credentials are synchronized live in Supabase PostgreSQL.' 
-                      : 'Connect your free Supabase database below so clients can see your uploaded leads from their computers.'}
+                      ? 'All leads and client credentials are synchronized live in Railway PostgreSQL.' 
+                      : 'Connect your cloud database below so clients can see your uploaded leads from their computers.'}
                   </div>
                 </div>
               </div>
@@ -444,7 +439,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                     onClick={handleForcePullCloud}
                     disabled={isSaving}
                     className="px-3 py-1.5 rounded-lg bg-[#00C2FF]/10 hover:bg-[#00C2FF]/20 text-[#00C2FF] border border-[#00C2FF]/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-                    title="Pull authoritative data directly from Supabase Cloud"
+                    title="Pull authoritative data directly from Railway Cloud"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Pull from Cloud</span>
@@ -491,35 +486,35 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#00C2FF] uppercase tracking-wider">
                     <Cloud className="w-3.5 h-3.5" />
-                    <span>Supabase Cloud Connection (Locked · same on every device)</span>
+                    <span>Railway Cloud Connection (Locked · same on every device)</span>
                   </div>
                   <a
-                    href="https://supabase.com/dashboard"
+                    href="https://railway.com/dashboard"
                     target="_blank"
                     rel="noreferrer"
                     className="text-[10px] text-[#00C2FF] hover:underline"
                   >
-                    Open Supabase Dashboard →
+                    Open Railway Dashboard →
                   </a>
                 </div>
 
                 <div>
                   <label className="block text-[11px] text-gray-300 font-semibold mb-1">
-                    1. Project URL (from Project Settings → API)
+                    1. Railway API Endpoint (PostgREST)
                   </label>
                   <input
                     type="url"
                     required
                     readOnly
                     value={supabaseUrl}
-                    placeholder="https://xyzabcdefghijklm.supabase.co"
+                    placeholder="https://postgrest-production-b334.up.railway.app"
                     className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] focus:border-[#00C2FF] rounded-lg text-white text-xs font-mono outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] text-gray-300 font-semibold mb-1">
-                    2. Project API Anon Key (from Project Settings → API)
+                    2. Railway Public Anon Key (JWT)
                   </label>
                   <input
                     type="password"
@@ -537,7 +532,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className="pt-2 border-t border-[#1E3A5F]">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] text-gray-300 font-semibold">
-                      3. SQL Setup (Paste in Supabase SQL Editor):
+                      3. Database Backend: Railway PostgreSQL
                     </span>
                     <button
                       type="button"
