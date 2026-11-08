@@ -6,13 +6,13 @@ import cgeAuthoritative3804 from '../data/cgeAuthoritative3804.json';
 import crewlixAuthoritative20113 from '../data/crewlixAuthoritative20113.json';
 
 // Default Supabase project for ROS Outreach Dashboard (Crewlix UK Ltd Active Database)
-const DEFAULT_SUPABASE_URL = 'https://efpywnwavldrycjspdel.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVmcHl3bndhdmxkcnljanNwZGVsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMwMzE4MDEsImV4cCI6MjEwODYwNzgwMX0.i0wlV3E3CiLL9uZ5JCVr5hfYnkwywhWUCvjDp5zcz0s';
+const DEFAULT_SUPABASE_URL = 'https://postgrest-production-b334.up.railway.app';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzk0MTU0NzQ2LCJleHAiOjIxMDk1MTQ3NDZ9.7VWzMpjUfScevSIjF5QieeneBPDy5ydfyxOZCvC4oZc';
 
 // The project is locked: every device, browser and build uses exactly this database. Credentials
 // saved in a browser's localStorage (or VITE_SUPABASE_* build env) used to override it, so a device
 // that had once been pointed at an older project kept reading that project's stale leads.
-export const SUPABASE_PROJECT_REF = 'efpywnwavldrycjspdel';
+export const SUPABASE_PROJECT_REF = 'railway-b334';
 
 const STORAGE_KEY_SUPABASE_URL = 'ros_supabase_url_v2';
 const STORAGE_KEY_SUPABASE_KEY = 'ros_supabase_key_v2';
@@ -376,6 +376,17 @@ export function getSupabaseClient() {
     try {
       cachedClient = createClient(url.trim(), key.trim(), {
         auth: { persistSession: false },
+        global: {
+          fetch: (input, init) => {
+            let target = input;
+            if (typeof input === 'string') {
+              target = input.replace('/rest/v1', '');
+            } else if (input && input.url) {
+              target = new Request(input.url.replace('/rest/v1', ''), input);
+            }
+            return fetch(target, init);
+          }
+        },
         realtime: {
           params: {
             eventsPerSecond: 20
