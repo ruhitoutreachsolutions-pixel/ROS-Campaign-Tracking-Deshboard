@@ -50,17 +50,22 @@ export default function Navbar({ onOpenNewWorkspace, onOpenWorkspaceSettings, on
   const [wsDropdownOpen, setWsDropdownOpen] = useState(false);
   const [copiedShare, setCopiedShare] = useState(false);
 
-  // Count total leads unsubscribed via public link
+  // Count total unique contacts unsubscribed via public link (matches Unsub Hub log)
   const linkUnsubsTotal = useMemo(() => {
-    let count = 0;
+    const uniqueEmails = new Set();
+    let noEmailCount = 0;
     (workspaces || []).forEach(ws => {
       if (ws && Array.isArray(ws.leads)) {
         ws.leads.forEach(l => {
-          if (isLeadUnsubscribedFromLink(l)) count++;
+          if (isLeadUnsubscribedFromLink(l)) {
+            const clean = String(l.email || '').toLowerCase().trim();
+            if (clean) uniqueEmails.add(clean);
+            else noEmailCount++;
+          }
         });
       }
     });
-    return count;
+    return uniqueEmails.size + noEmailCount;
   }, [workspaces]);
   const [timeAgoStr, setTimeAgoStr] = useState('just now');
 
