@@ -12,7 +12,7 @@ import {
   initialWarriorTimeline,
   initialFormSubmissions
 } from '../data/initialWorkspaces';
-import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested, isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
+import { getTodayFormatted, calculateWorkspaceMetrics, generateMailMergeTSV, copyToClipboard, isLeadDNC, isPositivePipelineStage, deriveLeadStatus, isLeadInterested, isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS, extractEmailDomain, isCompanyEmailDomain } from '../utils/helpers';
 import { 
   fetchDncRegistryFromCloud,
   fetchWorkspacesFromCloud,
@@ -991,7 +991,35 @@ export function WorkspaceProvider({ children }) {
         });
       }
 
+      // 2b. Build company domains map from all verified & live DNC entries (Excludes public providers like Gmail/Yahoo/BT)
+      const dncCompanyDomains = new Map();
+      dncMap.forEach((rec, email) => {
+        const domain = extractEmailDomain(email);
+        if (domain && isCompanyEmailDomain(domain)) {
+          if (!dncCompanyDomains.has(domain)) {
+            dncCompanyDomains.set(domain, rec);
+          }
+        }
+      });
+
       setWorkspaces(prev => {
+        // Collect any additional company domains from already-loaded link unsubscribes in workspaces
+        (prev || []).forEach(w => {
+          if (!w || !Array.isArray(w.leads)) return;
+          w.leads.forEach(l => {
+            if (l && l.email && isLeadUnsubscribedFromLink(l)) {
+              const domain = extractEmailDomain(l.email);
+              if (domain && isCompanyEmailDomain(domain) && !dncCompanyDomains.has(domain)) {
+                dncCompanyDomains.set(domain, {
+                  email: l.email.trim().toLowerCase(),
+                  reason: l.unsubscribeReason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                  unsubscribedAt: l.unsubscribedAt || l.updatedAt || new Date().toISOString()
+                });
+              }
+            }
+          });
+        });
+
         let hasAnyUpdate = false;
         const next = prev.map(w => {
           if (!w || !Array.isArray(w.leads) || w.leads.length === 0) return w;
@@ -999,10 +1027,15 @@ export function WorkspaceProvider({ children }) {
           const nextLeads = w.leads.map(lead => {
             if (!lead || !lead.email) return lead;
             const clean = String(lead.email || '').trim().toLowerCase();
+            const leadDomain = extractEmailDomain(clean);
             const dncRec = dncMap.get(clean);
-            const isLinkUnsub = Boolean(dncRec) || isLeadUnsubscribedFromLink(lead);
+            const isDirectUnsub = Boolean(dncRec) || isLeadUnsubscribedFromLink(lead);
+            const domainDncRec = (!isDirectUnsub && leadDomain && isCompanyEmailDomain(leadDomain))
+              ? dncCompanyDomains.get(leadDomain)
+              : null;
+            const isDomainUnsub = Boolean(domainDncRec);
 
-            if (isLinkUnsub) {
+            if (isDirectUnsub || isDomainUnsub) {
               const alreadyProperDnc = lead.isDNC === true && 
                                        lead.status === 'dnc' && 
                                        String(lead.stage || '').toLowerCase().includes('dnc') &&
@@ -1010,17 +1043,22 @@ export function WorkspaceProvider({ children }) {
               if (!alreadyProperDnc) {
                 wsUpdated = true;
                 hasAnyUpdate = true;
+                const finalReason = isDirectUnsub
+                  ? (lead.unsubscribeReason || dncRec?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)')
+                  : `Company domain unsubscribed (@${leadDomain} via ${domainDncRec.email})`;
+                const noteTag = isDirectUnsub ? '[Unsubscribed via link]' : `[Company domain unsubscribed: @${leadDomain}]`;
+
                 return {
                   ...lead,
                   status: 'dnc',
                   stage: 'DNC / Unsubscribed',
                   isDNC: true,
                   unsubscribedFromLink: true,
-                  unsubscribedAt: lead.unsubscribedAt || dncRec?.unsubscribedAt || new Date().toISOString(),
-                  unsubscribeReason: lead.unsubscribeReason || dncRec?.reason || 'Public unsubscribe link (unsub.crewlixhr.co.uk)',
+                  unsubscribedAt: lead.unsubscribedAt || dncRec?.unsubscribedAt || domainDncRec?.unsubscribedAt || new Date().toISOString(),
+                  unsubscribeReason: finalReason,
                   notes: lead.notes 
-                    ? (lead.notes.includes('[Unsubscribed via link') ? lead.notes : `${lead.notes} | [Unsubscribed via link]`)
-                    : '[Unsubscribed via link]'
+                    ? (lead.notes.includes(noteTag) ? lead.notes : `${lead.notes} | ${noteTag}`)
+                    : noteTag
                 };
               }
             } else if (lead.unsubscribedFromLink === true && !isLeadUnsubscribedFromLink(lead)) {
@@ -1055,6 +1093,9 @@ export function WorkspaceProvider({ children }) {
 
         if (hasAnyUpdate) {
           saveWorkspacesToLocal(next);
+          saveWorkspacesToCloud(next).catch(err => {
+            console.warn('reconcileWithCloudDncRegistry cloud sync notice:', err);
+          });
           return next;
         }
         return prev;

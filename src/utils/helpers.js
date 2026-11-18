@@ -263,7 +263,53 @@ export const VERIFIED_LINK_UNSUB_RECORDS = [
   }
 ];
 
-// Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk)
+// Public / generic / ISP consumer email domains that must NEVER be blocked as an entire company domain
+export const PUBLIC_EMAIL_DOMAINS = new Set([
+  // Google / Gmail
+  'gmail.com', 'googlemail.com',
+  // Yahoo
+  'yahoo.com', 'yahoo.co.uk', 'yahoo.ca', 'yahoo.fr', 'yahoo.de', 'yahoo.es', 'yahoo.it', 'ymail.com', 'rocketmail.com',
+  // Microsoft / Outlook / Hotmail
+  'hotmail.com', 'hotmail.co.uk', 'hotmail.fr', 'hotmail.de', 'hotmail.es', 'hotmail.it',
+  'outlook.com', 'outlook.co.uk', 'live.com', 'live.co.uk', 'live.fr', 'msn.com', 'passport.com',
+  // Apple
+  'icloud.com', 'me.com', 'mac.com',
+  // AOL
+  'aol.com', 'aol.co.uk', 'aim.com',
+  // Zoho & Proton & Tutanota
+  'zoho.com', 'zohomail.com', 'proton.me', 'protonmail.com', 'pm.me', 'tutanota.com', 'tuta.com', 'tuta.io',
+  // Mail.com & GMX
+  'mail.com', 'email.com', 'gmx.com', 'gmx.co.uk', 'gmx.net', 'gmx.de',
+  // Fastmail & Yandex
+  'fastmail.com', 'fastmail.fm', 'yandex.com', 'yandex.ru', 'ya.ru',
+  // UK ISPs & Telecoms (Essential for UK market)
+  'btinternet.com', 'btconnect.com', 'btopenworld.com',
+  'virginmedia.com', 'virgin.net', 'blueyonder.co.uk', 'ntlworld.com',
+  'sky.com',
+  'talktalk.net', 'talktalk.co.uk', 'tiscali.co.uk', 'lineone.net',
+  'plus.net', 'plusnet.com',
+  'freeserve.co.uk', 'wanadoo.co.uk', 'orange.net',
+  'o2.co.uk', 'vodafone.co.uk', 'vodafone.com'
+]);
+
+// Extract domain from an email address (e.g., 'john@acmehealth.co.uk' -> 'acmehealth.co.uk')
+export function extractEmailDomain(email) {
+  if (!email || typeof email !== 'string') return '';
+  const clean = email.trim().toLowerCase();
+  const atIdx = clean.lastIndexOf('@');
+  if (atIdx === -1 || atIdx === clean.length - 1) return '';
+  return clean.substring(atIdx + 1).trim();
+}
+
+// Check if a domain is a custom company/business domain (not a public provider like gmail or btinternet)
+export function isCompanyEmailDomain(domain) {
+  if (!domain || typeof domain !== 'string') return false;
+  const clean = domain.trim().toLowerCase();
+  if (clean.length < 4 || !clean.includes('.')) return false;
+  return !PUBLIC_EMAIL_DOMAINS.has(clean);
+}
+
+// Check if a lead specifically unsubscribed via the public link (unsub.crewlixhr.co.uk) or company domain
 export function isLeadUnsubscribedFromLink(lead) {
   if (!lead) return false;
   const email = String(lead.email || '').toLowerCase().trim();
@@ -280,8 +326,10 @@ export function isLeadUnsubscribedFromLink(lead) {
       reason.includes('unsub.crewlixhr.co.uk') ||
       reason.includes('public unsubscribe link') ||
       reason.includes('unsubscribe link') ||
+      reason.includes('company domain unsubscribed') ||
       notes.includes('unsubscribed via link') ||
       notes.includes('unsub.crewlixhr.co.uk') ||
+      notes.includes('company domain unsubscribed') ||
       Boolean(lead.unsubscribedAt)
     ) {
       return true;

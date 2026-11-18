@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { fetchDncRegistryFromCloud } from '../services/db';
-import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS } from '../utils/helpers';
+import { isLeadUnsubscribedFromLink, KNOWN_LINK_UNSUB_EMAILS, VERIFIED_LINK_UNSUB_RECORDS, extractEmailDomain, isCompanyEmailDomain } from '../utils/helpers';
 import { 
   X, 
   Copy, 
@@ -129,7 +129,15 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
       }
     });
 
-    const list = Array.from(map.values());
+    const list = Array.from(map.values()).map(item => {
+      const domain = extractEmailDomain(item.email);
+      const isCompDomain = Boolean(domain && isCompanyEmailDomain(domain));
+      return {
+        ...item,
+        domain,
+        isCompanyDomain: isCompDomain
+      };
+    });
     // Sort latest first
     list.sort((a, b) => new Date(b.unsubscribedAt || 0) - new Date(a.unsubscribedAt || 0));
     return list;
@@ -453,7 +461,7 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
                       </span>
                     </div>
                     <span className="text-[10px] text-gray-500 font-mono">
-                      Cloud Registry synced · Auto-excluded from all Mail Merge dispatches
+                      Cloud Registry synced · Auto-excluded from all Mail Merge dispatches · Company Domain DNC Active
                     </span>
                   </div>
                 </div>
@@ -556,9 +564,24 @@ export default function UnsubscribeLinkModal({ isOpen, onClose, initialTab = 'ge
                                 <div>
                                   <div className="font-semibold text-white">{sub.companyName || '—'}</div>
                                   {sub.firstName && <div className="text-[10px] text-gray-400">{sub.firstName}</div>}
+                                  {sub.isCompanyDomain && (
+                                    <div className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 text-[9px] font-mono font-semibold" title={`Company Domain DNC Active: All other @${sub.domain} emails in your workspace are automatically excluded from dispatches.`}>
+                                      <Building2 className="w-2.5 h-2.5 text-purple-400" />
+                                      <span>@{sub.domain} (All domain emails DNC)</span>
+                                    </div>
+                                  )}
                                 </div>
                               ) : (
-                                <span className="text-gray-600 font-mono">—</span>
+                                <div>
+                                  {sub.isCompanyDomain ? (
+                                    <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 text-[9px] font-mono font-semibold" title={`Company Domain DNC Active: All other @${sub.domain} emails in your workspace are automatically excluded from dispatches.`}>
+                                      <Building2 className="w-2.5 h-2.5 text-purple-400" />
+                                      <span>@{sub.domain} (All domain emails DNC)</span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-gray-600 font-mono">—</span>
+                                  )}
+                                </div>
                               )}
                             </td>
 
