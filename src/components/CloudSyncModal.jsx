@@ -184,7 +184,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
     try {
       const ok = await saveWorkspacesToCloud(workspaces);
       if (ok) {
-        setStatusMessage(`Successfully connected to Railway Cloud! Uploaded ${workspaces.length} workspace(s) and ${workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)} leads to the cloud database.`);
+        setStatusMessage(`Successfully connected to Supabase Cloud! Uploaded ${workspaces.length} workspace(s) and ${workspaces.reduce((acc, w) => acc + (w.leads?.length || 0), 0)} leads to the cloud database.`);
       } else {
         const err = getLastCloudError();
         setErrorMessage(err ? `Cloud sync error: ${err}` : 'Cloud credentials saved.');
@@ -358,7 +358,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
           <div>
             <h3 className="text-base font-bold text-white">Dual-Cloud Database & Redundancy Settings</h3>
             <p className="text-xs text-[#7B7B7B]">
-              Real-time synchronization between Railway PostgreSQL and Google Sheets.
+              Real-time synchronization between Supabase PostgreSQL and Google Sheets.
             </p>
           </div>
         </div>
@@ -374,7 +374,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>Primary: Railway Cloud</span>
+            <span>Primary: Supabase Cloud</span>
             <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#00E5A0]' : 'bg-gray-500'}`} />
           </button>
 
@@ -422,11 +422,11 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-[#00E5A0] animate-pulse shadow-lg shadow-[#00E5A0]/50' : 'bg-amber-400'}`} />
                 <div>
                   <div className="text-xs font-bold text-white">
-                    {isConnected ? '🟢 Railway PostgreSQL Database Connected' : '🟡 Browser Storage Mode (Local Only)'}
+                    {isConnected ? '🟢 Supabase Cloud Database Connected' : '🟡 Browser Storage Mode (Local Only)'}
                   </div>
                   <div className="text-[11px] text-[#7B7B7B]">
                     {isConnected 
-                      ? 'All leads and client credentials are synchronized live in Railway PostgreSQL.' 
+                      ? 'All leads and client credentials are synchronized live in Supabase PostgreSQL.' 
                       : 'Connect your cloud database below so clients can see your uploaded leads from their computers.'}
                   </div>
                 </div>
@@ -439,7 +439,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                     onClick={handleForcePullCloud}
                     disabled={isSaving}
                     className="px-3 py-1.5 rounded-lg bg-[#00C2FF]/10 hover:bg-[#00C2FF]/20 text-[#00C2FF] border border-[#00C2FF]/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
-                    title="Pull authoritative data directly from Railway Cloud"
+                    title="Pull authoritative data directly from Supabase Cloud"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Pull from Cloud</span>
@@ -486,35 +486,35 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-xs font-bold text-[#00C2FF] uppercase tracking-wider">
                     <Cloud className="w-3.5 h-3.5" />
-                    <span>Railway Cloud Connection (Locked · same on every device)</span>
+                    <span>Supabase Cloud Connection (Locked · same on every device)</span>
                   </div>
                   <a
-                    href="https://railway.com/dashboard"
+                    href="https://supabase.com/dashboard/project/zgowwtfnzjuxgrnkppkc"
                     target="_blank"
                     rel="noreferrer"
                     className="text-[10px] text-[#00C2FF] hover:underline"
                   >
-                    Open Railway Dashboard →
+                    Open Supabase Dashboard →
                   </a>
                 </div>
 
                 <div>
                   <label className="block text-[11px] text-gray-300 font-semibold mb-1">
-                    1. Railway API Endpoint (PostgREST)
+                    1. Supabase Project URL
                   </label>
                   <input
                     type="url"
                     required
                     readOnly
                     value={supabaseUrl}
-                    placeholder="https://postgrest-production-b334.up.railway.app"
+                    placeholder="https://zgowwtfnzjuxgrnkppkc.supabase.co"
                     className="w-full px-3 py-2 bg-[#111827] border border-[#1E3A5F] focus:border-[#00C2FF] rounded-lg text-white text-xs font-mono outline-none"
                   />
                 </div>
 
                 <div>
                   <label className="block text-[11px] text-gray-300 font-semibold mb-1">
-                    2. Railway Public Anon Key (JWT)
+                    2. Supabase Public Anon Key
                   </label>
                   <input
                     type="password"
@@ -532,7 +532,7 @@ create policy "Allow all access" on workspaces for all using (true) with check (
                 <div className="pt-2 border-t border-[#1E3A5F]">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] text-gray-300 font-semibold">
-                      3. Database Backend: Railway PostgreSQL
+                      3. SQL Setup (Paste in Supabase SQL Editor):
                     </span>
                     <button
                       type="button"
