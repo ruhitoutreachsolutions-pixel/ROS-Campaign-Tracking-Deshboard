@@ -844,7 +844,7 @@ export function WorkspaceProvider({ children }) {
       if (aheadOfCloud > 0) {
         console.log(`[CloudSync] ${aheadOfCloud} lead change(s) on this device are missing from the cloud copy of ${wsId}; uploading.`);
         cleanStampRef.current[wsId] = -1;
-      } else if (wasClean) {
+      } else if (wasClean || options.fromOwnSave) {
         cleanStampRef.current[wsId] = Math.max(cleanStampRef.current[wsId] || 0, nextUpdated);
       }
 
@@ -1393,6 +1393,7 @@ export function WorkspaceProvider({ children }) {
   }, [workspaces]);
 
   // 4b. CONTINUOUS CLOUD RECONCILE ENGINE (PULL & SAFE MERGE, NEVER BLIND PUSH)
+  // Throttled to 90s and checks 160-byte timestamp headers first to keep monthly Supabase egress <100MB
   useEffect(() => {
     const autoReconcileInterval = setInterval(async () => {
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -1407,14 +1408,50 @@ export function WorkspaceProvider({ children }) {
             setTasks(cloudMeta.tasks);
           }
           if (Date.now() - lastReportsMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.dailyReports)) {
-            setDailyReports(cloudMeta.dailyReports);
+            setDailyReports(prev => {
+              const prevIds = new Set((prev || []).map(r => r.id));
+              const newReports = cloudMeta.dailyReports.filter(r => !prevIds.has(r.id));
+              if (newReports.length > 0 && currentUser?.role === 'admin') {
+                const rep = newReports[0];
+                playNotificationChime();
+                setLiveToast({
+                  type: 'report',
+                  title: `📊 New Daily Report: ${rep.warriorName}`,
+                  message: `${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups, ${rep.callsBooked} booked`
+                });
+                notifyAdminDesktop(
+                  '📊 ROS Warrior Daily Report Submitted!',
+                  `${rep.warriorName} submitted report for ${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups.`
+                );
+              }
+              return cloudMeta.dailyReports;
+            });
           }
           if (Array.isArray(cloudMeta.warriors) && cloudMeta.warriors.length > 0) {
             setWarriors(cloudMeta.warriors);
           }
+          if (Array.isArray(cloudMeta.warriorTimeline) && cloudMeta.warriorTimeline.length > 0) {
+            setWarriorTimeline(prev => {
+              const prevIds = new Set((prev || []).map(e => e.id));
+              const newEvents = cloudMeta.warriorTimeline.filter(e => !prevIds.has(e.id));
+              if (newEvents.length > 0 && currentUser?.role === 'admin') {
+                const latest = newEvents[0];
+                setLiveToast({
+                  type: 'action',
+                  title: `⚔️ Live Warrior Action: ${latest.warriorName}`,
+                  message: latest.details
+                });
+              }
+              return cloudMeta.warriorTimeline;
+            });
+          }
           if (Date.now() - lastFormMutationTimeRef.current > 10000 && Array.isArray(cloudMeta.formSubmissions)) {
             const deletedIds = getDeletedFormSubmissionIds();
             setFormSubmissions(prev => mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds));
+          }
+          if (Array.isArray(cloudMeta.payments)) {
+            const cleanPayments = cloudMeta.payments.filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id) && !['ws_crewlix', 'ws_crewlixuk'].includes(p.workspaceId));
+            setPayments(cleanPayments);
           }
         }
 
@@ -1470,7 +1507,7 @@ export function WorkspaceProvider({ children }) {
       } finally {
         setTimeout(() => setIsAutoSyncing(false), 1000);
       }
-    }, 45000); // 45 seconds to preserve Supabase quota
+    }, 90000); // 90 seconds to preserve Supabase quota (<100MB/mo egress)
 
     return () => clearInterval(autoReconcileInterval);
   }, []);
@@ -1810,7 +1847,7 @@ export function WorkspaceProvider({ children }) {
 
       // 8d. Realtime Workspace Reconcile Trigger (sender finished saving → pull the merged row)
       if ((event.type === 'WORKSPACE_RECONCILE_NEEDED' || event.type === 'WORKSPACE_SAVED') && event.workspaceId) {
-        if (event.type === 'WORKSPACE_SAVED' && tsOf(event.updatedAt) && tsOf(event.updatedAt) <= (knownCloudTimeRef.current[event.workspaceId] || 0)) {
+        if (tsOf(event.updatedAt) && tsOf(event.updatedAt) <= (knownCloudTimeRef.current[event.workspaceId] || 0)) {
           return;
         }
         fetchAndApplyCloudWorkspace(event.workspaceId).catch(() => {});
@@ -1843,121 +1880,9 @@ export function WorkspaceProvider({ children }) {
       }
     }
 
-    // C. 45-Second Active Polling Backup (Local Server API /api/sync)
-    const backupPollingInterval = setInterval(async () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      try {
-        const cloudMeta = await fetchGlobalMetaFromCloud();
-        if (isCancelled || !cloudMeta) return;
-
-        if (Array.isArray(cloudMeta.dailyReports) && cloudMeta.dailyReports.length > 0) {
-          setDailyReports(prev => {
-            const prevIds = new Set((prev || []).map(r => r.id));
-            const newReports = cloudMeta.dailyReports.filter(r => !prevIds.has(r.id));
-            if (newReports.length > 0) {
-              if (currentUser?.role === 'admin') {
-                const rep = newReports[0];
-                playNotificationChime();
-                setLiveToast({
-                  type: 'report',
-                  title: `📊 New Daily Report: ${rep.warriorName}`,
-                  message: `${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups, ${rep.callsBooked} booked`
-                });
-                notifyAdminDesktop(
-                  '📊 ROS Warrior Daily Report Submitted!',
-                  `${rep.warriorName} submitted report for ${rep.workspaceName}: ${rep.initialSent} initial, ${rep.followUpsSent} follow-ups.`
-                );
-              }
-              const combined = [...newReports, ...(prev || [])];
-              try { localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify(combined)); } catch (e) {}
-              return combined;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.warriorTimeline) && cloudMeta.warriorTimeline.length > 0) {
-          setWarriorTimeline(prev => {
-            const prevIds = new Set((prev || []).map(e => e.id));
-            const newEvents = cloudMeta.warriorTimeline.filter(e => !prevIds.has(e.id));
-            if (newEvents.length > 0) {
-              if (currentUser?.role === 'admin') {
-                const latest = newEvents[0];
-                setLiveToast({
-                  type: 'action',
-                  title: `⚔️ Live Warrior Action: ${latest.warriorName}`,
-                  message: latest.details
-                });
-              }
-              const combined = [...newEvents, ...(prev || [])];
-              try { localStorage.setItem(STORAGE_KEY_TIMELINE, JSON.stringify(combined)); } catch (e) {}
-              return combined;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.tasks) && Date.now() - lastTasksMutationTimeRef.current > 8000) {
-          setTasks(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.tasks)) {
-              try { localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(cloudMeta.tasks)); } catch (e) {}
-              return cloudMeta.tasks;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.warriors) && cloudMeta.warriors.length > 0) {
-          setWarriors(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.warriors)) {
-              try { localStorage.setItem(STORAGE_KEY_WARRIORS, JSON.stringify(cloudMeta.warriors)); } catch (e) {}
-              return cloudMeta.warriors;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.payments)) {
-          const cleanPayments = cloudMeta.payments.filter(p => p && !['inv_101', 'inv_102', 'inv_103'].includes(p.id) && !['ws_crewlix', 'ws_crewlixuk'].includes(p.workspaceId));
-          setPayments(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cleanPayments)) {
-              try { localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(cleanPayments)); } catch (e) {}
-              return cleanPayments;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.importantNotes) && Date.now() - lastNotesMutationTimeRef.current > 8000) {
-          setImportantNotes(prev => {
-            if (JSON.stringify(prev) !== JSON.stringify(cloudMeta.importantNotes)) {
-              try { localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(cloudMeta.importantNotes)); } catch (e) {}
-              return cloudMeta.importantNotes;
-            }
-            return prev;
-          });
-        }
-
-        if (Array.isArray(cloudMeta.formSubmissions)) {
-          if (Date.now() - lastFormMutationTimeRef.current > 8000) {
-            const deletedIds = getDeletedFormSubmissionIds();
-            setFormSubmissions(prev => {
-              const merged = mergeFormSubmissions(prev, cloudMeta.formSubmissions, deletedIds);
-              if (JSON.stringify(prev) !== JSON.stringify(merged)) {
-                try { localStorage.setItem(STORAGE_KEY_FORM_SUBMISSIONS, JSON.stringify(merged)); } catch (e) {}
-                return merged;
-              }
-              return prev;
-            });
-          }
-        }
-      } catch (e) {}
-    }, 45000); // 45s interval to preserve Supabase quota
-
     return () => {
       isCancelled = true;
       unsubscribe();
-      clearInterval(backupPollingInterval);
     };
   }, [currentUser]);
 
@@ -2215,10 +2140,6 @@ export function WorkspaceProvider({ children }) {
       const ok = await saveWorkspacesToCloud(workspacesRef.current, targetId);
       if (ok) {
         setLastSyncedTime(new Date());
-        broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-          workspaceId: targetId,
-          updatedAt: new Date().toISOString()
-        }).catch(() => {});
 
         const updatedWs = (workspacesRef.current || []).find(w => w.id === targetId);
         const totalLeads = updatedWs?.leads?.length || currentWorkspace?.leads?.length || 0;
@@ -2594,11 +2515,6 @@ export function WorkspaceProvider({ children }) {
       updatedAt: nowIso
     }).catch(() => {});
 
-    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-      workspaceId: currentWorkspaceId,
-      updatedAt: nowIso
-    }).catch(() => {});
-
     return true;
   }
 
@@ -2919,11 +2835,6 @@ export function WorkspaceProvider({ children }) {
       updatedAt: nowIso
     }).catch(() => {});
 
-    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-      workspaceId: currentWorkspaceId,
-      updatedAt: nowIso
-    }).catch(() => {});
-
     logWarriorAction('bulk_edit', `Bulk updated ${leadIds.length} selected leads in workspace`);
     return leadIds.length;
   }
@@ -3035,11 +2946,6 @@ export function WorkspaceProvider({ children }) {
         updatedAt: nowIso
       }).catch(() => {});
     }
-
-    broadcastRealtimeEvent('WORKSPACE_RECONCILE_NEEDED', {
-      workspaceId: currentWorkspaceId,
-      updatedAt: nowIso
-    }).catch(() => {});
 
     return leadsWithCampaign.length;
   }

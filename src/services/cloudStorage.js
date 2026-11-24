@@ -10,7 +10,8 @@ import {
   fetchSystemMetaFromSupabase, 
   saveSystemMetaToSupabase,
   fetchFormSubmissionsFromCloud,
-  saveFormSubmissionsToCloud 
+  saveFormSubmissionsToCloud,
+  fetchGlobalMetaFromSupabase 
 } from './db';
 
 const GLOBAL_REALTIME_CHANNEL = 'ros_global_realtime_v2';
@@ -184,21 +185,15 @@ export async function fetchHistoricalEvents() {
 }
 
 // 4. Fetch Global Metadata (Warriors, Reports, Tasks, Timeline, Forms)
+// Protected by 160-byte timestamp caching to prevent egress overages
 export async function fetchGlobalMetaFromCloud() {
   let localData = null;
 
-  // A. Primary: Query Supabase Cloud Database directly
+  // A. Primary: Query Supabase Cloud Database directly (checks timestamp header first!)
   try {
-    const [supabaseMeta, formSubmissions] = await Promise.all([
-      fetchSystemMetaFromSupabase(),
-      fetchFormSubmissionsFromCloud()
-    ]);
-
+    const supabaseMeta = await fetchGlobalMetaFromSupabase();
     if (supabaseMeta) {
-      localData = {
-        ...supabaseMeta,
-        formSubmissions: Array.isArray(formSubmissions) ? formSubmissions : (supabaseMeta.formSubmissions || [])
-      };
+      localData = supabaseMeta;
     }
   } catch (e) {
     console.warn('Supabase fetchGlobalMeta notice:', e);

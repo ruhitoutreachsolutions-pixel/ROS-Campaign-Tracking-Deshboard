@@ -64,6 +64,16 @@ export function compactLeadForCloud(l) {
   return c;
 }
 
+// In-memory & local cache for lightweight conditional cloud fetches (quashes bandwidth egress)
+let cachedSystemMeta = null;
+let cachedSystemMetaUpdatedAt = null;
+
+let cachedFormSubmissions = [];
+let cachedFormSubmissionsUpdatedAt = null;
+
+let cachedDncRegistry = null;
+let cachedDncRegistryUpdatedAt = null;
+
 // Fast 32-bit checksum for chunk delta change detection
 export function computeChunkHash(leads) {
   if (!Array.isArray(leads) || leads.length === 0) return '0';
@@ -124,7 +134,7 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
       if (pass > 0) await new Promise(r => setTimeout(r, 1500));
       const { data: mainData, error: mainErr } = await supabase
         .from('workspaces')
-        .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, leads, sequence_config, activity_log, created_at, updated_at')
+        .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, sequence_config, activity_log, created_at, updated_at')
         .eq('id', wsId)
         .maybeSingle();
 
@@ -155,10 +165,14 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
 
       chunkLeads = new Map();
       const cacheKeyOf = (h) => `${h?.updated_at || ''}|${h?.sequence_config?.hash || ''}`;
-      
+
+      const chunk0Id = `${CHUNK_PREFIX}${wsId}__0000`;
+      const chunk0ExpectedHash = cfg.chunkHashes?.[0] || '';
+      const chunk0CacheKey = `${mainRow.updated_at || ''}|${chunk0ExpectedHash}`;
+
       // Hydrate in-memory partition cache from persistent IndexedDB so page refreshes never re-download
       try {
-        const localCachedPartitions = await getMultipleCachedPartitions(liveChunkIds);
+        const localCachedPartitions = await getMultipleCachedPartitions([chunk0Id, ...liveChunkIds]);
         localCachedPartitions.forEach((entry, id) => {
           if (!partitionCache.has(id)) {
             partitionCache.set(id, entry);
@@ -166,6 +180,25 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
         });
       } catch (cacheErr) {
         console.warn('[Cache] Could not read IndexedDB partitions:', cacheErr);
+      }
+
+      // Resolve Chunk 0 leads: check cache first to save 1.14 MB bandwidth on every sync
+      let chunk0Leads = null;
+      const cached0 = partitionCache.get(chunk0Id);
+      if (cached0 && cached0.key === chunk0CacheKey && Array.isArray(cached0.leads)) {
+        chunk0Leads = cached0.leads;
+      } else {
+        const { data: c0Data, error: c0Err } = await supabase
+          .from('workspaces')
+          .select('leads')
+          .eq('id', wsId)
+          .maybeSingle();
+        if (!c0Err && c0Data && Array.isArray(c0Data.leads)) {
+          chunk0Leads = c0Data.leads;
+          const entry = { key: chunk0CacheKey, leads: chunk0Leads };
+          partitionCache.set(chunk0Id, entry);
+          saveCachedPartitionToLocal(chunk0Id, chunk0CacheKey, chunk0Leads).catch(() => {});
+        }
       }
 
       const toFetch = [];
@@ -225,7 +258,9 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     // authoritative, so missing partitions would look like deleted leads (and vice versa).
     const cfg = mainRow.sequence_config || {};
     const expectedTotal = Number.isFinite(Number(cfg.totalLeads)) && cfg.totalLeads !== undefined ? Number(cfg.totalLeads) : null;
-    const fullLeads = Array.isArray(mainRow.leads) ? [...mainRow.leads] : [];
+    const chunk0Id = `${CHUNK_PREFIX}${wsId}__0000`;
+    if (!chunk0Leads && expectedChunkCount > 0) missingChunks.push(chunk0Id);
+    const fullLeads = Array.isArray(chunk0Leads) ? [...chunk0Leads] : [];
     liveChunkIds.forEach(id => { if (chunkLeads.has(id)) fullLeads.push(...chunkLeads.get(id)); });
     const missingPartitions = expectedChunkCount > 1 && liveChunkIds.length < expectedChunkCount - 1;
     const incomplete = missingChunks.length > 0 || staleChunks.length > 0 || missingPartitions || (expectedTotal !== null && fullLeads.length !== expectedTotal);
@@ -238,6 +273,7 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     }
 
     const storedChunkHashes = {};
+    storedChunkHashes[chunk0Id] = cfg.chunkHashes?.[0] || null;
     headerById.forEach((h, id) => { storedChunkHashes[id] = h?.sequence_config?.hash || null; });
 
     return {
@@ -264,18 +300,30 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
   }
 }
 
-export async function fetchDncRegistryFromCloud() {
+export async function fetchDncRegistryFromCloud(forceRefresh = false) {
   let records = [];
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
+      if (!forceRefresh && cachedDncRegistry && cachedDncRegistryUpdatedAt) {
+        const { data: head } = await supabase
+          .from('workspaces')
+          .select('updated_at')
+          .eq('id', DNC_REGISTRY_ID)
+          .maybeSingle();
+        if (head && head.updated_at === cachedDncRegistryUpdatedAt) {
+          return cachedDncRegistry;
+        }
+      }
+
       const { data, error } = await supabase
         .from('workspaces')
-        .select('leads')
+        .select('leads, updated_at')
         .eq('id', DNC_REGISTRY_ID)
         .maybeSingle();
       if (!error && data && Array.isArray(data.leads) && data.leads.length > 0) {
         records = data.leads;
+        cachedDncRegistryUpdatedAt = data.updated_at;
       }
     } catch (e) {
       console.warn('[CloudRegistry] Supabase DNC fetch error, falling back to Google Sheets:', e.message);
@@ -307,7 +355,8 @@ export async function fetchDncRegistryFromCloud() {
     }
   });
 
-  return Array.from(map.values());
+  cachedDncRegistry = Array.from(map.values());
+  return cachedDncRegistry;
 }
 
 export async function saveDncRecordToCloud(recordsOrRecord) {
@@ -326,6 +375,9 @@ export async function saveDncRecordToCloud(recordsOrRecord) {
     filtered.unshift(...validRecords);
 
     const nowIso = new Date().toISOString();
+    cachedDncRegistry = filtered;
+    cachedDncRegistryUpdatedAt = nowIso;
+
     const { error: upsertErr } = await supabase
       .from('workspaces')
       .upsert({
@@ -449,10 +501,11 @@ export async function fetchWorkspacesFromCloud(fallbackWorkspaces = [], targetWo
 
   try {
     // Light query: Fetch workspace metadata (WITHOUT the heavy leads column)
-    // This reduces the bulk query size from 30MB down to ~20KB, preventing statement timeouts.
+    // Filters strictly to PRIMARY_WORKSPACE_ID to avoid pulling 30+ partitions across the wire
     const { data, error } = await supabase
       .from('workspaces')
       .select('id, name, client_name, client_email, campaign_name, active_sending_account, sending_accounts, client_credentials, sequence_config, activity_log, created_at, updated_at')
+      .eq('id', PRIMARY_WORKSPACE_ID)
       .order('updated_at', { ascending: false });
 
     if (error) {
@@ -719,7 +772,7 @@ export function mergeActivityLogs(localLog = [], cloudLog = []) {
   });
   return Array.from(map.values())
     .sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0))
-    .slice(0, 500);
+    .slice(0, 80);
 }
 
 // Result of the most recent successful save per workspace: the fully merged state that is now in
@@ -738,12 +791,15 @@ function enqueueWorkspaceSave(wsId, task) {
   return next;
 }
 
-// Lightweight header poll: which workspaces changed in the cloud (no leads payload).
+// Lightweight header poll: which workspaces changed in the cloud (no leads payload, exactly 70 bytes).
 export async function fetchWorkspaceHeadersFromCloud() {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
   try {
-    const { data, error } = await supabase.from('workspaces').select('id, updated_at');
+    const { data, error } = await supabase
+      .from('workspaces')
+      .select('id, updated_at')
+      .eq('id', PRIMARY_WORKSPACE_ID);
     if (error || !Array.isArray(data)) return null;
     const deletedIds = getLocalDeletedIds();
     return data.filter(r =>
@@ -1037,6 +1093,12 @@ async function saveSingleWorkspaceToCloud(supabase, ws, isTargeted) {
       .filter(id => id.startsWith(`${CHUNK_PREFIX}${ws.id}__`))
       .forEach(id => ownUncommittedPartitions.delete(id));
 
+    // Cache Chunk 0 in partition cache and IndexedDB so immediate re-reads never download Chunk 0 leads
+    const chunk0Id = `${CHUNK_PREFIX}${ws.id}__0000`;
+    const chunk0Key = `${nowIso}|${currentHashes[0]}`;
+    partitionCache.set(chunk0Id, { key: chunk0Key, leads: chunks[0] });
+    saveCachedPartitionToLocal(chunk0Id, chunk0Key, chunks[0]).catch(() => {});
+
     // Clean up partitions past the new chunk count (readers ignore them, but they'd linger forever)
     const staleChunkIds = Array.from(existingChunkIds).filter(id => {
       const k = parseInt(String(id).split('__').pop(), 10) || 0;
@@ -1156,18 +1218,29 @@ export async function purgeUnwantedWorkspacesFromCloud() {
 }
 
 // 4. Fetch System Metadata (Warriors, Daily Reports, Tasks, Timeline) from Supabase
-export async function fetchSystemMetaFromSupabase() {
+export async function fetchSystemMetaFromSupabase(forceRefresh = false) {
   const supabase = getSupabaseClient();
-  if (!supabase) return null;
+  if (!supabase) return cachedSystemMeta;
 
   try {
+    if (!forceRefresh && cachedSystemMeta && cachedSystemMetaUpdatedAt) {
+      const { data: head } = await supabase
+        .from('workspaces')
+        .select('updated_at')
+        .eq('id', SYSTEM_META_ID)
+        .maybeSingle();
+      if (head && head.updated_at === cachedSystemMetaUpdatedAt) {
+        return cachedSystemMeta;
+      }
+    }
+
     const { data, error } = await supabase
       .from('workspaces')
       .select('id, client_credentials, sequence_config, activity_log, updated_at')
       .eq('id', SYSTEM_META_ID)
       .maybeSingle();
 
-    if (error || !data) return null;
+    if (error || !data) return cachedSystemMeta;
 
     const warriors = Array.isArray(data.client_credentials?.warriors) ? data.client_credentials.warriors : [];
     const seq = data.sequence_config || {};
@@ -1181,7 +1254,7 @@ export async function fetchSystemMetaFromSupabase() {
     const formSubmissions = Array.isArray(seq.formSubmissions) ? seq.formSubmissions : [];
     const warriorTimeline = Array.isArray(data.activity_log) ? data.activity_log : [];
 
-    return {
+    cachedSystemMeta = {
       warriors,
       dailyReports,
       tasks,
@@ -1193,9 +1266,12 @@ export async function fetchSystemMetaFromSupabase() {
       warriorTimeline,
       updatedAt: data.updated_at
     };
+    cachedSystemMetaUpdatedAt = data.updated_at;
+
+    return cachedSystemMeta;
   } catch (err) {
     console.warn('Failed to fetch system meta from Supabase:', err);
-    return null;
+    return cachedSystemMeta;
   }
 }
 
@@ -1232,6 +1308,7 @@ export async function saveSystemMetaToSupabase(meta) {
     const mergedForms = meta.formSubmissions !== undefined ? meta.formSubmissions : (Array.isArray(existingSeq.formSubmissions) ? existingSeq.formSubmissions : []);
     const mergedTimeline = meta.warriorTimeline !== undefined ? meta.warriorTimeline : (Array.isArray(rawData?.activity_log) ? rawData.activity_log : []);
 
+    const nowIso = new Date().toISOString();
     const payload = {
       id: SYSTEM_META_ID,
       name: 'ROS System Cloud Database',
@@ -1256,7 +1333,7 @@ export async function saveSystemMetaToSupabase(meta) {
       },
       activity_log: mergedTimeline.slice(0, 300),
       leads: [],
-      updated_at: new Date().toISOString()
+      updated_at: nowIso
     };
 
     const { error } = await supabase
@@ -1267,6 +1344,21 @@ export async function saveSystemMetaToSupabase(meta) {
       console.warn('Failed to save system meta to Supabase:', error);
       return false;
     }
+
+    cachedSystemMeta = {
+      warriors: mergedWarriors,
+      dailyReports: mergedReports,
+      tasks: mergedTasks,
+      payments: mergedPayments,
+      emailCopies: mergedCopies,
+      importantNotes: mergedNotes,
+      todos: mergedTodos,
+      formSubmissions: mergedForms,
+      warriorTimeline: mergedTimeline,
+      updatedAt: nowIso
+    };
+    cachedSystemMetaUpdatedAt = nowIso;
+
     return true;
   } catch (err) {
     console.warn('Supabase system meta save failed:', err);
@@ -1350,27 +1442,40 @@ export async function saveSheetsConfigToCloud({ url, token }) {
   }
 }
 
-// 7. Dedicated Form Submissions Partition
-export async function fetchFormSubmissionsFromCloud() {
+// 7. Dedicated Form Submissions Partition (with timestamp cache to prevent 311KB egress loop)
+export async function fetchFormSubmissionsFromCloud(forceRefresh = false) {
   const supabase = getSupabaseClient();
-  if (!supabase) return [];
+  if (!supabase) return cachedFormSubmissions;
 
   try {
+    if (!forceRefresh && cachedFormSubmissions.length > 0 && cachedFormSubmissionsUpdatedAt) {
+      const { data: head } = await supabase
+        .from('workspaces')
+        .select('updated_at')
+        .eq('id', FORM_SUBMISSIONS_ID)
+        .maybeSingle();
+      if (head && head.updated_at === cachedFormSubmissionsUpdatedAt) {
+        return cachedFormSubmissions;
+      }
+    }
+
     // 1. Try dedicated partition row first
     const { data, error } = await supabase
       .from('workspaces')
-      .select('sequence_config')
+      .select('sequence_config, updated_at')
       .eq('id', FORM_SUBMISSIONS_ID)
       .maybeSingle();
 
     if (!error && data?.sequence_config && Array.isArray(data.sequence_config.formSubmissions)) {
-      return data.sequence_config.formSubmissions;
+      cachedFormSubmissions = data.sequence_config.formSubmissions;
+      cachedFormSubmissionsUpdatedAt = data.updated_at;
+      return cachedFormSubmissions;
     }
 
     // 2. Fallback / migration check from legacy row
     const { data: legacyData } = await supabase
       .from('workspaces')
-      .select('sequence_config')
+      .select('sequence_config, updated_at')
       .eq('id', SYSTEM_META_ID)
       .maybeSingle();
 
@@ -1378,12 +1483,14 @@ export async function fetchFormSubmissionsFromCloud() {
     if (Array.isArray(legacyForms) && legacyForms.length > 0) {
       // Seed dedicated row
       saveFormSubmissionsToCloud(legacyForms).catch(() => {});
+      cachedFormSubmissions = legacyForms;
+      cachedFormSubmissionsUpdatedAt = legacyData.updated_at;
       return legacyForms;
     }
   } catch (err) {
     console.warn('fetchFormSubmissionsFromCloud notice:', err);
   }
-  return [];
+  return cachedFormSubmissions;
 }
 
 export async function saveFormSubmissionsToCloud(formSubmissions) {
@@ -1391,6 +1498,7 @@ export async function saveFormSubmissionsToCloud(formSubmissions) {
   if (!supabase || !Array.isArray(formSubmissions)) return false;
 
   try {
+    const nowIso = new Date().toISOString();
     const payload = {
       id: FORM_SUBMISSIONS_ID,
       name: 'ROS Form Submissions Partition',
@@ -1403,7 +1511,7 @@ export async function saveFormSubmissionsToCloud(formSubmissions) {
       sequence_config: { formSubmissions },
       activity_log: [],
       leads: [],
-      updated_at: new Date().toISOString()
+      updated_at: nowIso
     };
 
     const { error } = await supabase
@@ -1414,11 +1522,61 @@ export async function saveFormSubmissionsToCloud(formSubmissions) {
       console.warn('saveFormSubmissionsToCloud error:', error);
       return false;
     }
+
+    cachedFormSubmissions = formSubmissions;
+    cachedFormSubmissionsUpdatedAt = nowIso;
     return true;
   } catch (err) {
     console.warn('saveFormSubmissionsToCloud exception:', err);
     return false;
   }
+}
+
+// 7b. Ultra-Low-Bandwidth Global Metadata Fetcher (Checks headers in 1 tiny 160-byte query!)
+export async function fetchGlobalMetaFromSupabase(forceRefresh = false) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return cachedSystemMeta ? { ...cachedSystemMeta, formSubmissions: cachedFormSubmissions } : null;
+
+  try {
+    let needSystemFetch = forceRefresh || !cachedSystemMeta || !cachedSystemMetaUpdatedAt;
+    let needFormFetch = forceRefresh || !cachedFormSubmissionsUpdatedAt;
+
+    // Fast check: query only updated_at of both partitions (transfers ~160 bytes total!)
+    if (!needSystemFetch || !needFormFetch) {
+      const { data: headers, error: headErr } = await supabase
+        .from('workspaces')
+        .select('id, updated_at')
+        .in('id', [SYSTEM_META_ID, FORM_SUBMISSIONS_ID]);
+
+      if (!headErr && Array.isArray(headers)) {
+        const headMap = new Map(headers.map(h => [h.id, h.updated_at]));
+        if (!needSystemFetch && headMap.get(SYSTEM_META_ID) !== cachedSystemMetaUpdatedAt) {
+          needSystemFetch = true;
+        }
+        if (!needFormFetch && headMap.get(FORM_SUBMISSIONS_ID) !== cachedFormSubmissionsUpdatedAt) {
+          needFormFetch = true;
+        }
+      } else {
+        needSystemFetch = true;
+        needFormFetch = true;
+      }
+    }
+
+    const fetches = [];
+    if (needSystemFetch) fetches.push(fetchSystemMetaFromSupabase(true));
+    if (needFormFetch) fetches.push(fetchFormSubmissionsFromCloud(true));
+    if (fetches.length > 0) await Promise.all(fetches);
+
+    if (cachedSystemMeta) {
+      return {
+        ...cachedSystemMeta,
+        formSubmissions: cachedFormSubmissions
+      };
+    }
+  } catch (err) {
+    console.warn('fetchGlobalMetaFromSupabase error:', err);
+  }
+  return cachedSystemMeta ? { ...cachedSystemMeta, formSubmissions: cachedFormSubmissions } : null;
 }
 
 // 8. Dedicated Chat Data Partition
