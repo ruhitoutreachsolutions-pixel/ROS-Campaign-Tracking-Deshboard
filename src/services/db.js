@@ -121,6 +121,7 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
     let liveChunkIds = [];
     let headerById = new Map();
     let chunkLeads = new Map();
+    let chunk0Leads = null;
     let missingChunks = [];
     let staleChunks = [];
     let stuckChunks = [];
@@ -183,7 +184,7 @@ export async function fetchFullCloudWorkspaceRow(supabase, wsId, options = {}) {
       }
 
       // Resolve Chunk 0 leads: check cache first to save 1.14 MB bandwidth on every sync
-      let chunk0Leads = null;
+      chunk0Leads = null;
       const cached0 = partitionCache.get(chunk0Id);
       if (cached0 && cached0.key === chunk0CacheKey && Array.isArray(cached0.leads)) {
         chunk0Leads = cached0.leads;
